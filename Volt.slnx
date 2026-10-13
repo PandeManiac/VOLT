@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Volt.Core/Volt.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Volt.Core.Tests/Volt.Core.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,4 +1,6 @@
-namespace VOLT.Core.Tests.Memory;
+using Volt.Core.Memory;
+
+namespace Volt.Core.Tests.Memory;
 
 public sealed unsafe class NativeBufferTests
 {

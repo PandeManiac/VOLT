@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\VOLT.Core\VOLT.Core.csproj" />
+    <ProjectReference Include="..\..\src\Volt.Core\Volt.Core.csproj" />
   </ItemGroup>
 
 </Project>

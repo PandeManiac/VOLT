@@ -2,7 +2,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace VOLT.Core.Memory;
+namespace Volt.Core.Memory;
 
 /// <summary>
 /// Owns a fixed-capacity, aligned block of unmanaged memory.
