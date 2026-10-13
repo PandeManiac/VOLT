@@ -1,0 +1,58 @@
+# .NET build outputs
+**/bin/
+**/obj/
+**/out/
+**/TestResults/
+artifacts/
+
+# IDE user-specific files
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.DotSettings.user
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Rider / ReSharper
+_ReSharper*/
+*.DotSettings.user
+
+# Coverage, logs, diagnostics
+coverage/
+coverage-report/
+*.coverage
+*.coveragexml
+*.trx
+*.log
+*.dmp
+*.diagsession
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pfx
+*.snk
+secrets.json
+
+# Generated NuGet packages
+*.nupkg
+*.snupkg
+
+# Native tooling / generated compilation outputs
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
