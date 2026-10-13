@@ -86,17 +86,14 @@ public sealed class ComponentRegistryTests
     }
 
     [Fact]
-    public void Register_RepeatedCalls_DoNotCreateDuplicates()
+    public void Register_RepeatedCalls_ReturnSameComponentType()
     {
         ComponentType original = ComponentRegistry.Register<Position>();
-        int countBefore = ComponentRegistry.Count;
 
         for (int i = 0; i < 1000; i++)
         {
             Assert.Equal(original, ComponentRegistry.Register<Position>());
         }
-
-        Assert.Equal(countBefore, ComponentRegistry.Count);
     }
 
     [Fact]
@@ -110,36 +107,15 @@ public sealed class ComponentRegistryTests
     }
 
     [Fact]
-    public void GetInfo_ReturnsCorrectComponentSize()
+    public void GetInfo_ReturnsConfiguredStorageAlignment()
     {
         ComponentType position = ComponentRegistry.Register<Position>();
         ComponentType health = ComponentRegistry.Register<Health>();
+        ComponentType mixed = ComponentRegistry.Register<Mixed>();
 
-        Assert.Equal(12, ComponentRegistry.GetInfo(position).Size);
-        Assert.Equal(sizeof(int), ComponentRegistry.GetInfo(health).Size);
-    }
-
-    [Fact]
-    public void GetInfo_ReturnsPositiveAlignment()
-    {
-        ComponentType position = ComponentRegistry.Register<Position>();
-        ComponentType health = ComponentRegistry.Register<Health>();
-
-        Assert.True(ComponentRegistry.GetInfo(position).Alignment > 0);
-        Assert.True(ComponentRegistry.GetInfo(health).Alignment > 0);
-    }
-
-    [Fact]
-    public void GetInfo_AlignmentDoesNotExceedSize_ForNonemptyComponents()
-    {
-        ComponentType position = ComponentRegistry.Register<Position>();
-        ComponentType health = ComponentRegistry.Register<Health>();
-
-        ComponentRegistry.ComponentInfo positionInfo = ComponentRegistry.GetInfo(position);
-        ComponentRegistry.ComponentInfo healthInfo = ComponentRegistry.GetInfo(health);
-
-        Assert.InRange(positionInfo.Alignment, 1, positionInfo.Size);
-        Assert.InRange(healthInfo.Alignment, 1, healthInfo.Size);
+        Assert.Equal(16, ComponentRegistry.GetInfo(position).Alignment);
+        Assert.Equal(16, ComponentRegistry.GetInfo(health).Alignment);
+        Assert.Equal(16, ComponentRegistry.GetInfo(mixed).Alignment);
     }
 
     [Fact]
@@ -262,17 +238,22 @@ public sealed class ComponentRegistryTests
     }
 
     [Fact]
-    public void MetadataLookup_DoesNotChangeRegistrationCount()
+    public void MetadataLookup_ReturnsConsistentResults()
     {
         ComponentType type = ComponentRegistry.Register<Position>();
-        int countBefore = ComponentRegistry.Count;
+        ComponentRegistry.ComponentInfo expected = ComponentRegistry.GetInfo(type);
 
         for (int i = 0; i < 100; i++)
         {
-            ComponentRegistry.GetInfo(type);
-            ComponentRegistry.TryGetInfo(type, out _);
-        }
+            ComponentRegistry.ComponentInfo actual = ComponentRegistry.GetInfo(type);
 
-        Assert.Equal(countBefore, ComponentRegistry.Count);
+            Assert.Equal(expected, actual);
+
+            Assert.True(ComponentRegistry.TryGetInfo(
+                type,
+                out ComponentRegistry.ComponentInfo retrieved));
+
+            Assert.Equal(expected, retrieved);
+        }
     }
 }

@@ -1,6 +1,5 @@
 
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace Volt.Ecs.Component;
 
@@ -17,6 +16,8 @@ namespace Volt.Ecs.Component;
 /// </remarks>
 public static class ComponentRegistry
 {
+    private const int ComponentStorageAlignment = 16;
+
     private static readonly Lock s_lock = new();
 
     private static readonly Dictionary<Type, ComponentInfo> s_components = [];
@@ -112,30 +113,17 @@ public static class ComponentRegistry
 
             ComponentType componentType = new(s_nextId++);
 
-            var info = new ComponentInfo(
+            ComponentInfo info = new(
                 componentType,
                 type,
                 Unsafe.SizeOf<T>(),
-                AlignmentOf<T>());
+                ComponentStorageAlignment);
 
             s_components.Add(type, info);
             s_componentsById.Add(info);
 
             return info;
         }
-    }
-
-    private static int AlignmentOf<T>() where T : unmanaged
-    {
-        return (int)Marshal.OffsetOf<AlignmentProbe<T>>(
-            nameof(AlignmentProbe<T>.Value));
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct AlignmentProbe<T> where T : unmanaged
-    {
-        public byte Prefix;
-        public T Value;
     }
 
     private static class Cache<T> where T : unmanaged
@@ -145,8 +133,8 @@ public static class ComponentRegistry
     }
 
     /// <summary>
-    /// Describes the layout and identity of a registered
-    /// unmanaged component type.
+    /// Describes the identity, size, and guaranteed column-base
+    /// alignment of a registered unmanaged component type.
     /// </summary>
     public readonly record struct ComponentInfo(
         ComponentType Type,
