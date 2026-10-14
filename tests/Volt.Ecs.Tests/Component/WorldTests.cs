@@ -580,4 +580,131 @@ public sealed class WorldTests
         Assert.Throws<ObjectDisposedException>(() => { _ = world.GetComponent<Health>(entity); });
         Assert.Throws<ObjectDisposedException>(() => world.SetComponent(entity, new Health()));
     }
+
+
+    [Fact]
+    public void FreezeStructure_BlocksStructuralMutations()
+    {
+        using World world = new();
+
+        Entity entity = world.CreateEntity();
+        world.AddComponent(entity, new Health { Value = 42 });
+
+        using (world.FreezeStructure())
+        {
+            Assert.Throws<InvalidOperationException>(
+                () => world.CreateEntity());
+
+            Assert.Throws<InvalidOperationException>(
+                () => world.DestroyEntity(entity));
+
+            Assert.Throws<InvalidOperationException>(
+                () => world.AddComponent(entity, new Position()));
+
+            Assert.Throws<InvalidOperationException>(
+                () => world.RemoveComponent<Health>(entity));
+
+            Assert.Throws<InvalidOperationException>(
+                () => world.Dispose());
+
+            Assert.True(world.IsAlive(entity));
+            Assert.Equal(42, world.GetComponent<Health>(entity).Value);
+            Assert.Equal(1, world.Count);
+        }
+    }
+
+    [Fact]
+    public void FreezeStructure_AllowsComponentValueAccess()
+    {
+        using World world = new();
+
+        Entity entity = world.CreateEntity();
+        world.AddComponent(entity, new Health { Value = 10 });
+
+        using (world.FreezeStructure())
+        {
+            Assert.True(world.HasComponent<Health>(entity));
+
+            world.SetComponent(entity, new Health { Value = 25 });
+
+            ref Health health = ref world.GetComponent<Health>(entity);
+            health.Value += 5;
+
+            Assert.Equal(30, world.GetComponent<Health>(entity).Value);
+        }
+    }
+
+    [Fact]
+    public void FreezeStructure_ReleasingScopeAllowsStructuralChanges()
+    {
+        using World world = new();
+
+        World.StructuralFreezeScope scope = world.FreezeStructure();
+
+        Assert.Throws<InvalidOperationException>(
+            () => world.CreateEntity());
+
+        scope.Dispose();
+
+        Entity entity = world.CreateEntity();
+
+        Assert.True(world.IsAlive(entity));
+        Assert.Equal(1, world.Count);
+    }
+
+    [Fact]
+    public void FreezeStructure_NestedScopesRequireAllReleases()
+    {
+        using World world = new();
+
+        World.StructuralFreezeScope first = world.FreezeStructure();
+        World.StructuralFreezeScope second = world.FreezeStructure();
+
+        first.Dispose();
+
+        Assert.Throws<InvalidOperationException>(
+            () => world.CreateEntity());
+
+        second.Dispose();
+
+        Entity entity = world.CreateEntity();
+
+        Assert.True(world.IsAlive(entity));
+    }
+
+    [Fact]
+    public void FreezeStructure_DisposeScopeTwiceIsSafe()
+    {
+        using World world = new();
+
+        World.StructuralFreezeScope first = world.FreezeStructure();
+        World.StructuralFreezeScope second = world.FreezeStructure();
+
+        first.Dispose();
+        first.Dispose();
+
+        Assert.Throws<InvalidOperationException>(
+            () => world.CreateEntity());
+
+        second.Dispose();
+
+        Assert.True(world.IsAlive(world.CreateEntity()));
+    }
+
+    [Fact]
+    public async Task FreezeStructure_RejectsStructuralMutationFromAnotherThread()
+    {
+        using World world = new();
+
+        using (world.FreezeStructure())
+        {
+            await Task.Run(() =>
+            {
+                Assert.Throws<InvalidOperationException>(
+                    () => world.CreateEntity());
+            });
+        }
+
+        Assert.True(world.IsAlive(world.CreateEntity()));
+    }
 }

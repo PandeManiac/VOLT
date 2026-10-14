@@ -1,11 +1,13 @@
 using System.Runtime.CompilerServices;
+using System.Threading;
 using Volt.Ecs.Component;
 
 namespace Volt.Ecs;
 
 /// <summary>
 /// Owns entity lifetimes and the native archetype storage for one ECS world.
-/// Structural operations are not thread-safe.
+/// Structural mutations are serialized and rejected during structural freezes.
+/// Concurrent component access requires separate synchronization.
 /// </summary>
 public sealed unsafe class World : IDisposable
 {
@@ -22,11 +24,55 @@ public sealed unsafe class World : IDisposable
         int DestinationIndex,
         int Size);
 
+    public sealed class StructuralFreezeScope : IDisposable
+    {
+        private World? _world;
+
+        internal StructuralFreezeScope(World world)
+        {
+            _world = world;
+        }
+
+        public void Dispose()
+        {
+            World? world = Interlocked.Exchange(ref _world, null);
+            world?.EndStructuralFreeze();
+        }
+    }
+
     private bool _disposed;
 
     private readonly Dictionary<ComponentQuery, List<Archetype>> _queryCache = [];
 
     private int _structuralVersion;
+
+    /// <summary>
+    /// Prevents structural changes while component storage is
+    /// being accessed by concurrent workers.
+    /// </summary>
+    /// <remarks>
+    /// Callers must complete all work using the protected storage
+    /// before disposing the returned scope.
+    ///
+    /// This does not synchronize conflicting component writes.
+    /// </remarks>
+    public StructuralFreezeScope FreezeStructure()
+    {
+        lock (_structureGate)
+        {
+            ThrowIfDisposed();
+
+            StructuralFreezeScope scope = new(this);
+
+            _activeStructuralFreezes = checked(
+                _activeStructuralFreezes + 1);
+
+            return scope;
+        }
+    }
+
+    private readonly object _structureGate = new();
+    private int _activeStructuralFreezes;
 
     public int Count
     {
@@ -48,19 +94,21 @@ public sealed unsafe class World : IDisposable
 
     public Entity CreateEntity()
     {
+        using StructuralMutationScope scope = EnterStructuralMutation();
         ThrowIfDisposed();
 
         Archetype archetype = GetOrCreateArchetype(ComponentSignature.Empty);
         ArchetypeChunk chunk = GetOrCreateAvailableChunk(archetype);
         Entity entity = _allocator.Create();
 
+        bool appended = false;
+
         try
         {
-
             bool wasFull = chunk.IsFull;
             int row = chunk.Add(entity);
+            appended = true;
             UpdateChunkAvailability(chunk, wasFull);
-
 
             _locations.Add(entity, new EntityLocation(chunk, row));
             _structuralVersion++;
@@ -70,13 +118,27 @@ public sealed unsafe class World : IDisposable
 
         catch
         {
-            _allocator.Destroy(entity);
+            try
+            {
+                if (appended)
+                {
+                    bool wasFull = chunk.IsFull;
+                    chunk.RemoveAt(chunk.Count - 1, out _);
+                    UpdateChunkAvailability(chunk, wasFull);
+                }
+            }
+            finally
+            {
+                _allocator.Destroy(entity);
+            }
+
             throw;
         }
     }
 
     public bool DestroyEntity(Entity entity)
     {
+        using StructuralMutationScope scope = EnterStructuralMutation();
         ThrowIfDisposed();
 
         if (!_allocator.IsAlive(entity))
@@ -113,6 +175,8 @@ public sealed unsafe class World : IDisposable
 
     public void AddComponent<T>(Entity entity, T value) where T : unmanaged
     {
+        using StructuralMutationScope scope = EnterStructuralMutation();
+
         EntityLocation source = GetLocation(entity);
         ComponentType type = ComponentRegistry.Register<T>();
 
@@ -128,6 +192,8 @@ public sealed unsafe class World : IDisposable
 
     public bool RemoveComponent<T>(Entity entity) where T : unmanaged
     {
+        using StructuralMutationScope scope = EnterStructuralMutation();
+
         EntityLocation source = GetLocation(entity);
         ComponentType type = ComponentRegistry.Register<T>();
 
@@ -173,6 +239,8 @@ public sealed unsafe class World : IDisposable
 
     public void Dispose()
     {
+        using StructuralMutationScope scope = EnterStructuralMutation();
+
         if (_disposed)
         {
             return;
@@ -200,26 +268,29 @@ public sealed unsafe class World : IDisposable
 
     internal List<Archetype> GetMatchingArchetypes(ComponentQuery query)
     {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(query);
-
-        if (_queryCache.TryGetValue(query, out List<Archetype>? cached))
+        lock (_structureGate)
         {
-            return cached;
-        }
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(query);
 
-        List<Archetype> matches = [];
-
-        foreach (Archetype archetype in _archetypes.Values)
-        {
-            if (query.Matches(archetype))
+            if (_queryCache.TryGetValue(query, out List<Archetype>? cached))
             {
-                matches.Add(archetype);
+                return cached;
             }
-        }
 
-        _queryCache.Add(query, matches);
-        return matches;
+            List<Archetype> matches = [];
+
+            foreach (Archetype archetype in _archetypes.Values)
+            {
+                if (query.Matches(archetype))
+                {
+                    matches.Add(archetype);
+                }
+            }
+
+            _queryCache.Add(query, matches);
+            return matches;
+        }
     }
 
     internal List<ArchetypeChunk> GetChunks(Archetype archetype)
@@ -279,7 +350,6 @@ public sealed unsafe class World : IDisposable
         return created;
     }
 
-
     private void UpdateChunkAvailability(ArchetypeChunk chunk, bool wasFull)
     {
         bool isFull = chunk.IsFull;
@@ -301,8 +371,6 @@ public sealed unsafe class World : IDisposable
             available.Add(chunk);
         }
     }
-
-
 
     private void RemoveFromChunk(EntityLocation location)
     {
@@ -385,12 +453,10 @@ public sealed unsafe class World : IDisposable
 
         bool wasFull = destinationChunk.IsFull;
         int destinationRow = destinationChunk.Add(entity);
-        UpdateChunkAvailability(destinationChunk, wasFull);
 
         try
         {
-
-
+            UpdateChunkAvailability(destinationChunk, wasFull);
             Archetype sourceArchetype = source.Chunk.Archetype;
 
             ComponentCopy[] plan = GetMigrationPlan(
@@ -434,6 +500,45 @@ public sealed unsafe class World : IDisposable
 
         RemoveFromChunk(source);
         _locations[entity] = new EntityLocation(destinationChunk, destinationRow);
+    }
+
+    private readonly struct StructuralMutationScope(object gate) : IDisposable
+    {
+        private readonly object _gate = gate;
+
+        public void Dispose()
+        {
+            Monitor.Exit(_gate);
+        }
+    }
+
+    private StructuralMutationScope EnterStructuralMutation()
+    {
+        Monitor.Enter(_structureGate);
+
+        if (_activeStructuralFreezes != 0)
+        {
+            Monitor.Exit(_structureGate);
+
+            throw new InvalidOperationException(
+                "Structural changes are not permitted while " +
+                "the world's structure is frozen.");
+        }
+
+        return new StructuralMutationScope(_structureGate);
+    }
+
+    private void EndStructuralFreeze()
+    {
+        lock (_structureGate)
+        {
+            if (_activeStructuralFreezes == 0)
+            {
+                throw new InvalidOperationException("No structural freeze is active.");
+            }
+
+            _activeStructuralFreezes--;
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
