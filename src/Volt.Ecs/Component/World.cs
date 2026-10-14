@@ -16,12 +16,25 @@ public sealed unsafe class World : IDisposable
 
     private bool _disposed;
 
+    private readonly Dictionary<ComponentQuery, List<Archetype>> _queryCache = [];
+
+    private int _structuralVersion;
+
     public int Count
     {
         get
         {
             ThrowIfDisposed();
             return _allocator.Count;
+        }
+    }
+
+    internal int StructuralVersion
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _structuralVersion;
         }
     }
 
@@ -37,6 +50,7 @@ public sealed unsafe class World : IDisposable
         {
             int row = chunk.Add(entity);
             _locations.Add(entity, new EntityLocation(chunk, row));
+            _structuralVersion++;
             return entity;
         }
 
@@ -60,7 +74,14 @@ public sealed unsafe class World : IDisposable
         RemoveFromChunk(location);
 
         _locations.Remove(entity);
-        return _allocator.Destroy(entity);
+        bool destroyed = _allocator.Destroy(entity);
+
+        if (destroyed)
+        {
+            _structuralVersion++;
+        }
+
+        return destroyed;
     }
 
     public bool IsAlive(Entity entity)
@@ -88,6 +109,7 @@ public sealed unsafe class World : IDisposable
 
         ComponentSignature destinationSignature = source.Chunk.Archetype.Signature.With(type);
         Migrate(entity, source, destinationSignature, addValue: true, value);
+        _structuralVersion++;
     }
 
     public bool RemoveComponent<T>(Entity entity) where T : unmanaged
@@ -102,6 +124,7 @@ public sealed unsafe class World : IDisposable
 
         ComponentSignature destinationSignature = source.Chunk.Archetype.Signature.Without(type);
         Migrate(entity, source, destinationSignature, addValue: false, default(T));
+        _structuralVersion++;
         return true;
     }
 
@@ -118,6 +141,20 @@ public sealed unsafe class World : IDisposable
     {
         ref T component = ref GetComponent<T>(entity);
         component = value;
+    }
+
+    /// <summary>
+    /// Creates a query over matching, nonempty archetype chunks.
+    /// </summary>
+    /// <remarks>
+    /// Structural changes invalidate active query enumerators.
+    /// Component value updates remain valid.
+    /// </remarks>
+    public WorldQuery Query(ComponentQuery query)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(query);
+        return new WorldQuery(this, query);
     }
 
     public void Dispose()
@@ -140,8 +177,39 @@ public sealed unsafe class World : IDisposable
         _chunks.Clear();
         _archetypes.Clear();
         _locations.Clear();
+        _queryCache.Clear();
 
         GC.SuppressFinalize(this);
+    }
+
+    internal List<Archetype> GetMatchingArchetypes(ComponentQuery query)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (_queryCache.TryGetValue(query, out List<Archetype>? cached))
+        {
+            return cached;
+        }
+
+        List<Archetype> matches = new();
+
+        foreach (Archetype archetype in _archetypes.Values)
+        {
+            if (query.Matches(archetype))
+            {
+                matches.Add(archetype);
+            }
+        }
+
+        _queryCache.Add(query, matches);
+        return matches;
+    }
+
+    internal List<ArchetypeChunk> GetChunks(Archetype archetype)
+    {
+        ThrowIfDisposed();
+        return _chunks[archetype];
     }
 
     private EntityLocation GetLocation(Entity entity)
@@ -161,8 +229,17 @@ public sealed unsafe class World : IDisposable
         if (!_archetypes.TryGetValue(signature, out Archetype? archetype))
         {
             archetype = new Archetype(signature);
+
             _archetypes.Add(signature, archetype);
-            _chunks.Add(archetype, new List<ArchetypeChunk>());
+            _chunks.Add(archetype, []);
+
+            foreach (KeyValuePair<ComponentQuery, List<Archetype>> entry in _queryCache)
+            {
+                if (entry.Key.Matches(archetype))
+                {
+                    entry.Value.Add(archetype);
+                }
+            }
         }
 
         return archetype;
