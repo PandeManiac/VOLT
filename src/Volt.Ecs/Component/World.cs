@@ -10,9 +10,11 @@ namespace Volt.Ecs;
 public sealed unsafe class World : IDisposable
 {
     private readonly EntityAllocator _allocator = new();
-    private readonly Dictionary<Entity, EntityLocation> _locations = new();
-    private readonly Dictionary<ComponentSignature, Archetype> _archetypes = new();
-    private readonly Dictionary<Archetype, List<ArchetypeChunk>> _chunks = new();
+
+    private readonly Dictionary<Entity, EntityLocation> _locations = [];
+    private readonly Dictionary<ComponentSignature, Archetype> _archetypes = [];
+    private readonly Dictionary<Archetype, List<ArchetypeChunk>> _chunks = [];
+    private readonly Dictionary<Archetype, HashSet<ArchetypeChunk>> _availableChunks = [];
 
     private bool _disposed;
 
@@ -48,9 +50,15 @@ public sealed unsafe class World : IDisposable
 
         try
         {
+
+            bool wasFull = chunk.IsFull;
             int row = chunk.Add(entity);
+            UpdateChunkAvailability(chunk, wasFull);
+
+
             _locations.Add(entity, new EntityLocation(chunk, row));
             _structuralVersion++;
+
             return entity;
         }
 
@@ -175,6 +183,7 @@ public sealed unsafe class World : IDisposable
         }
 
         _chunks.Clear();
+        _availableChunks.Clear();
         _archetypes.Clear();
         _locations.Clear();
         _queryCache.Clear();
@@ -192,7 +201,7 @@ public sealed unsafe class World : IDisposable
             return cached;
         }
 
-        List<Archetype> matches = new();
+        List<Archetype> matches = [];
 
         foreach (Archetype archetype in _archetypes.Values)
         {
@@ -232,6 +241,7 @@ public sealed unsafe class World : IDisposable
 
             _archetypes.Add(signature, archetype);
             _chunks.Add(archetype, []);
+            _availableChunks.Add(archetype, []);
 
             foreach (KeyValuePair<ComponentQuery, List<Archetype>> entry in _queryCache)
             {
@@ -247,28 +257,59 @@ public sealed unsafe class World : IDisposable
 
     private ArchetypeChunk GetOrCreateAvailableChunk(Archetype archetype)
     {
-        List<ArchetypeChunk> chunks = _chunks[archetype];
+        HashSet<ArchetypeChunk> available = _availableChunks[archetype];
 
-        foreach (ArchetypeChunk chunk in chunks)
+        foreach (ArchetypeChunk chunk in available)
         {
-            if (!chunk.IsFull)
-            {
-                return chunk;
-            }
+            return chunk;
         }
 
         ArchetypeChunk created = new(archetype);
-        chunks.Add(created);
+
+        _chunks[archetype].Add(created);
+        available.Add(created);
+
         return created;
     }
 
-    private void RemoveFromChunk(EntityLocation location)
+
+    private void UpdateChunkAvailability(ArchetypeChunk chunk, bool wasFull)
     {
-        if (location.Chunk.RemoveAt(location.Row, out Entity movedEntity))
+        bool isFull = chunk.IsFull;
+
+        if (wasFull == isFull)
         {
-            _locations[movedEntity] = new EntityLocation(location.Chunk, location.Row);
+            return;
+        }
+
+        HashSet<ArchetypeChunk> available = _availableChunks[chunk.Archetype];
+
+        if (isFull)
+        {
+            available.Remove(chunk);
+        }
+
+        else
+        {
+            available.Add(chunk);
         }
     }
+
+
+
+    private void RemoveFromChunk(EntityLocation location)
+    {
+        ArchetypeChunk chunk = location.Chunk;
+        bool wasFull = chunk.IsFull;
+
+        if (chunk.RemoveAt(location.Row, out Entity movedEntity))
+        {
+            _locations[movedEntity] = new EntityLocation(chunk, location.Row);
+        }
+
+        UpdateChunkAvailability(chunk, wasFull);
+    }
+
 
     private void Migrate<T>(
         Entity entity,
@@ -280,7 +321,9 @@ public sealed unsafe class World : IDisposable
         Archetype destinationArchetype = GetOrCreateArchetype(destinationSignature);
         ArchetypeChunk destinationChunk = GetOrCreateAvailableChunk(destinationArchetype);
 
+        bool wasFull = destinationChunk.IsFull;
         int destinationRow = destinationChunk.Add(entity);
+        UpdateChunkAvailability(destinationChunk, wasFull);
 
         try
         {
@@ -314,7 +357,11 @@ public sealed unsafe class World : IDisposable
 
         catch
         {
+            bool wasFullBeforeRollback = destinationChunk.IsFull;
+
             destinationChunk.RemoveAt(destinationRow, out _);
+            UpdateChunkAvailability(destinationChunk, wasFullBeforeRollback);
+
             throw;
         }
 

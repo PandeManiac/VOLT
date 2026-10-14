@@ -1,3 +1,4 @@
 using BenchmarkDotNet.Running;
 
-BenchmarkRunner.Run<Volt.Benchmarks.NativeArenaBenchmarks>();
+BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+
