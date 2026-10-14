@@ -15,6 +15,12 @@ public sealed unsafe class World : IDisposable
     private readonly Dictionary<ComponentSignature, Archetype> _archetypes = [];
     private readonly Dictionary<Archetype, List<ArchetypeChunk>> _chunks = [];
     private readonly Dictionary<Archetype, HashSet<ArchetypeChunk>> _availableChunks = [];
+    private readonly Dictionary<(Archetype Source, Archetype Destination), ComponentCopy[]> _migrationPlans = [];
+
+    private readonly record struct ComponentCopy(
+        int SourceIndex,
+        int DestinationIndex,
+        int Size);
 
     private bool _disposed;
 
@@ -187,6 +193,7 @@ public sealed unsafe class World : IDisposable
         _archetypes.Clear();
         _locations.Clear();
         _queryCache.Clear();
+        _migrationPlans.Clear();
 
         GC.SuppressFinalize(this);
     }
@@ -310,6 +317,61 @@ public sealed unsafe class World : IDisposable
         UpdateChunkAvailability(chunk, wasFull);
     }
 
+    private ComponentCopy[] GetMigrationPlan(
+        Archetype source,
+        Archetype destination)
+    {
+        var key = (Source: source, Destination: destination);
+
+        if (_migrationPlans.TryGetValue(key, out ComponentCopy[]? plan))
+        {
+            return plan;
+        }
+
+        List<ComponentCopy> copies = [];
+
+        int sourceIndex = 0;
+        int destinationIndex = 0;
+
+        while (sourceIndex < source.ComponentCount
+                && destinationIndex < destination.ComponentCount)
+        {
+            ComponentRegistry.ComponentInfo sourceInfo =
+                source.GetComponentInfoAt(sourceIndex);
+
+            ComponentRegistry.ComponentInfo destinationInfo =
+                destination.GetComponentInfoAt(destinationIndex);
+
+            uint sourceId = sourceInfo.Type.Id;
+            uint destinationId = destinationInfo.Type.Id;
+
+            if (sourceId == destinationId)
+            {
+                copies.Add(new ComponentCopy(
+                    sourceIndex,
+                    destinationIndex,
+                    sourceInfo.Size));
+
+                sourceIndex++;
+                destinationIndex++;
+            }
+
+            else if (sourceId < destinationId)
+            {
+                sourceIndex++;
+            }
+
+            else
+            {
+                destinationIndex++;
+            }
+        }
+
+        plan = [.. copies];
+        _migrationPlans.Add(key, plan);
+
+        return plan;
+    }
 
     private void Migrate<T>(
         Entity entity,
@@ -327,26 +389,31 @@ public sealed unsafe class World : IDisposable
 
         try
         {
+
+
             Archetype sourceArchetype = source.Chunk.Archetype;
 
-            for (int sourceIndex = 0; sourceIndex < sourceArchetype.ComponentCount; sourceIndex++)
+            ComponentCopy[] plan = GetMigrationPlan(
+                sourceArchetype,
+                destinationArchetype);
+
+            foreach (ComponentCopy copy in plan)
             {
-                ComponentRegistry.ComponentInfo info = sourceArchetype.GetComponentInfoAt(sourceIndex);
-                int destinationIndex = destinationArchetype.FindComponentIndex(info.Type);
+                byte* sourcePointer =
+                    (byte*)source.Chunk.GetComponentColumnPointer(copy.SourceIndex)
+                    + (nuint)source.Row *
+                      source.Chunk.GetComponentStride(copy.SourceIndex);
 
-                if (destinationIndex < 0)
-                {
-                    continue;
-                }
+                byte* destinationPointer =
+                    (byte*)destinationChunk.GetComponentColumnPointer(copy.DestinationIndex)
+                    + (nuint)destinationRow *
+                      destinationChunk.GetComponentStride(copy.DestinationIndex);
 
-                byte* sourcePointer = (byte*)source.Chunk.GetComponentColumnPointer(sourceIndex)
-                    + (nuint)source.Row * source.Chunk.GetComponentStride(sourceIndex);
-
-                byte* destinationPointer = (byte*)destinationChunk.GetComponentColumnPointer(destinationIndex)
-                    + (nuint)destinationRow * destinationChunk.GetComponentStride(destinationIndex);
-
-                long byteCount = info.Size;
-                Buffer.MemoryCopy(sourcePointer, destinationPointer, byteCount, byteCount);
+                Buffer.MemoryCopy(
+                    sourcePointer,
+                    destinationPointer,
+                    copy.Size,
+                    copy.Size);
             }
 
             if (addValue)

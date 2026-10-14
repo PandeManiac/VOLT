@@ -363,3 +363,133 @@ public class EcsFragmentationBenchmarks
         }
     }
 }
+
+
+internal struct MigrationComponent0 { public long Value; }
+internal struct MigrationComponent1 { public long Value; }
+internal struct MigrationComponent2 { public long Value; }
+internal struct MigrationComponent3 { public long Value; }
+internal struct MigrationComponent4 { public long Value; }
+internal struct MigrationComponent5 { public long Value; }
+internal struct MigrationComponent6 { public long Value; }
+internal struct MigrationComponent7 { public long Value; }
+
+
+[MemoryDiagnoser]
+[SimpleJob(invocationCount: 1)]
+public class EcsMigrationBenchmarks
+{
+    private const int BatchSize = 1_000;
+
+    private World _world = null!;
+    private Entity[] _entities = null!;
+
+    [Params(2, 8)]
+    public int ComponentCount { get; set; }
+
+    [Params(1_000, 100_000)]
+    public int EntityCount { get; set; }
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        ComponentRegistry.Register<MigrationComponent0>();
+        ComponentRegistry.Register<MigrationComponent1>();
+        ComponentRegistry.Register<MigrationComponent2>();
+        ComponentRegistry.Register<MigrationComponent3>();
+        ComponentRegistry.Register<MigrationComponent4>();
+        ComponentRegistry.Register<MigrationComponent5>();
+        ComponentRegistry.Register<MigrationComponent6>();
+        ComponentRegistry.Register<MigrationComponent7>();
+        ComponentRegistry.Register<BenchmarkVelocity>();
+    }
+
+    [IterationSetup]
+    public void IterationSetup()
+    {
+        _world = new World();
+
+        _entities = new Entity[BatchSize];
+
+        for (int i = 0; i < EntityCount; i++)
+        {
+            Entity entity = _world.CreateEntity();
+
+            _world.AddComponent(
+                entity,
+                new MigrationComponent0 { Value = i });
+
+            _world.AddComponent(
+                entity,
+                new MigrationComponent1 { Value = i });
+
+            if (ComponentCount == 8)
+            {
+                _world.AddComponent(
+                    entity,
+                    new MigrationComponent2 { Value = i });
+
+                _world.AddComponent(
+                    entity,
+                    new MigrationComponent3 { Value = i });
+
+                _world.AddComponent(
+                    entity,
+                    new MigrationComponent4 { Value = i });
+
+                _world.AddComponent(
+                    entity,
+                    new MigrationComponent5 { Value = i });
+
+                _world.AddComponent(
+                    entity,
+                    new MigrationComponent6 { Value = i });
+
+                _world.AddComponent(
+                    entity,
+                    new MigrationComponent7 { Value = i });
+            }
+
+            _world.AddComponent(
+                entity,
+                new BenchmarkVelocity { X = 1 });
+
+            if (i < BatchSize)
+            {
+                _entities[i] = entity;
+            }
+        }
+
+        // Prewarm both migration directions.
+        // This also ensures the cached plans exist
+        // before the timed benchmark begins.
+        Entity warmupEntity = _entities[0];
+
+        _world.RemoveComponent<BenchmarkVelocity>(warmupEntity);
+
+        _world.AddComponent(
+            warmupEntity,
+            new BenchmarkVelocity { X = 1 });
+    }
+
+    [IterationCleanup]
+    public void IterationCleanup()
+    {
+        _world.Dispose();
+    }
+
+    [Benchmark(OperationsPerInvoke = BatchSize)]
+    public void RemoveAndReAddVelocity()
+    {
+        for (int i = 0; i < BatchSize; i++)
+        {
+            Entity entity = _entities[i];
+
+            _world.RemoveComponent<BenchmarkVelocity>(entity);
+
+            _world.AddComponent(
+                entity,
+                new BenchmarkVelocity { X = 1 });
+        }
+    }
+}
