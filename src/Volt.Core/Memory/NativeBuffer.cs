@@ -1,15 +1,11 @@
-
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Volt.Core.Memory;
 
-/// <summary>
-/// Owns a fixed-capacity, aligned block of unmanaged memory.
-/// </summary>
+/// <summary>Owns a fixed-capacity, aligned block of unmanaged memory.</summary>
 /// <remarks>
 /// Memory is uninitialized after allocation.
-///
 /// Disposal is not thread-safe. All operations accessing this buffer,
 /// including outstanding spans and references, must finish before disposal.
 /// </remarks>
@@ -44,7 +40,6 @@ public sealed unsafe class NativeBuffer<T> : IDisposable where T : unmanaged
         }
 
         nuint bytes = checked((nuint)length * (nuint)sizeof(T));
-
         _pointer = (T*)NativeMemory.AlignedAlloc(bytes, alignment);
 
         if (_pointer == null)
@@ -73,12 +68,6 @@ public sealed unsafe class NativeBuffer<T> : IDisposable where T : unmanaged
     public Span<T> AsSpan()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-
-        if (Length == 0)
-        {
-            return [];
-        }
-
         return new Span<T>(_pointer, Length);
     }
 
@@ -96,7 +85,6 @@ public sealed unsafe class NativeBuffer<T> : IDisposable where T : unmanaged
         }
 
         _disposed = true;
-
         T* pointer = _pointer;
         _pointer = null;
 

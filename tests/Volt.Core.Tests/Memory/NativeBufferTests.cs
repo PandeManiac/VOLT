@@ -57,9 +57,7 @@ public sealed unsafe class NativeBufferTests
     public void Indexer_WriteAndRead_PreservesValue()
     {
         using var buffer = new NativeBuffer<int>(16);
-
         buffer[5] = 12345;
-
         Assert.Equal(12345, buffer[5]);
     }
 
@@ -67,11 +65,8 @@ public sealed unsafe class NativeBufferTests
     public void Indexer_ReturnsWritableReference()
     {
         using var buffer = new NativeBuffer<int>(16);
-
         ref int value = ref buffer[5];
-
         value = 999;
-
         Assert.Equal(999, buffer[5]);
     }
 
@@ -92,10 +87,19 @@ public sealed unsafe class NativeBufferTests
     }
 
     [Fact]
+    public void ZeroLength_Indexer_Throws()
+    {
+        using var buffer = new NativeBuffer<int>(0);
+        Assert.Throws<IndexOutOfRangeException>(() =>
+        {
+            _ = buffer[0];
+        });
+    }
+
+    [Fact]
     public void Clear_ZerosAllElements()
     {
         using var buffer = new NativeBuffer<int>(128);
-
         buffer.AsSpan().Fill(42);
         buffer.Clear();
 
@@ -109,10 +113,8 @@ public sealed unsafe class NativeBufferTests
     public void AsSpan_ModificationsAffectBuffer()
     {
         using var buffer = new NativeBuffer<int>(16);
-
         Span<int> span = buffer.AsSpan();
         span[3] = 777;
-
         Assert.Equal(777, buffer[3]);
     }
 
@@ -120,9 +122,7 @@ public sealed unsafe class NativeBufferTests
     public void Dispose_MarksBufferDisposed()
     {
         var buffer = new NativeBuffer<int>(16);
-
         buffer.Dispose();
-
         Assert.True(buffer.IsDisposed);
     }
 
@@ -130,10 +130,8 @@ public sealed unsafe class NativeBufferTests
     public void Dispose_MultipleCalls_AreSafe()
     {
         var buffer = new NativeBuffer<int>(16);
-
         buffer.Dispose();
         buffer.Dispose();
-
         Assert.True(buffer.IsDisposed);
     }
 
@@ -177,9 +175,7 @@ public sealed unsafe class NativeBufferTests
         for (int iteration = 0; iteration < 10_000; iteration++)
         {
             using var buffer = new NativeBuffer<int>(256);
-
             buffer.AsSpan().Fill(iteration);
-
             Assert.Equal(iteration, buffer[0]);
             Assert.Equal(iteration, buffer[255]);
         }
@@ -203,7 +199,6 @@ public sealed unsafe class NativeBufferTests
         }
 
         long after = GC.GetAllocatedBytesForCurrentThread();
-
         Assert.Equal(0, after - before);
     }
 }

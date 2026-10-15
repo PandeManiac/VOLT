@@ -1,4 +1,3 @@
-
 using Volt.Core.Memory;
 
 namespace Volt.Core.Tests.Memory;
@@ -24,8 +23,7 @@ public sealed unsafe class NativeArenaTests
 
         Assert.Equal((nuint)0, arena.Capacity);
         Assert.True(arena.Allocate<int>(0).IsEmpty);
-        Assert.Throws<OutOfMemoryException>(
-            () => arena.Allocate<int>(1));
+        Assert.Throws<OutOfMemoryException>(() => arena.Allocate<int>(1));
     }
 
     [Theory]
@@ -77,7 +75,6 @@ public sealed unsafe class NativeArenaTests
     public void Allocate_AdvancesOffset()
     {
         using var arena = new NativeArena(1024);
-
         Span<int> values = arena.Allocate<int>(10);
 
         Assert.Equal(10, values.Length);
@@ -89,7 +86,6 @@ public sealed unsafe class NativeArenaTests
     public void Allocate_MultipleSpans_DoNotOverlap()
     {
         using var arena = new NativeArena(1024);
-
         Span<int> first = arena.Allocate<int>(16);
         Span<int> second = arena.Allocate<int>(16);
 
@@ -122,14 +118,11 @@ public sealed unsafe class NativeArenaTests
         using var arena = new NativeArena(4096);
         arena.Allocate<byte>(3);
 
-        Span<byte> values = arena.Allocate<byte>(
-            32, (nuint)alignment);
+        Span<byte> values = arena.Allocate<byte>(32, (nuint)alignment);
 
         fixed (byte* pointer = values)
         {
-            Assert.Equal(
-                (nuint)0,
-                (nuint)pointer % (nuint)alignment);
+            Assert.Equal((nuint)0, (nuint)pointer % (nuint)alignment);
         }
     }
 
@@ -174,9 +167,7 @@ public sealed unsafe class NativeArenaTests
     public void Allocate_NegativeCount_Throws()
     {
         using var arena = new NativeArena(1024);
-
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => arena.Allocate<int>(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => arena.Allocate<int>(-1));
     }
 
     [Theory]
@@ -186,18 +177,22 @@ public sealed unsafe class NativeArenaTests
     public void Allocate_InvalidAlignment_Throws(int alignment)
     {
         using var arena = new NativeArena(1024);
-
         Assert.Throws<ArgumentOutOfRangeException>(
             () => arena.Allocate<int>(4, (nuint)alignment));
+    }
+
+    [Fact]
+    public void Allocate_ZeroCount_InvalidAlignment_Throws()
+    {
+        using var arena = new NativeArena(1024);
+        Assert.Throws<ArgumentOutOfRangeException>(() => arena.Allocate<int>(0, 3));
     }
 
     [Fact]
     public void Allocate_ExceedingCapacity_Throws()
     {
         using var arena = new NativeArena(64);
-
-        Assert.Throws<OutOfMemoryException>(
-            () => arena.Allocate<byte>(65));
+        Assert.Throws<OutOfMemoryException>(() => arena.Allocate<byte>(65));
     }
 
     [Fact]
@@ -207,10 +202,7 @@ public sealed unsafe class NativeArenaTests
         arena.Allocate<byte>(16);
 
         nuint before = arena.Used;
-
-        Assert.Throws<OutOfMemoryException>(
-            () => arena.Allocate<byte>(1024));
-
+        Assert.Throws<OutOfMemoryException>(() => arena.Allocate<byte>(1024));
         Assert.Equal(before, arena.Used);
     }
 
@@ -221,7 +213,6 @@ public sealed unsafe class NativeArenaTests
         arena.Allocate<byte>(3);
 
         nuint before = arena.Used;
-
         Span<int> result = arena.Allocate<int>(0);
 
         Assert.True(result.IsEmpty);
@@ -229,10 +220,21 @@ public sealed unsafe class NativeArenaTests
     }
 
     [Fact]
+    public void Allocate_ZeroCount_AtFullCapacity_DoesNotAdvanceOffset()
+    {
+        using var arena = new NativeArena(64);
+        arena.Allocate<byte>(64);
+
+        Span<int> result = arena.Allocate<int>(0, 256);
+
+        Assert.True(result.IsEmpty);
+        Assert.Equal((nuint)64, arena.Used);
+    }
+
+    [Fact]
     public void Reset_RewindsArena()
     {
         using var arena = new NativeArena(1024);
-
         arena.Allocate<int>(100);
         arena.Reset();
 
@@ -254,7 +256,6 @@ public sealed unsafe class NativeArenaTests
         }
 
         arena.Reset();
-
         Span<int> second = arena.Allocate<int>(16);
 
         fixed (int* pointer = second)
@@ -267,7 +268,6 @@ public sealed unsafe class NativeArenaTests
     public void Dispose_IsIdempotent()
     {
         var arena = new NativeArena(1024);
-
         arena.Dispose();
         arena.Dispose();
 
@@ -282,7 +282,6 @@ public sealed unsafe class NativeArenaTests
         fixed (byte* pointer = backing.AsSpan())
         {
             var arena = new NativeArena(pointer, 1024);
-
             arena.Allocate<byte>(32).Fill(42);
             arena.Dispose();
 
@@ -297,8 +296,16 @@ public sealed unsafe class NativeArenaTests
         var arena = new NativeArena(1024);
         arena.Dispose();
 
-        Assert.Throws<ObjectDisposedException>(
-            () => arena.Allocate<int>(4));
+        Assert.Throws<ObjectDisposedException>(() => arena.Allocate<int>(4));
+    }
+
+    [Fact]
+    public void Allocate_ZeroCountAfterDispose_Throws()
+    {
+        var arena = new NativeArena(1024);
+        arena.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => arena.Allocate<int>(0));
     }
 
     [Fact]
@@ -307,8 +314,7 @@ public sealed unsafe class NativeArenaTests
         var arena = new NativeArena(1024);
         arena.Dispose();
 
-        Assert.Throws<ObjectDisposedException>(
-            () => arena.Reset());
+        Assert.Throws<ObjectDisposedException>(() => arena.Reset());
     }
 
     [Fact]
@@ -331,7 +337,6 @@ public sealed unsafe class NativeArenaTests
         }
 
         long after = GC.GetAllocatedBytesForCurrentThread();
-
         Assert.Equal(0, after - before);
     }
 

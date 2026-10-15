@@ -4,6 +4,7 @@ using Volt.Core.Memory;
 
 namespace Volt.Benchmarks;
 
+[DisassemblyDiagnoser(maxDepth: 3, printSource: true)]
 [MemoryDiagnoser]
 public unsafe class NativeArenaBenchmarks
 {
