@@ -146,3 +146,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+
+# Agent-generated documentation
+/docs/
