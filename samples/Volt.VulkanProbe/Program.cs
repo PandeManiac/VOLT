@@ -38,6 +38,7 @@ internal static class Program
             Console.Error.WriteLine();
             Console.Error.WriteLine("Vulkan probe failed:");
             Console.Error.WriteLine(exception);
+
             return 1;
         }
     }
