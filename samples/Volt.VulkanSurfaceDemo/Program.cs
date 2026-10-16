@@ -12,7 +12,8 @@ namespace Volt.VulkanSurfaceDemo;
 /// <summary>
 /// Exercises Vulkan surface integration, swapchain creation,
 /// image-view creation, command recording, frame synchronization,
-/// fence-backed graphics submission, and native resource cleanup.
+/// synchronized transfer clears, swapchain presentation,
+/// and native resource cleanup.
 /// </summary>
 internal static class Program
 {
@@ -20,6 +21,7 @@ internal static class Program
     private const string SwapchainExtension = "VK_KHR_swapchain";
     private const int FramesInFlight = 2;
     private const ulong SubmissionTimeoutNanoseconds = 5_000_000_000UL;
+    private const int PresentedFrameHoldMilliseconds = 2000;
 
     [STAThread]
     private static int Main(string[] args)
@@ -344,9 +346,10 @@ internal static class Program
 
                                             Console.WriteLine();
 
-                                            SubmitRecordedCommandBuffer(
+                                            AcquireClearAndPresentFrame(
                                                 instance,
                                                 logicalDevice,
+                                                swapchain,
                                                 commandBuffers,
                                                 synchronization);
                                         }
@@ -399,118 +402,246 @@ internal static class Program
         Console.WriteLine();
 
         Console.WriteLine(
-            "Vulkan swapchain, command recording, and GPU submission: PASSED");
+            "Vulkan acquire, clear, submit, and present: PASSED");
 
         return 0;
     }
 
     /// <summary>
-    /// Submits one previously recorded primary command buffer
-    /// without semaphore dependencies and verifies fence completion.
+    /// Acquires one swapchain image, records a transfer clear,
+    /// submits the work with binary semaphores, and presents it.
     /// </summary>
-    private static void SubmitRecordedCommandBuffer(
+    /// <remarks>
+    /// This is a single-frame hardware smoke test, not a frame loop.
+    /// Swapchain recreation and recovery from a failed acquisition
+    /// or incomplete presentation are deferred to the frame-loop work.
+    /// </remarks>
+    private static void AcquireClearAndPresentFrame(
         VulkanInstance instance,
         VulkanLogicalDevice logicalDevice,
+        VulkanSwapchain swapchain,
         VulkanCommandBuffers commandBuffers,
         VulkanFrameSynchronization synchronization)
     {
-        if (commandBuffers.Count == 0
-            || synchronization.FramesInFlight == 0)
+        if (commandBuffers.Count != checked((int)swapchain.ImageCount))
         {
             throw new InvalidOperationException(
-                "GPU submission requires a command buffer and a frame fence.");
+                "There must be one command buffer per swapchain image.");
         }
 
-        CommandBuffer buffer = commandBuffers.GetBuffer(0);
-        Fence fence = synchronization.GetInFlightFence(0);
-
-        if (buffer.Handle == 0 || fence.Handle == 0)
+        if (synchronization.FramesInFlight == 0
+            || synchronization.SwapchainImageCount != checked((int)swapchain.ImageCount))
         {
             throw new InvalidOperationException(
-                "GPU submission requires nonzero command buffer and fence handles.");
+                "Frame synchronization does not match the swapchain.");
         }
 
-        Console.WriteLine("Vulkan graphics queue submission");
-        Console.WriteLine("--------------------------------");
+        if ((swapchain.ImageUsage & ImageUsageFlags.TransferDstBit) == 0)
+        {
+            throw new NotSupportedException(
+                "The swapchain does not support transfer-destination " +
+                "clears. Confirm the transfer-destination usage update " +
+                "was applied to VulkanSwapchain.cs.");
+        }
+
+        const int frameIndex = 0;
+
+        Silk.NET.Vulkan.Semaphore imageAvailable =
+            synchronization.GetImageAvailableSemaphore(frameIndex);
+
+        Fence completionFence =
+            synchronization.GetInFlightFence(frameIndex);
+
+        Console.WriteLine("Vulkan first frame");
+        Console.WriteLine("------------------");
 
         Console.WriteLine(
-            $"Command buffer: 0x{buffer.Handle:X}");
+            $"Image available semaphore: 0x{imageAvailable.Handle:X}");
 
         Console.WriteLine(
-            $"Completion fence: 0x{fence.Handle:X}");
+            $"Submission fence: 0x{completionFence.Handle:X}");
 
-        // The first fence starts signaled because no previous
-        // frame has been submitted for this frame slot.
+        // The first frame's fence was created signaled.
         VulkanQueueSubmission.WaitForFence(
             instance,
             logicalDevice,
-            fence,
+            completionFence,
             SubmissionTimeoutNanoseconds);
 
-        Console.WriteLine("Initial fence wait succeeded.");
+        Console.WriteLine("Frame fence is initially signaled.");
 
-        // Fence reset occurs only once a command buffer is ready
-        // for immediate submission. It must not stay unsignaled
-        // across a skipped frame in the future frame loop.
+        // Acquiring may signal imageAvailable. Do not use the
+        // synchronized submit overload until acquisition succeeds.
+        VulkanImageAcquisitionResult acquisition =
+            VulkanSwapchainAcquisition.Acquire(
+                instance,
+                logicalDevice,
+                swapchain,
+                imageAvailable,
+                SubmissionTimeoutNanoseconds);
+
+        Console.WriteLine($"Acquisition result: {acquisition.Status}");
+
+        if (!acquisition.HasImage)
+        {
+            throw new InvalidOperationException(
+                $"No swapchain image was acquired: {acquisition.Status}. " +
+                "The frame must be skipped and the swapchain may " +
+                "need recreation.");
+        }
+
+        uint imageIndex = acquisition.ImageIndex
+            ?? throw new InvalidOperationException(
+                "Vulkan acquisition reported an image without a valid index.");
+
+        int bufferIndex = checked((int)imageIndex);
+        Image image = swapchain.GetImage(bufferIndex);
+        CommandBuffer buffer = commandBuffers.GetBuffer(bufferIndex);
+
+        Silk.NET.Vulkan.Semaphore renderFinished =
+            synchronization.GetRenderFinishedSemaphore(bufferIndex);
+
+        Console.WriteLine($"Acquired image index: {imageIndex}");
+        Console.WriteLine($"Acquired image: 0x{image.Handle:X}");
+        Console.WriteLine($"Command buffer: 0x{buffer.Handle:X}");
+        Console.WriteLine(
+            $"Render finished semaphore: 0x{renderFinished.Handle:X}");
+
+        // RecordCommandBuffers previously ended this buffer. The
+        // command pool was created with ResetCommandBufferBit.
+        // It is safe to reset here because no work is pending.
+        Result resetResult = instance.Api.ResetCommandBuffer(
+            buffer,
+            CommandBufferResetFlags.None);
+
+        if (resetResult != Result.Success)
+        {
+            throw new InvalidOperationException(
+                $"Resetting the acquired image command buffer failed: " +
+                $"{resetResult}.");
+        }
+
+        ClearColorValue clearColor =
+            VulkanSwapchainImageCommands.CreateClearColor(
+                0.08f,
+                0.15f,
+                0.30f,
+                1.0f);
+
+        VulkanCommandRecording.Begin(instance, buffer);
+
+        VulkanSwapchainImageCommands.RecordClear(
+            instance,
+            buffer,
+            image,
+            swapchain.ImageUsage,
+            clearColor);
+
+        VulkanCommandRecording.End(instance, buffer);
+
+        Console.WriteLine(
+            "Recorded Undefined -> TransferDstOptimal -> PresentSrcKhr.");
+
+        Console.WriteLine(
+            "Recorded full-image transfer clear (RGBA: 0.08, 0.15, 0.30, 1.0).");
+
+        // Do not reset before a successful acquisition and a
+        // fully recorded, executable command buffer are available.
         VulkanQueueSubmission.ResetFence(
             instance,
             logicalDevice,
-            fence);
+            completionFence);
 
-        Result resetStatus = instance.Api.GetFenceStatus(
+        Result unsignaledStatus = instance.Api.GetFenceStatus(
             logicalDevice.Handle,
-            fence);
+            completionFence);
 
-        if (resetStatus != Result.NotReady)
+        if (unsignaledStatus != Result.NotReady)
         {
             throw new InvalidOperationException(
-                "The reset submission fence should be unsignaled, " +
-                $"but vkGetFenceStatus returned {resetStatus}.");
+                "The reset frame fence should be unsignaled, " +
+                $"but vkGetFenceStatus returned {unsignaledStatus}.");
         }
 
-        Console.WriteLine("Completion fence reset successfully.");
-
+        // The acquisition semaphore becomes signaled by WSI.
+        // AllCommandsBit covers the initial transfer barriers
+        // and clear operation; later rendering can use a narrower
+        // wait mask chosen for its actual image accesses.
         try
         {
-            // This is an empty, executable command buffer.
-            // No image is acquired and no semaphore is used.
             VulkanQueueSubmission.Submit(
                 instance,
                 logicalDevice,
                 buffer,
-                fence);
+                imageAvailable,
+                PipelineStageFlags.AllCommandsBit,
+                renderFinished,
+                completionFence);
 
-            Console.WriteLine("vkQueueSubmit accepted the command buffer.");
+            Console.WriteLine("Synchronized vkQueueSubmit succeeded.");
 
             VulkanQueueSubmission.WaitForFence(
                 instance,
                 logicalDevice,
-                fence,
+                completionFence,
                 SubmissionTimeoutNanoseconds);
 
             Result completedStatus = instance.Api.GetFenceStatus(
                 logicalDevice.Handle,
-                fence);
+                completionFence);
 
             if (completedStatus != Result.Success)
             {
                 throw new InvalidOperationException(
-                    "The submission fence should be signaled, " +
+                    "The completed submission fence should be signaled, " +
                     $"but vkGetFenceStatus returned {completedStatus}.");
             }
 
             Console.WriteLine("GPU submission completed; fence is signaled.");
+
+            VulkanSwapchainPresentationResult presentation =
+                VulkanSwapchainPresentation.Present(
+                    instance,
+                    logicalDevice,
+                    swapchain,
+                    imageIndex,
+                    renderFinished);
+
+            Console.WriteLine($"Presentation result: {presentation.Status}");
+
+            if (!presentation.WasAccepted)
+            {
+                throw new InvalidOperationException(
+                    "Presentation could not use the current swapchain. " +
+                    "Swapchain recreation is required.");
+            }
+
+            if (acquisition.RequiresRecreation
+                || presentation.RequiresRecreation)
+            {
+                Console.WriteLine(
+                    "The frame was submitted for presentation, " +
+                    "but the swapchain should be recreated.");
+            }
+
+            Console.WriteLine("Swapchain image queued for presentation.");
         }
 
         finally
         {
-            // If the finite fence wait fails, do not free a
-            // possibly pending command buffer or fence. Synchronize
-            // the device before the enclosing using scopes unwind.
+            // A timeout doesn't cancel GPU work. Drain the graphics
+            // queue before the command buffers and fences are freed.
+            // This is also the simple end-of-demo synchronization.
             logicalDevice.WaitIdle();
         }
 
         Console.WriteLine("Vulkan device idle wait succeeded.");
+
+        // Keep the one-shot demo window visible so the resulting
+        // frame can be inspected before all WSI resources are torn down.
+        Thread.Sleep(PresentedFrameHoldMilliseconds);
+
+        Console.WriteLine("First-frame presentation smoke test completed.");
     }
 
     private static void PrintFrameSynchronization(
@@ -644,6 +775,9 @@ internal static class Program
 
         Console.WriteLine(
             $"Actual swapchain images: {swapchain.ImageCount}");
+
+        Console.WriteLine(
+            $"Swapchain image usage: {swapchain.ImageUsage}");
 
         if (swapchain.ImageCount == 0)
         {

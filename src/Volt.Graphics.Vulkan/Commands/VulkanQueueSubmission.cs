@@ -1,40 +1,33 @@
-
 using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
+using Semaphore = Silk.NET.Vulkan.Semaphore;
 
 namespace Volt.Graphics.Vulkan.Commands;
 
 /// <summary>
-/// Provides basic Vulkan graphics queue submission and
-/// fence synchronization operations.
+/// Provides Vulkan graphics queue submission and fence
+/// synchronization operations.
 /// </summary>
 /// <remarks>
-/// The caller must externally synchronize host access to
-/// the graphics queue and command buffers.
+/// The caller must externally synchronize host access to the
+/// graphics queue and command buffers.
 ///
-/// Submitted command buffers must be executable and must
-/// not be reset or freed while their execution is pending.
+/// Submitted command buffers must be executable and must not
+/// be reset or freed while their execution is pending.
 ///
-/// A submission fence must be unsignaled and must not
-/// already be associated with pending GPU work.
+/// Submission fences must be unsignaled and must not already
+/// be associated with pending GPU work.
 ///
-/// This initial implementation does not support semaphore
-/// waits or signals.
+/// This class does not reset fences automatically or track
+/// ownership of command buffers and synchronization objects.
 /// </remarks>
 public static unsafe class VulkanQueueSubmission
 {
     /// <summary>
-    /// Submits one executable primary command buffer to
-    /// the logical device's graphics queue.
+    /// Submits one executable primary command buffer without
+    /// semaphore dependencies.
     /// </summary>
-    /// <remarks>
-    /// The completion fence must be unsignaled before this
-    /// method is called.
-    ///
-    /// A successful return means submission was accepted,
-    /// not that GPU execution has completed.
-    /// </remarks>
     public static void Submit(
         VulkanInstance instance,
         VulkanLogicalDevice device,
@@ -47,16 +40,12 @@ public static unsafe class VulkanQueueSubmission
         ValidateBuffer(buffer);
         ValidateFence(completionFence);
 
-        Vk api = instance.Api;
-
-        // Keep this command buffer handle on the stack
-        // for the duration of the native submission call.
         CommandBuffer submittedBuffer = buffer;
 
         SubmitInfo description =
             CreateDescription(&submittedBuffer);
 
-        Result result = api.QueueSubmit(
+        Result result = instance.Api.QueueSubmit(
             device.GraphicsQueue,
             1,
             in description,
@@ -68,18 +57,75 @@ public static unsafe class VulkanQueueSubmission
     }
 
     /// <summary>
-    /// Waits for a single graphics submission fence.
+    /// Submits one executable primary command buffer, waiting
+    /// for image acquisition and signaling render completion.
     /// </summary>
-    /// <param name="timeoutNanoseconds">
-    /// Maximum Vulkan wait duration in nanoseconds.
-    /// ulong.MaxValue requests an indefinite wait.
-    /// </param>
     /// <remarks>
-    /// A timeout does not cancel pending GPU work.
+    /// The wait semaphore must be signaled by a previously
+    /// submitted operation, such as swapchain image acquisition.
     ///
-    /// If the wait times out, the caller must still
-    /// synchronize outstanding GPU work before destroying
-    /// or reusing the associated resources.
+    /// The signal semaphore must be unsignaled when its signal
+    /// operation executes, and it must not still be in use by
+    /// presentation from an earlier frame.
+    ///
+    /// The wait stage mask must include stages necessary to
+    /// synchronize all operations accessing the acquired image.
+    /// AllCommandsBit is a conservative option for an initial
+    /// Vulkan presentation smoke test.
+    ///
+    /// Successful return means the queue accepted the work;
+    /// it does not mean GPU execution has completed.
+    /// </remarks>
+    public static void Submit(
+        VulkanInstance instance,
+        VulkanLogicalDevice device,
+        CommandBuffer buffer,
+        Semaphore waitSemaphore,
+        PipelineStageFlags waitStageMask,
+        Semaphore signalSemaphore,
+        Fence completionFence)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        ArgumentNullException.ThrowIfNull(device);
+
+        ValidateBuffer(buffer);
+        ValidateFence(completionFence);
+
+        ValidateSynchronizedParameters(
+            waitSemaphore,
+            waitStageMask,
+            signalSemaphore);
+
+        CommandBuffer submittedBuffer = buffer;
+        Semaphore submittedWaitSemaphore = waitSemaphore;
+        PipelineStageFlags submittedWaitStageMask = waitStageMask;
+        Semaphore submittedSignalSemaphore = signalSemaphore;
+
+        SubmitInfo description =
+            CreateSynchronizedDescription(
+                &submittedBuffer,
+                &submittedWaitSemaphore,
+                &submittedWaitStageMask,
+                &submittedSignalSemaphore);
+
+        Result result = instance.Api.QueueSubmit(
+            device.GraphicsQueue,
+            1,
+            in description,
+            completionFence);
+
+        EnsureSuccess(
+            result,
+            "Submit synchronized Vulkan graphics commands");
+    }
+
+    /// <summary>
+    /// Waits for a graphics submission fence.
+    /// </summary>
+    /// <remarks>
+    /// A timeout does not cancel work pending on the GPU.
+    /// Resources associated with an unfinished submission
+    /// must not be destroyed or reused.
     /// </remarks>
     public static void WaitForFence(
         VulkanInstance instance,
@@ -112,14 +158,12 @@ public static unsafe class VulkanQueueSubmission
     }
 
     /// <summary>
-    /// Resets a signaled fence for a future submission.
+    /// Resets a fence for a future submission.
     /// </summary>
     /// <remarks>
-    /// The caller must ensure that the fence is no longer
-    /// associated with pending GPU work.
-    ///
-    /// Reset the fence only when a submission that will
-    /// signal it is ready to be issued.
+    /// The caller must ensure no pending work is associated
+    /// with this fence. Reset it only when a submission that
+    /// will signal it is ready to be issued.
     /// </remarks>
     public static void ResetFence(
         VulkanInstance instance,
@@ -142,12 +186,13 @@ public static unsafe class VulkanQueueSubmission
     }
 
     /// <summary>
-    /// Creates a managed description for submitting one
-    /// primary command buffer without semaphores.
+    /// Creates a submission description without semaphore
+    /// dependencies.
     /// </summary>
     /// <remarks>
     /// The command buffer pointer must remain valid until
-    /// vkQueueSubmit returns.
+    /// vkQueueSubmit returns. Do not retain this structure
+    /// beyond the lifetime of its pointed-to storage.
     /// </remarks>
     internal static SubmitInfo CreateDescription(
         CommandBuffer* commandBuffer)
@@ -168,6 +213,98 @@ public static unsafe class VulkanQueueSubmission
             WaitSemaphoreCount = 0,
             SignalSemaphoreCount = 0
         };
+    }
+
+    /// <summary>
+    /// Creates a submission description with one wait and
+    /// one signal binary semaphore.
+    /// </summary>
+    /// <remarks>
+    /// Every supplied pointer must remain valid until
+    /// vkQueueSubmit returns. Do not retain this structure
+    /// beyond the lifetime of its pointed-to storage.
+    /// </remarks>
+    internal static SubmitInfo CreateSynchronizedDescription(
+        CommandBuffer* commandBuffer,
+        Semaphore* waitSemaphore,
+        PipelineStageFlags* waitStageMask,
+        Semaphore* signalSemaphore)
+    {
+        SubmitInfo description =
+            CreateDescription(commandBuffer);
+
+        if (waitSemaphore == null)
+        {
+            throw new ArgumentException(
+                "A valid wait semaphore pointer is required.",
+                nameof(waitSemaphore));
+        }
+
+        if (waitStageMask == null)
+        {
+            throw new ArgumentException(
+                "A valid wait stage mask pointer is required.",
+                nameof(waitStageMask));
+        }
+
+        if (signalSemaphore == null)
+        {
+            throw new ArgumentException(
+                "A valid signal semaphore pointer is required.",
+                nameof(signalSemaphore));
+        }
+
+        ValidateSynchronizedParameters(
+            *waitSemaphore,
+            *waitStageMask,
+            *signalSemaphore);
+
+        description.WaitSemaphoreCount = 1;
+        description.PWaitSemaphores = waitSemaphore;
+        description.PWaitDstStageMask = waitStageMask;
+        description.SignalSemaphoreCount = 1;
+        description.PSignalSemaphores = signalSemaphore;
+
+        return description;
+    }
+
+    /// <summary>
+    /// Validates parameters for a single binary-semaphore
+    /// wait and signal submission.
+    /// </summary>
+    internal static void ValidateSynchronizedParameters(
+        Semaphore waitSemaphore,
+        PipelineStageFlags waitStageMask,
+        Semaphore signalSemaphore)
+    {
+        if (waitSemaphore.Handle == 0)
+        {
+            throw new ArgumentException(
+                "A valid Vulkan wait semaphore is required.",
+                nameof(waitSemaphore));
+        }
+
+        if (waitStageMask == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(waitStageMask),
+                waitStageMask,
+                "The semaphore wait stage mask cannot be empty.");
+        }
+
+        if (signalSemaphore.Handle == 0)
+        {
+            throw new ArgumentException(
+                "A valid Vulkan signal semaphore is required.",
+                nameof(signalSemaphore));
+        }
+
+        if (waitSemaphore.Handle == signalSemaphore.Handle)
+        {
+            throw new ArgumentException(
+                "The wait and signal semaphores must be different.",
+                nameof(signalSemaphore));
+        }
     }
 
     private static void ValidateBuffer(CommandBuffer buffer)

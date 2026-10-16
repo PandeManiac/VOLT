@@ -42,6 +42,8 @@ public sealed unsafe class VulkanSwapchain : IDisposable
 
     public Extent2D Extent { get; }
 
+    public ImageUsageFlags ImageUsage { get; }
+
     public uint ImageCount => (uint)_images.Length;
 
     /// <summary>
@@ -129,6 +131,15 @@ public sealed unsafe class VulkanSwapchain : IDisposable
         SurfaceCapabilitiesKHR capabilities =
             support.Capabilities;
 
+        ImageUsageFlags imageUsage =
+            ImageUsageFlags.ColorAttachmentBit;
+
+        if ((capabilities.SupportedUsageFlags &
+             ImageUsageFlags.TransferDstBit) != 0)
+        {
+            imageUsage |= ImageUsageFlags.TransferDstBit;
+        }
+
         CompositeAlphaFlagsKHR compositeAlpha =
             SelectCompositeAlpha(
                 capabilities.SupportedCompositeAlpha);
@@ -165,7 +176,7 @@ public sealed unsafe class VulkanSwapchain : IDisposable
                 ImageColorSpace = format.ColorSpace,
                 ImageExtent = extent,
                 ImageArrayLayers = 1,
-                ImageUsage = ImageUsageFlags.ColorAttachmentBit,
+                ImageUsage = imageUsage,
                 ImageSharingMode = SharingMode.Exclusive,
                 PreTransform = capabilities.CurrentTransform,
                 CompositeAlpha = compositeAlpha,
@@ -210,6 +221,7 @@ public sealed unsafe class VulkanSwapchain : IDisposable
             ColorSpace = format.ColorSpace;
             PresentMode = presentMode;
             Extent = extent;
+            ImageUsage = imageUsage;
         }
 
         catch
