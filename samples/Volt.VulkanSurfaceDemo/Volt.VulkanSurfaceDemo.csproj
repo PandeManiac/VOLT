@@ -1,4 +1,3 @@
-
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
@@ -9,5 +8,18 @@
     <ProjectReference Include="../../src/Volt.Platform/Volt.Platform.csproj" />
     <ProjectReference Include="../../src/Volt.Graphics.Vulkan/Volt.Graphics.Vulkan.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Shaders/triangle.vert.spv" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Shaders/triangle.frag.spv" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CompileTriangleShaders"
+          BeforeTargets="GetCopyToOutputDirectoryItems"
+          Inputs="Shaders/triangle.vert;Shaders/triangle.frag"
+          Outputs="Shaders/triangle.vert.spv;Shaders/triangle.frag.spv">
+    <Exec Command="glslangValidator -V &quot;$(MSBuildProjectDirectory)/Shaders/triangle.vert&quot; -o &quot;$(MSBuildProjectDirectory)/Shaders/triangle.vert.spv&quot;" />
+    <Exec Command="glslangValidator -V &quot;$(MSBuildProjectDirectory)/Shaders/triangle.frag&quot; -o &quot;$(MSBuildProjectDirectory)/Shaders/triangle.frag.spv&quot;" />
+  </Target>
 
 </Project>

@@ -2,6 +2,7 @@ using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Commands;
 using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
+using Volt.Graphics.Vulkan.Rendering;
 using Volt.Graphics.Vulkan.Surface;
 using Volt.Graphics.Vulkan.Swapchain;
 using Volt.Graphics.Vulkan.Synchronization;
@@ -12,7 +13,7 @@ namespace Volt.VulkanSurfaceDemo;
 /// <summary>
 /// Exercises Vulkan surface integration, swapchain creation,
 /// image-view creation, command recording, frame synchronization,
-/// synchronized transfer clears, swapchain presentation,
+/// graphics pipeline drawing, swapchain presentation,
 /// and native resource cleanup.
 /// </summary>
 internal static class Program
@@ -21,7 +22,7 @@ internal static class Program
     private const string SwapchainExtension = "VK_KHR_swapchain";
     private const int FramesInFlight = 2;
     private const ulong SubmissionTimeoutNanoseconds = 5_000_000_000UL;
-    private const int PresentedFrameHoldMilliseconds = 2000;
+    private const int PresentedFrameHoldMilliseconds = 5000;
 
     [STAThread]
     private static int Main(string[] args)
@@ -331,6 +332,26 @@ internal static class Program
 
                                         Console.WriteLine();
 
+                                        string shaderDirectory = Path.Combine(
+                                            AppContext.BaseDirectory,
+                                            "Shaders");
+
+                                        using VulkanTrianglePipeline triangle = new(
+                                            instance,
+                                            logicalDevice,
+                                            swapchain,
+                                            imageViews,
+                                            Path.Combine(shaderDirectory, "triangle.vert.spv"),
+                                            Path.Combine(shaderDirectory, "triangle.frag.spv"));
+
+                                        Console.WriteLine(
+                                            "Vulkan triangle graphics pipeline created successfully.");
+
+                                        Console.WriteLine(
+                                            $"Triangle framebuffers: {triangle.FramebufferCount}");
+
+                                        Console.WriteLine();
+
                                         using (VulkanFrameSynchronization synchronization = new(
                                             instance,
                                             logicalDevice,
@@ -347,11 +368,13 @@ internal static class Program
                                             Console.WriteLine();
 
                                             AcquireClearAndPresentFrame(
+                                                window,
                                                 instance,
                                                 logicalDevice,
                                                 swapchain,
                                                 commandBuffers,
-                                                synchronization);
+                                                synchronization,
+                                                triangle);
                                         }
 
                                         Console.WriteLine();
@@ -402,13 +425,13 @@ internal static class Program
         Console.WriteLine();
 
         Console.WriteLine(
-            "Vulkan acquire, clear, submit, and present: PASSED");
+            "Vulkan first triangle: acquire, draw, submit, present: PASSED");
 
         return 0;
     }
 
     /// <summary>
-    /// Acquires one swapchain image, records a transfer clear,
+    /// Acquires one swapchain image, records a graphics pass,
     /// submits the work with binary semaphores, and presents it.
     /// </summary>
     /// <remarks>
@@ -417,11 +440,13 @@ internal static class Program
     /// or incomplete presentation are deferred to the frame-loop work.
     /// </remarks>
     private static void AcquireClearAndPresentFrame(
+        Window window,
         VulkanInstance instance,
         VulkanLogicalDevice logicalDevice,
         VulkanSwapchain swapchain,
         VulkanCommandBuffers commandBuffers,
-        VulkanFrameSynchronization synchronization)
+        VulkanFrameSynchronization synchronization,
+        VulkanTrianglePipeline triangle)
     {
         if (commandBuffers.Count != checked((int)swapchain.ImageCount))
         {
@@ -436,12 +461,10 @@ internal static class Program
                 "Frame synchronization does not match the swapchain.");
         }
 
-        if ((swapchain.ImageUsage & ImageUsageFlags.TransferDstBit) == 0)
+        if ((swapchain.ImageUsage & ImageUsageFlags.ColorAttachmentBit) == 0)
         {
             throw new NotSupportedException(
-                "The swapchain does not support transfer-destination " +
-                "clears. Confirm the transfer-destination usage update " +
-                "was applied to VulkanSwapchain.cs.");
+                "The swapchain does not support color attachments.");
         }
 
         const int frameIndex = 0;
@@ -470,8 +493,8 @@ internal static class Program
 
         Console.WriteLine("Frame fence is initially signaled.");
 
-        // Acquiring may signal imageAvailable. Do not use the
-        // synchronized submit overload until acquisition succeeds.
+        // Do not submit a wait on imageAvailable until acquisition
+        // has successfully arranged for that semaphore to be signaled.
         VulkanImageAcquisitionResult acquisition =
             VulkanSwapchainAcquisition.Acquire(
                 instance,
@@ -492,8 +515,7 @@ internal static class Program
 
         uint imageIndex = acquisition.ImageIndex
             ?? throw new InvalidOperationException(
-                "Vulkan acquisition reported an image without a valid index.");
-
+                "Vulkan acquisition reported an image without an index.");
         int bufferIndex = checked((int)imageIndex);
         Image image = swapchain.GetImage(bufferIndex);
         CommandBuffer buffer = commandBuffers.GetBuffer(bufferIndex);
@@ -521,29 +543,15 @@ internal static class Program
                 $"{resetResult}.");
         }
 
-        ClearColorValue clearColor =
-            VulkanSwapchainImageCommands.CreateClearColor(
-                0.08f,
-                0.15f,
-                0.30f,
-                1.0f);
-
         VulkanCommandRecording.Begin(instance, buffer);
 
-        VulkanSwapchainImageCommands.RecordClear(
-            instance,
-            buffer,
-            image,
-            swapchain.ImageUsage,
-            clearColor);
+        triangle.Record(buffer, bufferIndex);
 
         VulkanCommandRecording.End(instance, buffer);
 
         Console.WriteLine(
-            "Recorded Undefined -> TransferDstOptimal -> PresentSrcKhr.");
-
-        Console.WriteLine(
-            "Recorded full-image transfer clear (RGBA: 0.08, 0.15, 0.30, 1.0).");
+            "Recorded graphics pass: clear attachment, bind pipeline, " +
+            "draw three vertices, transition for presentation.");
 
         // Do not reset before a successful acquisition and a
         // fully recorded, executable command buffer are available.
@@ -564,9 +572,8 @@ internal static class Program
         }
 
         // The acquisition semaphore becomes signaled by WSI.
-        // AllCommandsBit covers the initial transfer barriers
-        // and clear operation; later rendering can use a narrower
-        // wait mask chosen for its actual image accesses.
+        // AllCommandsBit conservatively covers all rendering
+        // operations using the acquired image.
         try
         {
             VulkanQueueSubmission.Submit(
@@ -637,11 +644,30 @@ internal static class Program
 
         Console.WriteLine("Vulkan device idle wait succeeded.");
 
-        // Keep the one-shot demo window visible so the resulting
-        // frame can be inspected before all WSI resources are torn down.
-        Thread.Sleep(PresentedFrameHoldMilliseconds);
+        // Keep the one-shot demo visible without blocking SDL event
+        // processing. Wayland compositors may mark an unresponsive
+        // client when its event queue is not serviced.
+        System.Diagnostics.Stopwatch holdTimer =
+            System.Diagnostics.Stopwatch.StartNew();
 
-        Console.WriteLine("First-frame presentation smoke test completed.");
+        while (!window.ShouldClose
+            && holdTimer.ElapsedMilliseconds < PresentedFrameHoldMilliseconds)
+        {
+            window.PollEvents();
+
+            while (window.TryDequeueEvent(out _))
+            {
+                // This is only a one-frame smoke test. Resize and
+                // pixel-size changes are handled by the later frame loop.
+            }
+
+            if (!window.ShouldClose)
+            {
+                Thread.Sleep(16);
+            }
+        }
+
+        Console.WriteLine("First-triangle presentation smoke test completed.");
     }
 
     private static void PrintFrameSynchronization(
