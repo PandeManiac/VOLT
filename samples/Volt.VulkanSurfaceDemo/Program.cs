@@ -279,7 +279,6 @@ internal static class Program
                             checked((uint)framebufferSize.Height)))
                         {
                             PrintSwapchain(swapchain);
-
                             Console.WriteLine();
 
                             using (VulkanSwapchainImageViews imageViews = new(
@@ -484,7 +483,6 @@ internal static class Program
         Console.WriteLine(
             $"Submission fence: 0x{completionFence.Handle:X}");
 
-        // The first frame's fence was created signaled.
         VulkanQueueSubmission.WaitForFence(
             instance,
             logicalDevice,
@@ -493,8 +491,6 @@ internal static class Program
 
         Console.WriteLine("Frame fence is initially signaled.");
 
-        // Do not submit a wait on imageAvailable until acquisition
-        // has successfully arranged for that semaphore to be signaled.
         VulkanImageAcquisitionResult acquisition =
             VulkanSwapchainAcquisition.Acquire(
                 instance,
@@ -516,6 +512,7 @@ internal static class Program
         uint imageIndex = acquisition.ImageIndex
             ?? throw new InvalidOperationException(
                 "Vulkan acquisition reported an image without an index.");
+
         int bufferIndex = checked((int)imageIndex);
         Image image = swapchain.GetImage(bufferIndex);
         CommandBuffer buffer = commandBuffers.GetBuffer(bufferIndex);
@@ -529,9 +526,6 @@ internal static class Program
         Console.WriteLine(
             $"Render finished semaphore: 0x{renderFinished.Handle:X}");
 
-        // RecordCommandBuffers previously ended this buffer. The
-        // command pool was created with ResetCommandBufferBit.
-        // It is safe to reset here because no work is pending.
         Result resetResult = instance.Api.ResetCommandBuffer(
             buffer,
             CommandBufferResetFlags.None);
@@ -544,17 +538,13 @@ internal static class Program
         }
 
         VulkanCommandRecording.Begin(instance, buffer);
-
         triangle.Record(buffer, bufferIndex);
-
         VulkanCommandRecording.End(instance, buffer);
 
         Console.WriteLine(
             "Recorded graphics pass: clear attachment, bind pipeline, " +
             "draw three vertices, transition for presentation.");
 
-        // Do not reset before a successful acquisition and a
-        // fully recorded, executable command buffer are available.
         VulkanQueueSubmission.ResetFence(
             instance,
             logicalDevice,
@@ -571,9 +561,6 @@ internal static class Program
                 $"but vkGetFenceStatus returned {unsignaledStatus}.");
         }
 
-        // The acquisition semaphore becomes signaled by WSI.
-        // AllCommandsBit conservatively covers all rendering
-        // operations using the acquired image.
         try
         {
             VulkanQueueSubmission.Submit(
@@ -636,17 +623,11 @@ internal static class Program
 
         finally
         {
-            // A timeout doesn't cancel GPU work. Drain the graphics
-            // queue before the command buffers and fences are freed.
-            // This is also the simple end-of-demo synchronization.
             logicalDevice.WaitIdle();
         }
 
         Console.WriteLine("Vulkan device idle wait succeeded.");
 
-        // Keep the one-shot demo visible without blocking SDL event
-        // processing. Wayland compositors may mark an unresponsive
-        // client when its event queue is not serviced.
         System.Diagnostics.Stopwatch holdTimer =
             System.Diagnostics.Stopwatch.StartNew();
 
@@ -657,8 +638,7 @@ internal static class Program
 
             while (window.TryDequeueEvent(out _))
             {
-                // This is only a one-frame smoke test. Resize and
-                // pixel-size changes are handled by the later frame loop.
+
             }
 
             if (!window.ShouldClose)
