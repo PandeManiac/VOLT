@@ -383,7 +383,7 @@ public class EcsMigrationBenchmarks
     private World _world = null!;
     private Entity[] _entities = null!;
 
-    [Params(2, 8)]
+    [Params(0, 1, 2, 8)]
     public int ComponentCount { get; set; }
 
     [Params(1_000, 100_000)]
@@ -410,36 +410,57 @@ public class EcsMigrationBenchmarks
         {
             Entity entity = _world.CreateEntity();
 
-            _world.AddComponent(
-                entity,
-                new MigrationComponent0 { Value = i });
+            if (ComponentCount >= 1)
+            {
+                _world.AddComponent(
+                    entity,
+                    new MigrationComponent0 { Value = i });
+            }
 
-            _world.AddComponent(
-                entity,
-                new MigrationComponent1 { Value = i });
+            if (ComponentCount >= 2)
+            {
+                _world.AddComponent(
+                    entity,
+                    new MigrationComponent1 { Value = i });
+            }
 
-            if (ComponentCount == 8)
+            if (ComponentCount >= 3)
             {
                 _world.AddComponent(
                     entity,
                     new MigrationComponent2 { Value = i });
+            }
 
+            if (ComponentCount >= 4)
+            {
                 _world.AddComponent(
                     entity,
                     new MigrationComponent3 { Value = i });
+            }
 
+            if (ComponentCount >= 5)
+            {
                 _world.AddComponent(
                     entity,
                     new MigrationComponent4 { Value = i });
+            }
 
+            if (ComponentCount >= 6)
+            {
                 _world.AddComponent(
                     entity,
                     new MigrationComponent5 { Value = i });
+            }
 
+            if (ComponentCount >= 7)
+            {
                 _world.AddComponent(
                     entity,
                     new MigrationComponent6 { Value = i });
+            }
 
+            if (ComponentCount >= 8)
+            {
                 _world.AddComponent(
                     entity,
                     new MigrationComponent7 { Value = i });
