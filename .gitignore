@@ -1,60 +1,148 @@
-# .NET build outputs
+
+# ============================================================
+# VOLT - Git Ignore
+# ============================================================
+
+# ------------------------------------------------------------
+# .NET / MSBuild
+# ------------------------------------------------------------
+
 **/bin/
 **/obj/
 **/out/
 **/TestResults/
-artifacts/
 
-# IDE user-specific files
+# ------------------------------------------------------------
+# BenchmarkDotNet / performance artifacts
+# ------------------------------------------------------------
+
+**/BenchmarkDotNet.Artifacts/
+
+# Generated performance results and archives
+/artifacts/
+/VOLT-Performance-Lab/
+/lab.zip
+/volt-benchmark-results.zip
+
+# Custom BenchmarkDotNet output directories
+/benchmarks/Volt.Benchmarks/*-test/
+/benchmarks/Volt.Benchmarks/*-results/
+/benchmarks/Volt.Benchmarks/benchmark-results/
+
+# Profiling and trace output
+*.nettrace
+*.netperf
+*.netperf.zip
+*.speedscope.json
+*.etl
+*.etlx
+*.trace
+
+# ------------------------------------------------------------
+# Autonomous agent temporary files
+# ------------------------------------------------------------
+
+# Temporary agent investigations, prototypes, and scratch notes
+/research/
+
+# Agent-specific local state
+/.freebuff/
+
+# Local scratch directories
+.tmp/
+.cache/
+scratch/
+
+# ------------------------------------------------------------
+# IDEs / editors
+# ------------------------------------------------------------
+
 .vs/
 .idea/
+
 *.suo
 *.user
 *.userosscache
 *.sln.docstates
 *.rsuser
 *.DotSettings.user
+
+_ReSharper*/
+
+# Ignore local VS Code settings while keeping shared configuration
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/launch.json
 
-# Rider / ReSharper
-_ReSharper*/
-*.DotSettings.user
+# ------------------------------------------------------------
+# Tests / coverage
+# ------------------------------------------------------------
 
-# Coverage, logs, diagnostics
-coverage/
-coverage-report/
+**/coverage/
+**/coverage-report/
+
 *.coverage
 *.coveragexml
 *.trx
+
+# ------------------------------------------------------------
+# Logs / diagnostics / temporary files
+# ------------------------------------------------------------
+
 *.log
 *.dmp
 *.diagsession
-
-# OS-generated files
-.DS_Store
-Thumbs.db
-Desktop.ini
-*~
+*.tmp
+*.temp
+*.bak
 *.swp
 *.swo
+*~
 
-# Local environment and secrets
+# ------------------------------------------------------------
+# NuGet / package outputs
+# ------------------------------------------------------------
+
+*.nupkg
+*.snupkg
+
+# ------------------------------------------------------------
+# Native tooling / CMake
+# ------------------------------------------------------------
+
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# ------------------------------------------------------------
+# Local environment / secrets
+# ------------------------------------------------------------
+
 .env
 .env.*
 !.env.example
+
 *.pfx
 *.snk
 secrets.json
 
-# Generated NuGet packages
-*.nupkg
-*.snupkg
+# ------------------------------------------------------------
+# OS-generated files
+# ------------------------------------------------------------
 
-# Native tooling / generated compilation outputs
-CMakeFiles/
-CMakeCache.txt
-compile_commands.json
+.DS_Store
+Thumbs.db
+Desktop.ini
 
-**/BenchmarkDotNet.Artifacts/
+# ------------------------------------------------------------
+# Python tooling
+# ------------------------------------------------------------
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
