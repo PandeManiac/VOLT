@@ -303,12 +303,12 @@ public sealed unsafe class World : IDisposable
     {
         ThrowIfDisposed();
 
-        if (!_allocator.IsAlive(entity))
+        if (!_locations.TryGetValue(entity, out EntityLocation location))
         {
             throw new ArgumentException("The entity is not alive in this world.", nameof(entity));
         }
 
-        return _locations[entity];
+        return location;
     }
 
     private Archetype GetOrCreateArchetype(ComponentSignature signature)
