@@ -372,12 +372,26 @@ public sealed unsafe class World : IDisposable
         }
     }
 
-    private void RemoveFromChunk(EntityLocation location)
+    private void RemoveFromChunk(
+        EntityLocation location,
+        bool clearVacatedStorage = true)
     {
         ArchetypeChunk chunk = location.Chunk;
         bool wasFull = chunk.IsFull;
+        Entity movedEntity;
+        bool moved;
 
-        if (chunk.RemoveAt(location.Row, out Entity movedEntity))
+        if (clearVacatedStorage)
+        {
+            moved = chunk.RemoveAt(location.Row, out movedEntity);
+        }
+
+        else
+        {
+            moved = chunk.RemoveAtForMigration(location.Row, out movedEntity);
+        }
+
+        if (moved)
         {
             _locations[movedEntity] = new EntityLocation(chunk, location.Row);
         }
@@ -521,7 +535,7 @@ public sealed unsafe class World : IDisposable
             throw;
         }
 
-        RemoveFromChunk(source);
+        RemoveFromChunk(source, clearVacatedStorage: false);
         _locations[entity] = new EntityLocation(destinationChunk, destinationRow);
     }
 

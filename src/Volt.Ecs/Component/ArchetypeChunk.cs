@@ -297,6 +297,20 @@ public sealed unsafe class ArchetypeChunk : IDisposable
     /// </summary>
     public bool RemoveAt(int row, out Entity movedEntity)
     {
+        return RemoveAtCore(row, out movedEntity, clearVacatedStorage: true);
+    }
+
+    // Migration overwrites the vacated row before exposing it again.
+    internal bool RemoveAtForMigration(int row, out Entity movedEntity)
+    {
+        return RemoveAtCore(row, out movedEntity, clearVacatedStorage: false);
+    }
+
+    private bool RemoveAtCore(
+        int row,
+        out Entity movedEntity,
+        bool clearVacatedStorage)
+    {
         ThrowIfDisposed();
         ValidateRow(row);
 
@@ -327,13 +341,16 @@ public sealed unsafe class ArchetypeChunk : IDisposable
 
         entities[lastRow] = default;
 
-        for (int i = 0; i < ComponentCount; i++)
+        if (clearVacatedStorage)
         {
-            byte* pointer = GetComponentRowPointer(i, lastRow);
+            for (int i = 0; i < ComponentCount; i++)
+            {
+                byte* pointer = GetComponentRowPointer(i, lastRow);
 
-            NativeMemory.Clear(
-                pointer,
-                _componentStrides[i]);
+                NativeMemory.Clear(
+                    pointer,
+                    _componentStrides[i]);
+            }
         }
 
         Count--;
