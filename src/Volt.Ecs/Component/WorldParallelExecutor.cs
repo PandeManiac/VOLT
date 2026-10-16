@@ -32,8 +32,13 @@ namespace Volt.Ecs;
 /// </remarks>
 public sealed class WorldParallelExecutor
 {
+    private const int ReusableChunkBufferEntityThreshold = 1_000_000;
+
     private static readonly ConditionalWeakTable<World, SemaphoreSlim>
         s_executionGates = [];
+
+    private static readonly ConditionalWeakTable<World, List<WorldQueryChunk>>
+        s_reusableChunkBuffers = [];
 
     private readonly JobScheduler _scheduler;
 
@@ -121,28 +126,45 @@ public sealed class WorldParallelExecutor
             using World.StructuralFreezeScope freeze =
                 world.FreezeStructure();
 
-            List<WorldQueryChunk> chunks = [];
+            bool reuseChunks =
+                world.Count >= ReusableChunkBufferEntityThreshold;
 
-            foreach (WorldQueryChunk chunk in world.Query(query))
+            List<WorldQueryChunk> chunks = reuseChunks
+                ? s_reusableChunkBuffers.GetValue(
+                    world,
+                    static _ => [])
+                : [];
+
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                chunks.Add(chunk);
-            }
-
-            await _scheduler.ScheduleBatches(
-                chunks.Count,
-                ChunksPerBatch,
-                (start, end) =>
+                foreach (WorldQueryChunk chunk in world.Query(query))
                 {
-                    for (int i = start; i < end; i++)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                        executeChunk(chunks[i]);
-                    }
-                },
-                cancellationToken).ConfigureAwait(false);
+                    chunks.Add(chunk);
+                }
+
+                await _scheduler.ScheduleBatches(
+                    chunks.Count,
+                    ChunksPerBatch,
+                    (start, end) =>
+                    {
+                        for (int i = start; i < end; i++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+
+                            executeChunk(chunks[i]);
+                        }
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (reuseChunks)
+                {
+                    chunks.Clear();
+                }
+            }
         }
 
         finally
