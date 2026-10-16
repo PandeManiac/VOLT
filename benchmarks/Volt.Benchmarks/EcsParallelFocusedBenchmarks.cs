@@ -12,10 +12,12 @@ namespace Volt.Benchmarks;
 public class EcsParallelFocusedBenchmarks
 {
     private World _smallWorld = null!;
+    private World _mediumWorld = null!;
     private World _largeWorld = null!;
     private ComponentQuery _query = null!;
     private WorldParallelExecutor _smallSerial = null!;
     private WorldParallelExecutor _smallParallel = null!;
+    private WorldParallelExecutor _mediumSerial = null!;
     private WorldParallelExecutor _largeSerial = null!;
     private WorldParallelExecutor _largeParallel = null!;
     private Action<WorldQueryChunk> _lightWork = null!;
@@ -33,10 +35,12 @@ public class EcsParallelFocusedBenchmarks
                 ComponentRegistry.Get<BenchmarkVelocity>()));
 
         _smallWorld = CreateWorld(1_000);
+        _mediumWorld = CreateWorld(100_000);
         _largeWorld = CreateWorld(1_000_000);
 
         _smallSerial = new WorldParallelExecutor(new JobScheduler(1), 1);
         _smallParallel = new WorldParallelExecutor(new JobScheduler(8), 8);
+        _mediumSerial = new WorldParallelExecutor(new JobScheduler(1), 1);
         _largeSerial = new WorldParallelExecutor(new JobScheduler(1), 1);
         _largeParallel = new WorldParallelExecutor(new JobScheduler(8), 8);
 
@@ -48,6 +52,7 @@ public class EcsParallelFocusedBenchmarks
     public void Cleanup()
     {
         _smallWorld.Dispose();
+        _mediumWorld.Dispose();
         _largeWorld.Dispose();
     }
 
@@ -58,6 +63,10 @@ public class EcsParallelFocusedBenchmarks
     [Benchmark]
     public Task SmallParallel() => _smallParallel.ExecuteAsync(
         _smallWorld, _query, _heavyWork);
+
+    [Benchmark]
+    public Task MediumSerial() => _mediumSerial.ExecuteAsync(
+        _mediumWorld, _query, _lightWork);
 
     [Benchmark]
     public Task LargeSerial() => _largeSerial.ExecuteAsync(
