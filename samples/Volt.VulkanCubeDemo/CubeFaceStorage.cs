@@ -49,8 +49,6 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
         _device = device;
         _api = instance.Api;
 
-        // One packed uint per cube face.
-        // Axis: X = 0, Y = 1, Z = 2.
         uint[] faces =
         [
             PackFace(2, true, 0),
@@ -62,10 +60,9 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
         ];
 
         VulkanBuffer? buffer = null;
-
         DescriptorSetLayout layout = default;
         DescriptorPool pool = default;
-        DescriptorSet set = default;
+        DescriptorSet set;
 
         Device deviceHandle = device.Handle;
 
@@ -80,7 +77,7 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
                 MemoryPropertyFlags.HostVisibleBit,
                 MemoryPropertyFlags.HostCoherentBit);
 
-            buffer.Write<uint>(faces);
+            buffer.Write(faces);
 
             DescriptorSetLayoutBinding binding = new()
             {

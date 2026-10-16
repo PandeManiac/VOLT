@@ -186,6 +186,7 @@ internal sealed unsafe class CubeRenderer : IDisposable
         _device = device;
         _api = api;
         _framebuffers = framebuffers;
+
         _faces = faces ?? throw new InvalidOperationException(
             "Cube face storage was not initialized.");
 
@@ -253,11 +254,13 @@ internal sealed unsafe class CubeRenderer : IDisposable
             SType = StructureType.RenderPassBeginInfo,
             RenderPass = _renderPass,
             Framebuffer = _framebuffers[imageIndex],
+
             RenderArea = new Rect2D
             {
                 Offset = new Offset2D(0, 0),
                 Extent = Extent
             },
+
             ClearValueCount = 2,
             PClearValues = clearValues
         };
@@ -368,12 +371,14 @@ internal sealed unsafe class CubeRenderer : IDisposable
             SType = StructureType.ImageCreateInfo,
             ImageType = ImageType.Type2D,
             Format = format,
+
             Extent = new Extent3D
             {
                 Width = extent.Width,
                 Height = extent.Height,
                 Depth = 1
             },
+
             MipLevels = 1,
             ArrayLayers = 1,
             Samples = SampleCountFlags.Count1Bit,
@@ -537,7 +542,7 @@ internal sealed unsafe class CubeRenderer : IDisposable
             StencilLoadOp = AttachmentLoadOp.DontCare,
             StencilStoreOp = AttachmentStoreOp.DontCare,
             InitialLayout = ImageLayout.Undefined,
-            FinalLayout = ImageLayout.DepthStencilAttachmentOptimal
+            FinalLayout = ImageLayout.DepthStencilAttachmentOptimal,
         };
 
         AttachmentReference colorReference = new()
@@ -568,10 +573,13 @@ internal sealed unsafe class CubeRenderer : IDisposable
             SrcSubpass = Vk.SubpassExternal,
             DstSubpass = 0,
             SrcStageMask = PipelineStageFlags.TopOfPipeBit,
+
             DstStageMask =
                 PipelineStageFlags.ColorAttachmentOutputBit |
                 PipelineStageFlags.EarlyFragmentTestsBit,
+
             SrcAccessMask = AccessFlags.None,
+
             DstAccessMask =
                 AccessFlags.ColorAttachmentWriteBit |
                 AccessFlags.DepthStencilAttachmentWriteBit
@@ -581,14 +589,18 @@ internal sealed unsafe class CubeRenderer : IDisposable
         {
             SrcSubpass = 0,
             DstSubpass = Vk.SubpassExternal,
+
             SrcStageMask =
                 PipelineStageFlags.ColorAttachmentOutputBit |
                 PipelineStageFlags.EarlyFragmentTestsBit |
                 PipelineStageFlags.LateFragmentTestsBit,
+
             DstStageMask = PipelineStageFlags.BottomOfPipeBit,
+
             SrcAccessMask =
                 AccessFlags.ColorAttachmentWriteBit |
                 AccessFlags.DepthStencilAttachmentWriteBit,
+
             DstAccessMask = AccessFlags.None
         };
 

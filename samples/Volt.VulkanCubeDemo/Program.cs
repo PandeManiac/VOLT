@@ -27,8 +27,8 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length > 1 ||
-            (args.Length == 1 && args[0] != ValidationArgument))
+        if (args.Length > 1
+            || (args.Length == 1 && args[0] != ValidationArgument))
         {
             Console.Error.WriteLine(
                 "Usage: Volt.VulkanCubeDemo [--validation]");
@@ -211,9 +211,6 @@ internal static class Program
 
         finally
         {
-            // Outstanding submissions and presentation operations must
-            // complete before disposing command buffers, attachments,
-            // the graphics pipeline, or synchronization resources.
             device.WaitIdle();
         }
 
@@ -249,8 +246,8 @@ internal static class Program
 
             while (window.TryDequeueEvent(out WindowEvent windowEvent))
             {
-                if (windowEvent.Type == WindowEventType.PixelSizeChanged ||
-                    windowEvent.Type == WindowEventType.Resized)
+                if (windowEvent.Type is WindowEventType.PixelSizeChanged
+                    or WindowEventType.Resized)
                 {
                     WindowSize pixelSize = window.PixelSize;
 
@@ -275,9 +272,6 @@ internal static class Program
                 break;
             }
 
-            // Only one submission is in flight. This guarantees the
-            // shared depth attachment and command buffer are no longer
-            // being used by the GPU before the next recording.
             VulkanQueueSubmission.WaitForFence(
                 instance,
                 device,
@@ -296,13 +290,10 @@ internal static class Program
             {
                 if (acquisition.RequiresRecreation)
                 {
-                    Console.WriteLine(
-                        "Swapchain is out of date. Exiting.");
+                    Console.WriteLine("Swapchain is out of date. Exiting.");
                     break;
                 }
 
-                // Timeout and NotReady acquire no image.
-                // Keep servicing SDL events.
                 continue;
             }
 
@@ -335,8 +326,6 @@ internal static class Program
                 instance,
                 commandBuffer);
 
-            // Never reset the fence before successfully acquiring and
-            // recording a frame that can be submitted.
             VulkanQueueSubmission.ResetFence(
                 instance,
                 device,

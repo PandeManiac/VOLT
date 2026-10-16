@@ -1,5 +1,4 @@
-
-#version 450
+#version 460 core
 
 layout(set = 0, binding = 0, std430) readonly buffer CubeFaces
 {
@@ -50,10 +49,12 @@ void main()
     {
         position = vec3(plane, corner.x, corner.y);
     }
+
     else if (axis == 1u)
     {
         position = vec3(corner.x, plane, corner.y);
     }
+
     else
     {
         position = vec3(corner.x, corner.y, plane);

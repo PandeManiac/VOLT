@@ -1,5 +1,4 @@
-
-#version 450
+#version 460 core
 
 layout(location = 0) in vec3 fragmentColor;
 layout(location = 0) out vec4 outputColor;
