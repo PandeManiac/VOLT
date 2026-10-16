@@ -1,4 +1,3 @@
-
 using Silk.NET.Vulkan;
 using Volt.Graphics.Devices;
 using Volt.Graphics.Vulkan.Devices;
