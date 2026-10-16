@@ -4,18 +4,22 @@ using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
 using Volt.Graphics.Vulkan.Surface;
 using Volt.Graphics.Vulkan.Swapchain;
+using Volt.Graphics.Vulkan.Synchronization;
 using Volt.Platform.Windows;
 
 namespace Volt.VulkanSurfaceDemo;
 
 /// <summary>
 /// Exercises Vulkan surface integration, swapchain creation,
-/// image-view creation, command-buffer recording, and cleanup.
+/// image-view creation, command recording, frame synchronization,
+/// fence-backed graphics submission, and native resource cleanup.
 /// </summary>
 internal static class Program
 {
     private const string ValidationArgument = "--validation";
     private const string SwapchainExtension = "VK_KHR_swapchain";
+    private const int FramesInFlight = 2;
+    private const ulong SubmissionTimeoutNanoseconds = 5_000_000_000UL;
 
     [STAThread]
     private static int Main(string[] args)
@@ -325,10 +329,33 @@ internal static class Program
 
                                         Console.WriteLine();
 
-                                        logicalDevice.WaitIdle();
+                                        using (VulkanFrameSynchronization synchronization = new(
+                                            instance,
+                                            logicalDevice,
+                                            FramesInFlight,
+                                            checked((int)swapchain.ImageCount)))
+                                        {
+                                            PrintFrameSynchronization(
+                                                instance,
+                                                logicalDevice,
+                                                synchronization,
+                                                FramesInFlight,
+                                                checked((int)swapchain.ImageCount));
+
+                                            Console.WriteLine();
+
+                                            SubmitRecordedCommandBuffer(
+                                                instance,
+                                                logicalDevice,
+                                                commandBuffers,
+                                                synchronization);
+                                        }
+
+                                        Console.WriteLine();
 
                                         Console.WriteLine(
-                                            "Vulkan device idle wait succeeded.");
+                                            "Vulkan frame synchronization resources " +
+                                            "destroyed successfully.");
                                     }
 
                                     Console.WriteLine();
@@ -372,9 +399,223 @@ internal static class Program
         Console.WriteLine();
 
         Console.WriteLine(
-            "Vulkan swapchain, image views, and command recording: PASSED");
+            "Vulkan swapchain, command recording, and GPU submission: PASSED");
 
         return 0;
+    }
+
+    /// <summary>
+    /// Submits one previously recorded primary command buffer
+    /// without semaphore dependencies and verifies fence completion.
+    /// </summary>
+    private static void SubmitRecordedCommandBuffer(
+        VulkanInstance instance,
+        VulkanLogicalDevice logicalDevice,
+        VulkanCommandBuffers commandBuffers,
+        VulkanFrameSynchronization synchronization)
+    {
+        if (commandBuffers.Count == 0
+            || synchronization.FramesInFlight == 0)
+        {
+            throw new InvalidOperationException(
+                "GPU submission requires a command buffer and a frame fence.");
+        }
+
+        CommandBuffer buffer = commandBuffers.GetBuffer(0);
+        Fence fence = synchronization.GetInFlightFence(0);
+
+        if (buffer.Handle == 0 || fence.Handle == 0)
+        {
+            throw new InvalidOperationException(
+                "GPU submission requires nonzero command buffer and fence handles.");
+        }
+
+        Console.WriteLine("Vulkan graphics queue submission");
+        Console.WriteLine("--------------------------------");
+
+        Console.WriteLine(
+            $"Command buffer: 0x{buffer.Handle:X}");
+
+        Console.WriteLine(
+            $"Completion fence: 0x{fence.Handle:X}");
+
+        // The first fence starts signaled because no previous
+        // frame has been submitted for this frame slot.
+        VulkanQueueSubmission.WaitForFence(
+            instance,
+            logicalDevice,
+            fence,
+            SubmissionTimeoutNanoseconds);
+
+        Console.WriteLine("Initial fence wait succeeded.");
+
+        // Fence reset occurs only once a command buffer is ready
+        // for immediate submission. It must not stay unsignaled
+        // across a skipped frame in the future frame loop.
+        VulkanQueueSubmission.ResetFence(
+            instance,
+            logicalDevice,
+            fence);
+
+        Result resetStatus = instance.Api.GetFenceStatus(
+            logicalDevice.Handle,
+            fence);
+
+        if (resetStatus != Result.NotReady)
+        {
+            throw new InvalidOperationException(
+                "The reset submission fence should be unsignaled, " +
+                $"but vkGetFenceStatus returned {resetStatus}.");
+        }
+
+        Console.WriteLine("Completion fence reset successfully.");
+
+        try
+        {
+            // This is an empty, executable command buffer.
+            // No image is acquired and no semaphore is used.
+            VulkanQueueSubmission.Submit(
+                instance,
+                logicalDevice,
+                buffer,
+                fence);
+
+            Console.WriteLine("vkQueueSubmit accepted the command buffer.");
+
+            VulkanQueueSubmission.WaitForFence(
+                instance,
+                logicalDevice,
+                fence,
+                SubmissionTimeoutNanoseconds);
+
+            Result completedStatus = instance.Api.GetFenceStatus(
+                logicalDevice.Handle,
+                fence);
+
+            if (completedStatus != Result.Success)
+            {
+                throw new InvalidOperationException(
+                    "The submission fence should be signaled, " +
+                    $"but vkGetFenceStatus returned {completedStatus}.");
+            }
+
+            Console.WriteLine("GPU submission completed; fence is signaled.");
+        }
+
+        finally
+        {
+            // If the finite fence wait fails, do not free a
+            // possibly pending command buffer or fence. Synchronize
+            // the device before the enclosing using scopes unwind.
+            logicalDevice.WaitIdle();
+        }
+
+        Console.WriteLine("Vulkan device idle wait succeeded.");
+    }
+
+    private static void PrintFrameSynchronization(
+        VulkanInstance instance,
+        VulkanLogicalDevice logicalDevice,
+        VulkanFrameSynchronization synchronization,
+        int expectedFrameCount,
+        int expectedImageCount)
+    {
+        Console.WriteLine("Vulkan frame synchronization");
+        Console.WriteLine("----------------------------");
+
+        if (synchronization.FramesInFlight != expectedFrameCount)
+        {
+            throw new InvalidOperationException(
+                $"Expected {expectedFrameCount} frames in flight, " +
+                $"but got {synchronization.FramesInFlight}.");
+        }
+
+        if (synchronization.SwapchainImageCount != expectedImageCount)
+        {
+            throw new InvalidOperationException(
+                $"Expected {expectedImageCount} swapchain images, " +
+                $"but got {synchronization.SwapchainImageCount}.");
+        }
+
+        Console.WriteLine(
+            $"Frames in flight: {synchronization.FramesInFlight}");
+
+        Console.WriteLine(
+            $"Swapchain image count: {synchronization.SwapchainImageCount}");
+
+        Console.WriteLine();
+        Console.WriteLine("Per-frame image-available semaphores and fences:");
+
+        HashSet<ulong> semaphoreHandles = [];
+        HashSet<ulong> fenceHandles = [];
+
+        for (int index = 0; index < synchronization.FramesInFlight; index++)
+        {
+            Silk.NET.Vulkan.Semaphore imageAvailable =
+                synchronization.GetImageAvailableSemaphore(index);
+
+            Fence inFlight =
+                synchronization.GetInFlightFence(index);
+
+            if (imageAvailable.Handle == 0
+                || !semaphoreHandles.Add(imageAvailable.Handle))
+            {
+                throw new InvalidOperationException(
+                    $"Frame {index} has a null or duplicate " +
+                    "image-available semaphore handle.");
+            }
+
+            if (inFlight.Handle == 0
+                || !fenceHandles.Add(inFlight.Handle))
+            {
+                throw new InvalidOperationException(
+                    $"Frame {index} has a null or duplicate fence handle.");
+            }
+
+            Result status = instance.Api.GetFenceStatus(
+                logicalDevice.Handle,
+                inFlight);
+
+            if (status != Result.Success)
+            {
+                throw new InvalidOperationException(
+                    $"Frame {index} fence should be initially signaled, " +
+                    $"but vkGetFenceStatus returned {status}.");
+            }
+
+            Console.WriteLine(
+                $"  Frame [{index}] Image available: 0x{imageAvailable.Handle:X}");
+
+            Console.WriteLine(
+                $"            In-flight fence: 0x{inFlight.Handle:X} (Signaled)");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("Per-swapchain-image render-finished semaphores:");
+
+        for (int index = 0; index < synchronization.SwapchainImageCount; index++)
+        {
+            Silk.NET.Vulkan.Semaphore renderFinished =
+                synchronization.GetRenderFinishedSemaphore(index);
+
+            if (renderFinished.Handle == 0
+                || !semaphoreHandles.Add(renderFinished.Handle))
+            {
+                throw new InvalidOperationException(
+                    $"Swapchain image {index} has a null or duplicate " +
+                    "render-finished semaphore handle.");
+            }
+
+            Console.WriteLine(
+                $"  Image [{index}] Render finished: 0x{renderFinished.Handle:X}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(
+            "All Vulkan frame synchronization handles verified successfully.");
+
+        Console.WriteLine(
+            "All frame fences are initially signaled.");
     }
 
     private static void PrintSwapchain(
