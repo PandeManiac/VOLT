@@ -1,0 +1,415 @@
+
+using System.Buffers;
+using System.Runtime.InteropServices;
+using Silk.NET.Vulkan;
+using Volt.Graphics.Vulkan.Commands;
+using Volt.Graphics.Vulkan.Devices;
+using Volt.Graphics.Vulkan.Instance;
+
+namespace Volt.Graphics.Vulkan.Memory;
+
+/// <summary>
+/// Collects multiple buffer uploads into a single synchronous
+/// Vulkan graphics queue submission.
+/// </summary>
+/// <remarks>
+/// Application data is copied into managed staging storage when
+/// added to the batch. Submission creates one host-visible
+/// staging buffer and a separate device-local destination buffer
+/// for each item.
+///
+/// Each upload must have a byte length divisible by four,
+/// matching the buffer copy alignment requirements.
+///
+/// This class is a one-shot upload builder. It is not thread-safe,
+/// does not synchronize unrelated GPU work, and does not
+/// implement asynchronous transfers or device-memory suballocation.
+///
+/// The caller owns every destination buffer returned by Submit.
+/// </remarks>
+public sealed unsafe class VulkanBufferUploadBatch
+{
+    private const ulong SubmissionTimeoutNanoseconds =
+        5_000_000_000UL;
+
+    private readonly record struct UploadRequest(
+        ulong StagingOffset,
+        ulong ByteCount,
+        BufferUsageFlags DestinationUsage);
+
+    private readonly ArrayBufferWriter<byte> _stagingData = new();
+    private readonly List<UploadRequest> _requests = [];
+
+    private bool _submitted;
+
+    /// <summary>
+    /// Gets the number of queued uploads.
+    /// </summary>
+    public int UploadCount => _requests.Count;
+
+    /// <summary>
+    /// Gets the total number of staged bytes.
+    /// </summary>
+    public ulong StagingByteCount =>
+        checked((ulong)_stagingData.WrittenCount);
+
+    /// <summary>
+    /// Adds unmanaged data to the upload batch.
+    /// </summary>
+    /// <returns>
+    /// The index of the destination buffer in the array returned
+    /// by Submit.
+    /// </returns>
+    public int Add<T>(
+        ReadOnlySpan<T> values,
+        BufferUsageFlags destinationUsage)
+        where T : unmanaged
+    {
+        return AddBytes(
+            MemoryMarshal.AsBytes(values),
+            destinationUsage);
+    }
+
+    /// <summary>
+    /// Adds raw bytes to the upload batch.
+    /// </summary>
+    /// <remarks>
+    /// Byte counts must be positive multiples of four.
+    /// Callers with smaller or unaligned payloads should pack
+    /// or pad their application data explicitly.
+    /// </remarks>
+    public int AddBytes(
+        ReadOnlySpan<byte> data,
+        BufferUsageFlags destinationUsage)
+    {
+        ThrowIfSubmitted();
+
+        ValidateUpload(
+            checked((ulong)data.Length),
+            destinationUsage);
+
+        if (data.Length > int.MaxValue - _stagingData.WrittenCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(data),
+                "The batch exceeds the supported staging size.");
+        }
+
+        int index = _requests.Count;
+
+        ulong offset = checked(
+            (ulong)_stagingData.WrittenCount);
+
+        Span<byte> destination =
+            _stagingData.GetSpan(data.Length);
+
+        data.CopyTo(destination);
+
+        _stagingData.Advance(data.Length);
+
+        _requests.Add(new UploadRequest(
+            offset,
+            checked((ulong)data.Length),
+            destinationUsage));
+
+        return index;
+    }
+
+    /// <summary>
+    /// Creates device-local buffers and uploads all queued data
+    /// through one Vulkan command buffer submission.
+    /// </summary>
+    /// <returns>
+    /// Owned destination buffers in the order items were added.
+    /// </returns>
+    /// <remarks>
+    /// This method blocks until the transfer submission finishes.
+    ///
+    /// The graphics queue must be externally synchronized against
+    /// other host-side submissions. Upload destinations must not
+    /// be accessed by unrelated GPU operations during the transfer.
+    ///
+    /// A failed submission cannot be retried with this batch.
+    /// </remarks>
+    public VulkanBuffer[] Submit(
+        VulkanInstance instance,
+        VulkanLogicalDevice device,
+        PhysicalDevice physicalDevice)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        ArgumentNullException.ThrowIfNull(device);
+
+        ThrowIfSubmitted();
+
+        if (_requests.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Cannot submit an empty upload batch.");
+        }
+
+        _submitted = true;
+
+        List<VulkanBuffer> destinations =
+            new(_requests.Count);
+
+        try
+        {
+            using VulkanBuffer staging = new(
+                instance,
+                device,
+                physicalDevice,
+                StagingByteCount,
+                BufferUsageFlags.TransferSrcBit,
+                MemoryPropertyFlags.HostVisibleBit,
+                MemoryPropertyFlags.HostCoherentBit);
+
+            staging.Write(_stagingData.WrittenSpan);
+
+            foreach (UploadRequest request in _requests)
+            {
+                VulkanBuffer destination = new(
+                    instance,
+                    device,
+                    physicalDevice,
+                    request.ByteCount,
+                    request.DestinationUsage |
+                        BufferUsageFlags.TransferDstBit,
+                    MemoryPropertyFlags.DeviceLocalBit);
+
+                destinations.Add(destination);
+            }
+
+            ExecuteCopies(
+                instance,
+                device,
+                staging,
+                destinations);
+
+            return destinations.ToArray();
+        }
+
+        catch
+        {
+            foreach (VulkanBuffer destination in destinations)
+            {
+                destination.Dispose();
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Validates the requested payload size and destination usage.
+    /// </summary>
+    internal static void ValidateUpload(
+        ulong byteCount,
+        BufferUsageFlags destinationUsage)
+    {
+        if (byteCount == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(byteCount),
+                "An upload must contain at least one byte.");
+        }
+
+        if ((byteCount & 3UL) != 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(byteCount),
+                "Upload sizes must be multiples of four bytes.");
+        }
+
+        if (destinationUsage == BufferUsageFlags.None)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(destinationUsage),
+                "Destination buffer usage cannot be empty.");
+        }
+    }
+
+    /// <summary>
+    /// Gets the Vulkan copy region for a queued upload.
+    /// </summary>
+    internal BufferCopy GetCopyRegion(int index)
+    {
+        if ((uint)index >= (uint)_requests.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index));
+        }
+
+        UploadRequest request = _requests[index];
+
+        return new BufferCopy
+        {
+            SrcOffset = request.StagingOffset,
+            DstOffset = 0,
+            Size = request.ByteCount
+        };
+    }
+
+    /// <summary>
+    /// Returns a copy of the accumulated staging payload.
+    /// Used by device-independent tests.
+    /// </summary>
+    internal byte[] GetStagingBytes()
+    {
+        return _stagingData.WrittenSpan.ToArray();
+    }
+
+    private void ExecuteCopies(
+        VulkanInstance instance,
+        VulkanLogicalDevice device,
+        VulkanBuffer staging,
+        IReadOnlyList<VulkanBuffer> destinations)
+    {
+        Vk api = instance.Api;
+        Device deviceHandle = device.Handle;
+
+        using VulkanCommandPool commandPool = new(
+            instance,
+            device,
+            CommandPoolCreateFlags.TransientBit);
+
+        using VulkanCommandBuffers commandBuffers = new(
+            instance,
+            device,
+            commandPool,
+            1);
+
+        CommandBuffer commandBuffer =
+            commandBuffers.GetBuffer(0);
+
+        VulkanCommandRecording.Begin(
+            instance,
+            commandBuffer);
+
+        for (int index = 0; index < destinations.Count; index++)
+        {
+            BufferCopy region = GetCopyRegion(index);
+
+            api.CmdCopyBuffer(
+                commandBuffer,
+                staging.Handle,
+                destinations[index].Handle,
+                1,
+                in region);
+        }
+
+        // All destination writes are made available and visible
+        // to subsequent commands that consume these buffers.
+        // This broad dependency is intentional for the initial
+        // synchronous upload implementation.
+        MemoryBarrier barrier = new()
+        {
+            SType = StructureType.MemoryBarrier,
+            SrcAccessMask = AccessFlags.TransferWriteBit,
+            DstAccessMask =
+                AccessFlags.MemoryReadBit |
+                AccessFlags.MemoryWriteBit
+        };
+
+        api.CmdPipelineBarrier(
+            commandBuffer,
+            PipelineStageFlags.TransferBit,
+            PipelineStageFlags.AllCommandsBit,
+            DependencyFlags.None,
+            1,
+            &barrier,
+            0,
+            null,
+            0,
+            null);
+
+        VulkanCommandRecording.End(
+            instance,
+            commandBuffer);
+
+        FenceCreateInfo fenceDescription = new()
+        {
+            SType = StructureType.FenceCreateInfo,
+            Flags = FenceCreateFlags.None
+        };
+
+        Fence completionFence = default;
+        bool submissionAttempted = false;
+        bool submissionCompleted = false;
+
+        try
+        {
+            EnsureSuccess(
+                api.CreateFence(
+                    deviceHandle,
+                    in fenceDescription,
+                    null,
+                    out completionFence),
+                "Create batched transfer fence");
+
+            if (completionFence.Handle == 0)
+            {
+                throw new InvalidOperationException(
+                    "Vulkan returned a null transfer fence.");
+            }
+
+            submissionAttempted = true;
+
+            VulkanQueueSubmission.Submit(
+                instance,
+                device,
+                commandBuffer,
+                completionFence);
+
+            VulkanQueueSubmission.WaitForFence(
+                instance,
+                device,
+                completionFence,
+                SubmissionTimeoutNanoseconds);
+
+            submissionCompleted = true;
+        }
+
+        finally
+        {
+            try
+            {
+                if (submissionAttempted && !submissionCompleted)
+                {
+                    // A failed submission or wait does not establish
+                    // that the GPU has stopped using these resources.
+                    device.WaitIdle();
+                }
+            }
+
+            finally
+            {
+                if (completionFence.Handle != 0)
+                {
+                    api.DestroyFence(
+                        deviceHandle,
+                        completionFence,
+                        null);
+                }
+            }
+        }
+    }
+
+    private static void EnsureSuccess(
+        Result result,
+        string operation)
+    {
+        if (result != Result.Success)
+        {
+            throw new InvalidOperationException(
+                $"{operation} failed: {result}.");
+        }
+    }
+
+    private void ThrowIfSubmitted()
+    {
+        if (_submitted)
+        {
+            throw new InvalidOperationException(
+                "This upload batch has already been submitted.");
+        }
+    }
+}

@@ -1,9 +1,15 @@
-#version 460 core
+
+#version 450
 
 layout(set = 0, binding = 0, std430) readonly buffer CubeFaces
 {
     uint faces[];
 } faceBuffer;
+
+layout(set = 0, binding = 1, std430) readonly buffer CubeColors
+{
+    uint colors[];
+} colorBuffer;
 
 layout(push_constant) uniform CubePushConstants
 {
@@ -20,15 +26,6 @@ const vec2 quadCorners[6] = vec2[6](
     vec2(-1.0, -1.0),
     vec2( 1.0,  1.0),
     vec2(-1.0,  1.0)
-);
-
-const vec3 faceColors[6] = vec3[6](
-    vec3(0.22, 0.74, 1.00),
-    vec3(0.96, 0.35, 0.47),
-    vec3(0.38, 0.95, 0.62),
-    vec3(0.99, 0.76, 0.30),
-    vec3(0.70, 0.47, 0.98),
-    vec3(0.98, 0.53, 0.24)
 );
 
 void main()
@@ -49,12 +46,10 @@ void main()
     {
         position = vec3(plane, corner.x, corner.y);
     }
-
     else if (axis == 1u)
     {
         position = vec3(corner.x, plane, corner.y);
     }
-
     else
     {
         position = vec3(corner.x, corner.y, plane);
@@ -100,5 +95,11 @@ void main()
         -position.z
     );
 
-    fragmentColor = faceColors[colorIndex];
+    uint packedColor = colorBuffer.colors[colorIndex];
+
+    fragmentColor = vec3(
+        float((packedColor >> 16u) & 255u),
+        float((packedColor >> 8u) & 255u),
+        float(packedColor & 255u)
+    ) / 255.0;
 }

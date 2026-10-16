@@ -7,24 +7,28 @@ using Volt.Graphics.Vulkan.Memory;
 namespace Volt.VulkanCubeDemo;
 
 /// <summary>
-/// Owns six packed cube faces and their Vulkan descriptor binding.
+/// Owns six packed cube faces, six packed colors, and their
+/// Vulkan descriptor bindings.
 /// </summary>
 /// <remarks>
-/// Each uint represents one quad:
+/// Each face descriptor represents one quad:
 /// bits 0-1: face axis (X, Y, Z)
 /// bit 2: positive or negative axis direction
 /// bits 3-5: face color index
 ///
-/// The face descriptors are uploaded to device-local memory
-/// through a temporary host-visible staging buffer.
+/// Colors are stored as 32-bit RGB values.
 ///
-/// This packing format belongs to the sample, not VOLT's buffer API.
+/// Both arrays are uploaded into separate device-local buffers
+/// using one batched Vulkan transfer submission.
+///
+/// These packing formats belong to the sample, not VOLT's API.
 /// </remarks>
 internal sealed unsafe class CubeFaceStorage : IDisposable
 {
     private readonly VulkanLogicalDevice _device;
     private readonly Vk _api;
-    private readonly VulkanBuffer _buffer;
+    private readonly VulkanBuffer _faceBuffer;
+    private readonly VulkanBuffer _colorBuffer;
 
     private DescriptorSetLayout _layout;
     private DescriptorPool _pool;
@@ -62,25 +66,54 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
             PackFace(1, false, 5)
         ];
 
-        VulkanBuffer? buffer = null;
+        uint[] colors =
+        [
+            0x38BDFFu,
+            0xF55978u,
+            0x61F29Eu,
+            0xFDC24Du,
+            0xB378FAu,
+            0xFA873Du
+        ];
+
+        VulkanBuffer[]? buffers = null;
         DescriptorSetLayout layout = default;
         DescriptorPool pool = default;
         DescriptorSet set;
 
         Device deviceHandle = device.Handle;
 
+        VulkanBufferUploadBatch batch = new();
+
+        int faceBufferIndex = batch.Add<uint>(
+            faces,
+            BufferUsageFlags.StorageBufferBit);
+
+        int colorBufferIndex = batch.Add<uint>(
+            colors,
+            BufferUsageFlags.StorageBufferBit);
+
         try
         {
-            buffer = VulkanBufferTransfer.UploadDeviceLocal<uint>(
+            buffers = batch.Submit(
                 instance,
                 device,
-                physicalDevice,
-                faces,
-                BufferUsageFlags.StorageBufferBit);
+                physicalDevice);
 
-            DescriptorSetLayoutBinding binding = new()
+            DescriptorSetLayoutBinding* bindings =
+                stackalloc DescriptorSetLayoutBinding[2];
+
+            bindings[0] = new DescriptorSetLayoutBinding
             {
                 Binding = 0,
+                DescriptorType = DescriptorType.StorageBuffer,
+                DescriptorCount = 1,
+                StageFlags = ShaderStageFlags.VertexBit
+            };
+
+            bindings[1] = new DescriptorSetLayoutBinding
+            {
+                Binding = 1,
                 DescriptorType = DescriptorType.StorageBuffer,
                 DescriptorCount = 1,
                 StageFlags = ShaderStageFlags.VertexBit
@@ -89,8 +122,8 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
             DescriptorSetLayoutCreateInfo layoutDescription = new()
             {
                 SType = StructureType.DescriptorSetLayoutCreateInfo,
-                BindingCount = 1,
-                PBindings = &binding
+                BindingCount = 2,
+                PBindings = bindings
             };
 
             EnsureSuccess(
@@ -99,7 +132,7 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
                     in layoutDescription,
                     null,
                     out layout),
-                "Create cube face descriptor layout");
+                "Create cube descriptor layout");
 
             if (layout.Handle == 0)
             {
@@ -110,7 +143,7 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
             DescriptorPoolSize poolSize = new()
             {
                 Type = DescriptorType.StorageBuffer,
-                DescriptorCount = 1
+                DescriptorCount = 2
             };
 
             DescriptorPoolCreateInfo poolDescription = new()
@@ -127,7 +160,7 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
                     in poolDescription,
                     null,
                     out pool),
-                "Create cube face descriptor pool");
+                "Create cube descriptor pool");
 
             if (pool.Handle == 0)
             {
@@ -148,7 +181,7 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
                     deviceHandle,
                     in allocation,
                     out set),
-                "Allocate cube face descriptor set");
+                "Allocate cube descriptor set");
 
             if (set.Handle == 0)
             {
@@ -156,14 +189,27 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
                     "Vulkan returned a null descriptor set.");
             }
 
-            DescriptorBufferInfo bufferInformation = new()
+            DescriptorBufferInfo* bufferInformation =
+                stackalloc DescriptorBufferInfo[2];
+
+            bufferInformation[0] = new DescriptorBufferInfo
             {
-                Buffer = buffer.Handle,
+                Buffer = buffers[faceBufferIndex].Handle,
                 Offset = 0,
-                Range = buffer.Size
+                Range = buffers[faceBufferIndex].Size
             };
 
-            WriteDescriptorSet write = new()
+            bufferInformation[1] = new DescriptorBufferInfo
+            {
+                Buffer = buffers[colorBufferIndex].Handle,
+                Offset = 0,
+                Range = buffers[colorBufferIndex].Size
+            };
+
+            WriteDescriptorSet* writes =
+                stackalloc WriteDescriptorSet[2];
+
+            writes[0] = new WriteDescriptorSet
             {
                 SType = StructureType.WriteDescriptorSet,
                 DstSet = set,
@@ -171,13 +217,24 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
                 DstArrayElement = 0,
                 DescriptorCount = 1,
                 DescriptorType = DescriptorType.StorageBuffer,
-                PBufferInfo = &bufferInformation
+                PBufferInfo = &bufferInformation[0]
+            };
+
+            writes[1] = new WriteDescriptorSet
+            {
+                SType = StructureType.WriteDescriptorSet,
+                DstSet = set,
+                DstBinding = 1,
+                DstArrayElement = 0,
+                DescriptorCount = 1,
+                DescriptorType = DescriptorType.StorageBuffer,
+                PBufferInfo = &bufferInformation[1]
             };
 
             _api.UpdateDescriptorSets(
                 deviceHandle,
-                1,
-                &write,
+                2,
+                writes,
                 0,
                 null);
         }
@@ -200,12 +257,19 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
                     null);
             }
 
-            buffer?.Dispose();
+            if (buffers is not null)
+            {
+                foreach (VulkanBuffer buffer in buffers)
+                {
+                    buffer.Dispose();
+                }
+            }
+
             throw;
         }
 
-        _buffer = buffer ?? throw new InvalidOperationException(
-            "Cube face buffer initialization failed.");
+        _faceBuffer = buffers[faceBufferIndex];
+        _colorBuffer = buffers[colorBufferIndex];
 
         _layout = layout;
         _pool = pool;
@@ -213,7 +277,7 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
     }
 
     /// <summary>
-    /// Binds the face storage buffer to set zero of the pipeline.
+    /// Binds the cube's face and color buffers through set zero.
     /// </summary>
     public void Bind(
         CommandBuffer commandBuffer,
@@ -260,7 +324,8 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
             _layout,
             null);
 
-        _buffer.Dispose();
+        _colorBuffer.Dispose();
+        _faceBuffer.Dispose();
 
         _set = default;
         _pool = default;
