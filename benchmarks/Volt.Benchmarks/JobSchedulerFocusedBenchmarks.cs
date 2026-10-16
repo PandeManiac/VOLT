@@ -13,6 +13,7 @@ public class JobSchedulerFocusedBenchmarks
     private JobScheduler _eightWorkers = null!;
     private static readonly Action<int, int> s_empty = static (_, _) => { };
     private static readonly Action<int, int> s_cpuWork = CpuWork;
+    private static readonly Action s_emptyJob = static () => { };
 
     [GlobalSetup]
     public void Setup()
@@ -24,6 +25,14 @@ public class JobSchedulerFocusedBenchmarks
     [Benchmark]
     public Task SingleBatchOneWorker() =>
         _oneWorker.ScheduleBatches(1, 1, s_empty);
+
+    [Benchmark]
+    public Task ScheduleOneJob() =>
+        _oneWorker.Schedule(s_emptyJob);
+
+    [Benchmark]
+    public Task TaskRunOneJob() =>
+        Task.Run(s_emptyJob);
 
     [Benchmark]
     public Task ManyBatchesOneWorker() =>
