@@ -3,6 +3,7 @@
     <Project Path="benchmarks/Volt.Benchmarks/Volt.Benchmarks.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/Volt.VulkanProbe/Volt.VulkanProbe.csproj" />
     <Project Path="samples/Volt.WindowingDemo/Volt.WindowingDemo.csproj" />
   </Folder>
   <Folder Name="/src/">
@@ -10,12 +11,14 @@
     <Project Path="src/Volt.Ecs/Volt.Ecs.csproj" />
     <Project Path="src/Volt.Jobs/Volt.Jobs.csproj" />
     <Project Path="src/Volt.Rendering/Volt.Rendering.csproj" />
+    <Project Path="src/Volt.Graphics.Vulkan/Volt.Graphics.Vulkan.csproj" />
     <Project Path="src/Volt.Graphics/Volt.Graphics.csproj" />
     <Project Path="src/Volt.Platform/Volt.Platform.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Volt.Core.Tests/Volt.Core.Tests.csproj" />
     <Project Path="tests/Volt.Ecs.Tests/Volt.Ecs.Tests.csproj" />
+    <Project Path="tests/Volt.Graphics.Vulkan.Tests/Volt.Graphics.Vulkan.Tests.csproj" />
     <Project Path="tests/Volt.Jobs.Tests/Volt.Jobs.Tests.csproj" />
     <Project Path="tests/Volt.Rendering.Tests/Volt.Rendering.Tests.csproj" />
     <Project Path="tests/Volt.Graphics.Tests/Volt.Graphics.Tests.csproj" />
