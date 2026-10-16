@@ -1,3 +1,4 @@
+
 using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
@@ -13,6 +14,9 @@ namespace Volt.VulkanCubeDemo;
 /// bits 0-1: face axis (X, Y, Z)
 /// bit 2: positive or negative axis direction
 /// bits 3-5: face color index
+///
+/// The face descriptors are uploaded to device-local memory
+/// through a temporary host-visible staging buffer.
 ///
 /// This packing format belongs to the sample, not VOLT's buffer API.
 /// </remarks>
@@ -67,16 +71,12 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
 
         try
         {
-            buffer = new VulkanBuffer(
+            buffer = VulkanBufferTransfer.UploadDeviceLocal<uint>(
                 instance,
                 device,
                 physicalDevice,
-                checked((ulong)(faces.Length * sizeof(uint))),
-                BufferUsageFlags.StorageBufferBit,
-                MemoryPropertyFlags.HostVisibleBit,
-                MemoryPropertyFlags.HostCoherentBit);
-
-            buffer.Write(faces);
+                faces,
+                BufferUsageFlags.StorageBufferBit);
 
             DescriptorSetLayoutBinding binding = new()
             {
