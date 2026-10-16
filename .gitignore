@@ -149,3 +149,5 @@ venv/
 
 # Agent-generated documentation
 /docs/
+
+.VSCodeCounter/
