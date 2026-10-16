@@ -14,12 +14,15 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// </summary>
 /// <remarks>
 /// Application data is copied into managed staging storage when
-/// added to the batch. Submission creates one host-visible
-/// staging buffer and a separate device-local destination buffer
-/// for each item.
+/// added to the batch. Each submitted item receives its own
+/// device-local destination buffer.
 ///
 /// Each upload must have a byte length divisible by four,
-/// matching the buffer copy alignment requirements.
+/// matching the Vulkan buffer-copy alignment requirements.
+///
+/// The default submission path creates temporary staging storage.
+/// An optional VulkanStagingBufferCache enables staging allocation
+/// reuse across completed batches.
 ///
 /// This class is a one-shot upload builder. It is not thread-safe,
 /// does not synchronize unrelated GPU work, and does not
@@ -123,7 +126,8 @@ public sealed unsafe class VulkanBufferUploadBatch
     /// Owned destination buffers in the order items were added.
     /// </returns>
     /// <remarks>
-    /// This method blocks until the transfer submission finishes.
+    /// This method creates temporary staging storage and blocks
+    /// until the transfer submission finishes.
     ///
     /// The graphics queue must be externally synchronized against
     /// other host-side submissions. Upload destinations must not
@@ -136,66 +140,77 @@ public sealed unsafe class VulkanBufferUploadBatch
         VulkanLogicalDevice device,
         PhysicalDevice physicalDevice)
     {
-        ArgumentNullException.ThrowIfNull(instance);
-        ArgumentNullException.ThrowIfNull(device);
-
-        ThrowIfSubmitted();
-
-        if (_requests.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "Cannot submit an empty upload batch.");
-        }
+        ValidateSubmission(instance, device);
 
         _submitted = true;
 
-        List<VulkanBuffer> destinations =
-            new(_requests.Count);
+        using VulkanBuffer staging = new(
+            instance,
+            device,
+            physicalDevice,
+            StagingByteCount,
+            BufferUsageFlags.TransferSrcBit,
+            MemoryPropertyFlags.HostVisibleBit,
+            MemoryPropertyFlags.HostCoherentBit);
+
+        return SubmitUsingStaging(
+            instance,
+            device,
+            physicalDevice,
+            staging);
+    }
+
+    /// <summary>
+    /// Uploads all queued data using reusable staging storage.
+    /// </summary>
+    /// <returns>
+    /// Owned destination buffers in the order items were added.
+    /// </returns>
+    /// <remarks>
+    /// The staging cache must belong to the supplied Vulkan
+    /// instance, logical device, and physical device.
+    ///
+    /// The cache is acquired exclusively for this operation and
+    /// released after the synchronous submission finishes.
+    ///
+    /// The cache owns its staging buffer. The caller owns the
+    /// destination buffers returned by this method.
+    ///
+    /// Queue submission still requires external synchronization
+    /// against unrelated host-side queue operations.
+    ///
+    /// A failed submission cannot be retried with this batch.
+    /// </remarks>
+    public VulkanBuffer[] Submit(
+        VulkanInstance instance,
+        VulkanLogicalDevice device,
+        PhysicalDevice physicalDevice,
+        VulkanStagingBufferCache stagingCache)
+    {
+        ValidateSubmission(instance, device);
+
+        ArgumentNullException.ThrowIfNull(stagingCache);
+
+        VulkanBuffer staging = stagingCache.Acquire(
+            instance,
+            device,
+            physicalDevice,
+            StagingByteCount);
+
+        _submitted = true;
 
         try
         {
-            using VulkanBuffer staging = new(
+            return SubmitUsingStaging(
                 instance,
                 device,
                 physicalDevice,
-                StagingByteCount,
-                BufferUsageFlags.TransferSrcBit,
-                MemoryPropertyFlags.HostVisibleBit,
-                MemoryPropertyFlags.HostCoherentBit);
-
-            staging.Write(_stagingData.WrittenSpan);
-
-            foreach (UploadRequest request in _requests)
-            {
-                VulkanBuffer destination = new(
-                    instance,
-                    device,
-                    physicalDevice,
-                    request.ByteCount,
-                    request.DestinationUsage |
-                        BufferUsageFlags.TransferDstBit,
-                    MemoryPropertyFlags.DeviceLocalBit);
-
-                destinations.Add(destination);
-            }
-
-            ExecuteCopies(
-                instance,
-                device,
-                staging,
-                destinations);
-
-            return destinations.ToArray();
+                staging);
         }
 
-        catch
+        finally
         {
-            foreach (VulkanBuffer destination in destinations)
-            {
-                destination.Dispose();
-            }
-
-            throw;
+            stagingCache.Release();
         }
     }
 
@@ -255,6 +270,69 @@ public sealed unsafe class VulkanBufferUploadBatch
     internal byte[] GetStagingBytes()
     {
         return _stagingData.WrittenSpan.ToArray();
+    }
+
+    private VulkanBuffer[] SubmitUsingStaging(
+        VulkanInstance instance,
+        VulkanLogicalDevice device,
+        PhysicalDevice physicalDevice,
+        VulkanBuffer staging)
+    {
+        List<VulkanBuffer> destinations =
+            new(_requests.Count);
+
+        try
+        {
+            staging.Write(_stagingData.WrittenSpan);
+
+            foreach (UploadRequest request in _requests)
+            {
+                VulkanBuffer destination = new(
+                    instance,
+                    device,
+                    physicalDevice,
+                    request.ByteCount,
+                    request.DestinationUsage |
+                        BufferUsageFlags.TransferDstBit,
+                    MemoryPropertyFlags.DeviceLocalBit);
+
+                destinations.Add(destination);
+            }
+
+            ExecuteCopies(
+                instance,
+                device,
+                staging,
+                destinations);
+
+            return destinations.ToArray();
+        }
+
+        catch
+        {
+            foreach (VulkanBuffer destination in destinations)
+            {
+                destination.Dispose();
+            }
+
+            throw;
+        }
+    }
+
+    private void ValidateSubmission(
+        VulkanInstance instance,
+        VulkanLogicalDevice device)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        ArgumentNullException.ThrowIfNull(device);
+
+        ThrowIfSubmitted();
+
+        if (_requests.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Cannot submit an empty upload batch.");
+        }
     }
 
     private void ExecuteCopies(
