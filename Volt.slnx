@@ -1,8 +1,10 @@
+
 <Solution>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/Volt.Benchmarks/Volt.Benchmarks.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/Volt.VulkanCubeDemo/Volt.VulkanCubeDemo.csproj" />
     <Project Path="samples/Volt.VulkanProbe/Volt.VulkanProbe.csproj" />
     <Project Path="samples/Volt.VulkanSurfaceDemo/Volt.VulkanSurfaceDemo.csproj" />
     <Project Path="samples/Volt.WindowingDemo/Volt.WindowingDemo.csproj" />

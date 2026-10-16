@@ -1,0 +1,30 @@
+
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Volt.Platform/Volt.Platform.csproj" />
+    <ProjectReference Include="../../src/Volt.Graphics.Vulkan/Volt.Graphics.Vulkan.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Shaders/cube.vert.spv"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Shaders/cube.frag.spv"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CompileCubeShaders"
+          BeforeTargets="GetCopyToOutputDirectoryItems"
+          Inputs="Shaders/cube.vert;Shaders/cube.frag"
+          Outputs="Shaders/cube.vert.spv;Shaders/cube.frag.spv">
+
+    <Exec Command="glslangValidator -V &quot;$(MSBuildProjectDirectory)/Shaders/cube.vert&quot; -o &quot;$(MSBuildProjectDirectory)/Shaders/cube.vert.spv&quot;" />
+    <Exec Command="glslangValidator -V &quot;$(MSBuildProjectDirectory)/Shaders/cube.frag&quot; -o &quot;$(MSBuildProjectDirectory)/Shaders/cube.frag.spv&quot;" />
+
+  </Target>
+
+</Project>
