@@ -32,6 +32,7 @@ internal sealed unsafe class CubeRenderer : IDisposable
     private readonly VulkanLogicalDevice _device;
     private readonly Vk _api;
     private readonly Framebuffer[] _framebuffers;
+    private readonly CubeFaceStorage _faces;
 
     private RenderPass _renderPass;
     private PipelineLayout _layout;
@@ -95,6 +96,7 @@ internal sealed unsafe class CubeRenderer : IDisposable
         RenderPass renderPass = default;
         PipelineLayout layout = default;
         Pipeline pipeline = default;
+        CubeFaceStorage? faces = null;
 
         Framebuffer[] framebuffers =
             new Framebuffer[imageViews.Count];
@@ -133,9 +135,15 @@ internal sealed unsafe class CubeRenderer : IDisposable
                 swapchain.ImageFormat,
                 depthFormat);
 
+            faces = new CubeFaceStorage(
+                instance,
+                device,
+                physicalDevice);
+
             layout = CreatePipelineLayout(
                 api,
-                deviceHandle);
+                deviceHandle,
+                faces.Layout);
 
             pipeline = CreateGraphicsPipeline(
                 api,
@@ -171,12 +179,15 @@ internal sealed unsafe class CubeRenderer : IDisposable
                 depthImage,
                 depthMemory);
 
+            faces?.Dispose();
             throw;
         }
 
         _device = device;
         _api = api;
         _framebuffers = framebuffers;
+        _faces = faces ?? throw new InvalidOperationException(
+            "Cube face storage was not initialized.");
 
         _renderPass = renderPass;
         _layout = layout;
@@ -267,6 +278,8 @@ internal sealed unsafe class CubeRenderer : IDisposable
             PipelineBindPoint.Graphics,
             _pipeline);
 
+        _faces.Bind(commandBuffer, _layout);
+
         _api.CmdPushConstants(
             commandBuffer,
             _layout,
@@ -277,8 +290,8 @@ internal sealed unsafe class CubeRenderer : IDisposable
 
         _api.CmdDraw(
             commandBuffer,
-            vertexCount: 36,
-            instanceCount: 1,
+            vertexCount: 6,
+            instanceCount: 6,
             firstVertex: 0,
             firstInstance: 0);
 
@@ -302,6 +315,8 @@ internal sealed unsafe class CubeRenderer : IDisposable
             _depthView,
             _depthImage,
             _depthMemory);
+
+        _faces.Dispose();
 
         _pipeline = default;
         _layout = default;
@@ -601,7 +616,8 @@ internal sealed unsafe class CubeRenderer : IDisposable
 
     private static PipelineLayout CreatePipelineLayout(
         Vk api,
-        Device device)
+        Device device,
+        DescriptorSetLayout faceLayout)
     {
         PushConstantRange range = new()
         {
@@ -613,6 +629,8 @@ internal sealed unsafe class CubeRenderer : IDisposable
         PipelineLayoutCreateInfo description = new()
         {
             SType = StructureType.PipelineLayoutCreateInfo,
+            SetLayoutCount = 1,
+            PSetLayouts = &faceLayout,
             PushConstantRangeCount = 1,
             PPushConstantRanges = &range
         };
@@ -624,6 +642,12 @@ internal sealed unsafe class CubeRenderer : IDisposable
                 null,
                 out PipelineLayout layout),
             "Create cube pipeline layout");
+
+        if (layout.Handle == 0)
+        {
+            throw new InvalidOperationException(
+                "Vulkan returned a null pipeline layout.");
+        }
 
         return layout;
     }

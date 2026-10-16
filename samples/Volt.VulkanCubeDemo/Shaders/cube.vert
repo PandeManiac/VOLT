@@ -1,6 +1,11 @@
 
 #version 450
 
+layout(set = 0, binding = 0, std430) readonly buffer CubeFaces
+{
+    uint faces[];
+} faceBuffer;
+
 layout(push_constant) uniform CubePushConstants
 {
     float angle;
@@ -9,25 +14,13 @@ layout(push_constant) uniform CubePushConstants
 
 layout(location = 0) out vec3 fragmentColor;
 
-const vec3 corners[8] = vec3[8](
-    vec3(-1.0, -1.0, -1.0),
-    vec3( 1.0, -1.0, -1.0),
-    vec3( 1.0,  1.0, -1.0),
-    vec3(-1.0,  1.0, -1.0),
-
-    vec3(-1.0, -1.0,  1.0),
-    vec3( 1.0, -1.0,  1.0),
-    vec3( 1.0,  1.0,  1.0),
-    vec3(-1.0,  1.0,  1.0)
-);
-
-const int triangles[36] = int[36](
-    4, 5, 6, 4, 6, 7,
-    1, 0, 3, 1, 3, 2,
-    5, 1, 2, 5, 2, 6,
-    0, 4, 7, 0, 7, 3,
-    7, 6, 2, 7, 2, 3,
-    0, 1, 5, 0, 5, 4
+const vec2 quadCorners[6] = vec2[6](
+    vec2(-1.0, -1.0),
+    vec2( 1.0, -1.0),
+    vec2( 1.0,  1.0),
+    vec2(-1.0, -1.0),
+    vec2( 1.0,  1.0),
+    vec2(-1.0,  1.0)
 );
 
 const vec3 faceColors[6] = vec3[6](
@@ -41,10 +34,32 @@ const vec3 faceColors[6] = vec3[6](
 
 void main()
 {
-    int cornerIndex = triangles[gl_VertexIndex];
-    int faceIndex = gl_VertexIndex / 6;
+    uint descriptor = faceBuffer.faces[gl_InstanceIndex];
 
-    vec3 position = corners[cornerIndex] * 0.75;
+    uint axis = descriptor & 3u;
+    uint positive = (descriptor >> 2u) & 1u;
+    uint colorIndex = (descriptor >> 3u) & 7u;
+
+    float plane = positive != 0u ? 1.0 : -1.0;
+
+    vec2 corner = quadCorners[gl_VertexIndex];
+
+    vec3 position;
+
+    if (axis == 0u)
+    {
+        position = vec3(plane, corner.x, corner.y);
+    }
+    else if (axis == 1u)
+    {
+        position = vec3(corner.x, plane, corner.y);
+    }
+    else
+    {
+        position = vec3(corner.x, corner.y, plane);
+    }
+
+    position *= 0.75;
 
     float yaw = pushConstants.angle;
     float pitch = pushConstants.angle * 0.61;
@@ -67,12 +82,10 @@ void main()
         sx * position.y + cx * position.z
     );
 
-    // The camera is at the origin, looking toward negative Z.
     position.z -= 4.0;
 
     float nearPlane = 0.1;
     float farPlane = 100.0;
-
     float focal = 1.0 / tan(radians(55.0) * 0.5);
 
     float clipZ =
@@ -86,5 +99,5 @@ void main()
         -position.z
     );
 
-    fragmentColor = faceColors[faceIndex];
+    fragmentColor = faceColors[colorIndex];
 }
