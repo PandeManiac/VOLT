@@ -502,15 +502,13 @@ public sealed unsafe class World : IDisposable
 
             foreach (ComponentCopy copy in plan)
             {
-                byte* sourcePointer =
-                    (byte*)source.Chunk.GetComponentColumnPointer(copy.SourceIndex)
-                    + (nuint)source.Row *
-                      source.Chunk.GetComponentStride(copy.SourceIndex);
+                byte* sourcePointer = source.Chunk.GetComponentRowPointerUnchecked(
+                    copy.SourceIndex,
+                    source.Row);
 
-                byte* destinationPointer =
-                    (byte*)destinationChunk.GetComponentColumnPointer(copy.DestinationIndex)
-                    + (nuint)destinationRow *
-                      destinationChunk.GetComponentStride(copy.DestinationIndex);
+                byte* destinationPointer = destinationChunk.GetComponentRowPointerUnchecked(
+                    copy.DestinationIndex,
+                    destinationRow);
 
                 Buffer.MemoryCopy(
                     sourcePointer,

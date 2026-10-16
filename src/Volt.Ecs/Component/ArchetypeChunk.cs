@@ -229,7 +229,7 @@ public sealed unsafe class ArchetypeChunk : IDisposable
 
         for (int i = 0; i < ComponentCount; i++)
         {
-            byte* destination = GetComponentRowPointer(i, row);
+            byte* destination = GetComponentRowPointerUnchecked(i, row);
 
             NativeMemory.Clear(
                 destination,
@@ -275,7 +275,7 @@ public sealed unsafe class ArchetypeChunk : IDisposable
                 $"Component {typeof(T).Name} does not belong to this archetype.");
         }
 
-        byte* pointer = GetComponentRowPointer(componentIndex, row);
+        byte* pointer = GetComponentRowPointerUnchecked(componentIndex, row);
 
         return ref Unsafe.AsRef<T>(pointer);
     }
@@ -328,8 +328,8 @@ public sealed unsafe class ArchetypeChunk : IDisposable
 
             for (int i = 0; i < ComponentCount; i++)
             {
-                byte* destination = GetComponentRowPointer(i, row);
-                byte* source = GetComponentRowPointer(i, lastRow);
+                byte* destination = GetComponentRowPointerUnchecked(i, row);
+                byte* source = GetComponentRowPointerUnchecked(i, lastRow);
 
                 Buffer.MemoryCopy(
                     source,
@@ -345,7 +345,7 @@ public sealed unsafe class ArchetypeChunk : IDisposable
         {
             for (int i = 0; i < ComponentCount; i++)
             {
-                byte* pointer = GetComponentRowPointer(i, lastRow);
+                byte* pointer = GetComponentRowPointerUnchecked(i, lastRow);
 
                 NativeMemory.Clear(
                     pointer,
@@ -451,8 +451,9 @@ public sealed unsafe class ArchetypeChunk : IDisposable
         }
     }
 
+    // Caller must validate the component index and row against this chunk.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private byte* GetComponentRowPointer(int componentIndex, int row)
+    internal byte* GetComponentRowPointerUnchecked(int componentIndex, int row)
     {
         return (byte*)_memory
             + _componentOffsets[componentIndex]
