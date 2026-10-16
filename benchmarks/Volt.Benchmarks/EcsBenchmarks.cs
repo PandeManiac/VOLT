@@ -376,7 +376,6 @@ internal struct MigrationComponent7 { public long Value; }
 
 
 [MemoryDiagnoser]
-[SimpleJob(invocationCount: 1)]
 public class EcsMigrationBenchmarks
 {
     private const int BatchSize = 1_000;
@@ -402,11 +401,7 @@ public class EcsMigrationBenchmarks
         ComponentRegistry.Register<MigrationComponent6>();
         ComponentRegistry.Register<MigrationComponent7>();
         ComponentRegistry.Register<BenchmarkVelocity>();
-    }
 
-    [IterationSetup]
-    public void IterationSetup()
-    {
         _world = new World();
 
         _entities = new Entity[BatchSize];
@@ -472,11 +467,8 @@ public class EcsMigrationBenchmarks
             new BenchmarkVelocity { X = 1 });
     }
 
-    [IterationCleanup]
-    public void IterationCleanup()
-    {
-        _world.Dispose();
-    }
+    [GlobalCleanup]
+    public void Cleanup() => _world.Dispose();
 
     [Benchmark(OperationsPerInvoke = BatchSize)]
     public void RemoveAndReAddVelocity()
