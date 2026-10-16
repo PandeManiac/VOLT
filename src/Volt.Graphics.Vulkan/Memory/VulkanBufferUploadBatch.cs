@@ -2,9 +2,9 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
 using Silk.NET.Vulkan;
-using Volt.Graphics.Vulkan.Commands;
 using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
+using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Volt.Graphics.Vulkan.Memory;
 
@@ -33,13 +33,18 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// </remarks>
 public sealed unsafe class VulkanBufferUploadBatch
 {
-    private const ulong SubmissionTimeoutNanoseconds =
-        5_000_000_000UL;
-
     private readonly record struct UploadRequest(
         ulong StagingOffset,
         ulong ByteCount,
         BufferUsageFlags DestinationUsage);
+
+    private readonly record struct BatchCopyRecording(
+        VulkanBufferUploadBatch Batch,
+        VkBuffer Staging,
+        IReadOnlyList<VulkanBuffer> Destinations);
+
+    private static readonly Action<Vk, CommandBuffer, BatchCopyRecording>
+        CopyRecorder = RecordCopies;
 
     private readonly ArrayBufferWriter<byte> _stagingData = new();
     private readonly List<UploadRequest> _requests = [];
@@ -334,35 +339,34 @@ public sealed unsafe class VulkanBufferUploadBatch
         VulkanBuffer staging,
         IReadOnlyList<VulkanBuffer> destinations)
     {
-        Vk api = instance.Api;
-        Device deviceHandle = device.Handle;
+        BatchCopyRecording recording = new(
+            this,
+            staging.Handle,
+            destinations);
 
-        using VulkanCommandPool commandPool = new(
+        VulkanSynchronousTransferSubmission.Execute(
             instance,
             device,
-            CommandPoolCreateFlags.TransientBit);
+            recording,
+            CopyRecorder);
+    }
 
-        using VulkanCommandBuffers commandBuffers = new(
-            instance,
-            device,
-            commandPool,
-            1);
-
-        CommandBuffer commandBuffer =
-            commandBuffers.GetBuffer(0);
-
-        VulkanCommandRecording.Begin(
-            instance,
-            commandBuffer);
-
-        for (int index = 0; index < destinations.Count; index++)
+    private static void RecordCopies(
+        Vk api,
+        CommandBuffer commandBuffer,
+        BatchCopyRecording recording)
+    {
+        for (int index = 0;
+             index < recording.Destinations.Count;
+             index++)
         {
-            BufferCopy region = GetCopyRegion(index);
+            BufferCopy region =
+                recording.Batch.GetCopyRegion(index);
 
             api.CmdCopyBuffer(
                 commandBuffer,
-                staging.Handle,
-                destinations[index].Handle,
+                recording.Staging,
+                recording.Destinations[index].Handle,
                 1,
                 in region);
         }
@@ -391,96 +395,20 @@ public sealed unsafe class VulkanBufferUploadBatch
             null,
             0,
             null);
-
-        VulkanCommandRecording.End(
-            instance,
-            commandBuffer);
-
-        FenceCreateInfo fenceDescription = new()
-        {
-            SType = StructureType.FenceCreateInfo,
-            Flags = FenceCreateFlags.None
-        };
-
-        Fence completionFence = default;
-        bool submissionAttempted = false;
-        bool submissionCompleted = false;
-
-        try
-        {
-            EnsureSuccess(
-                api.CreateFence(
-                    deviceHandle,
-                    in fenceDescription,
-                    null,
-                    out completionFence),
-                "Create batched transfer fence");
-
-            if (completionFence.Handle == 0)
-            {
-                throw new InvalidOperationException(
-                    "Vulkan returned a null transfer fence.");
-            }
-
-            submissionAttempted = true;
-
-            VulkanQueueSubmission.Submit(
-                instance,
-                device,
-                commandBuffer,
-                completionFence);
-
-            VulkanQueueSubmission.WaitForFence(
-                instance,
-                device,
-                completionFence,
-                SubmissionTimeoutNanoseconds);
-
-            submissionCompleted = true;
-        }
-
-        finally
-        {
-            try
-            {
-                if (submissionAttempted && !submissionCompleted)
-                {
-                    // A failed submission or wait does not establish
-                    // that the GPU has stopped using these resources.
-                    device.WaitIdle();
-                }
-            }
-
-            finally
-            {
-                if (completionFence.Handle != 0)
-                {
-                    api.DestroyFence(
-                        deviceHandle,
-                        completionFence,
-                        null);
-                }
-            }
-        }
     }
 
-    private static void EnsureSuccess(
-        Result result,
-        string operation)
+    private static void ThrowIfSubmitted(
+        VulkanBufferUploadBatch batch)
     {
-        if (result != Result.Success)
+        if (batch._submitted)
         {
             throw new InvalidOperationException(
-                $"{operation} failed: {result}.");
+                "This upload batch has already been submitted.");
         }
     }
 
     private void ThrowIfSubmitted()
     {
-        if (_submitted)
-        {
-            throw new InvalidOperationException(
-                "This upload batch has already been submitted.");
-        }
+        ThrowIfSubmitted(this);
     }
 }

@@ -1,8 +1,8 @@
 
 using Silk.NET.Vulkan;
-using Volt.Graphics.Vulkan.Commands;
 using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
+using VkBuffer = Silk.NET.Vulkan.Buffer;
 
 namespace Volt.Graphics.Vulkan.Memory;
 
@@ -26,8 +26,15 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// </remarks>
 public static unsafe class VulkanBufferTransfer
 {
-    private const ulong SubmissionTimeoutNanoseconds =
-        5_000_000_000UL;
+    private readonly record struct CopyRecording(
+        VkBuffer Source,
+        VkBuffer Destination,
+        ulong ByteCount,
+        ulong SourceOffset,
+        ulong DestinationOffset);
+
+    private static readonly Action<Vk, CommandBuffer, CopyRecording>
+        CopyRecorder = RecordCopy;
 
     /// <summary>
     /// Uploads unmanaged values into a newly allocated device-local
@@ -143,139 +150,18 @@ public static unsafe class VulkanBufferTransfer
             sourceOffset,
             destinationOffset);
 
-        Vk api = instance.Api;
-        Device deviceHandle = device.Handle;
-
-        using VulkanCommandPool commandPool = new(
-            instance,
-            device,
-            CommandPoolCreateFlags.TransientBit);
-
-        using VulkanCommandBuffers commandBuffers = new(
-            instance,
-            device,
-            commandPool,
-            1);
-
-        CommandBuffer commandBuffer =
-            commandBuffers.GetBuffer(0);
-
-        VulkanCommandRecording.Begin(
-            instance,
-            commandBuffer);
-
-        BufferCopy region = new()
-        {
-            SrcOffset = sourceOffset,
-            DstOffset = destinationOffset,
-            Size = byteCount
-        };
-
-        api.CmdCopyBuffer(
-            commandBuffer,
+        CopyRecording recording = new(
             source.Handle,
             destination.Handle,
-            1,
-            in region);
+            byteCount,
+            sourceOffset,
+            destinationOffset);
 
-        // Transfer writes become available to subsequent device
-        // accesses and to the host memory domain. The host must
-        // still wait for submission completion before reading.
-        BufferMemoryBarrier memoryBarrier = new()
-        {
-            SType = StructureType.BufferMemoryBarrier,
-            SrcAccessMask = AccessFlags.TransferWriteBit,
-            DstAccessMask =
-                AccessFlags.MemoryReadBit |
-                AccessFlags.MemoryWriteBit |
-                AccessFlags.HostReadBit,
-            SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
-            DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
-            Buffer = destination.Handle,
-            Offset = destinationOffset,
-            Size = byteCount
-        };
-
-        api.CmdPipelineBarrier(
-            commandBuffer,
-            PipelineStageFlags.TransferBit,
-            PipelineStageFlags.AllCommandsBit |
-                PipelineStageFlags.HostBit,
-            DependencyFlags.None,
-            0,
-            null,
-            1,
-            &memoryBarrier,
-            0,
-            null);
-
-        VulkanCommandRecording.End(
+        VulkanSynchronousTransferSubmission.Execute(
             instance,
-            commandBuffer);
-
-        FenceCreateInfo fenceDescription = new()
-        {
-            SType = StructureType.FenceCreateInfo,
-            Flags = FenceCreateFlags.None
-        };
-
-        EnsureSuccess(
-            api.CreateFence(
-                deviceHandle,
-                in fenceDescription,
-                null,
-                out Fence completionFence),
-            "Create buffer transfer fence");
-
-        if (completionFence.Handle == 0)
-        {
-            throw new InvalidOperationException(
-                "Vulkan returned a null transfer fence.");
-        }
-
-        bool submissionAttempted = false;
-        bool submissionCompleted = false;
-
-        try
-        {
-            submissionAttempted = true;
-
-            VulkanQueueSubmission.Submit(
-                instance,
-                device,
-                commandBuffer,
-                completionFence);
-
-            VulkanQueueSubmission.WaitForFence(
-                instance,
-                device,
-                completionFence,
-                SubmissionTimeoutNanoseconds);
-
-            submissionCompleted = true;
-        }
-
-        finally
-        {
-            try
-            {
-                if (submissionAttempted && !submissionCompleted)
-                {
-                    // A failed wait or submission does not prove
-                    // that the command buffer is no longer pending.
-                    // Drain the device before releasing its resources.
-                    device.WaitIdle();
-                }
-            }
-
-            finally
-            {
-                api.DestroyFence(
-                    deviceHandle,
-                    completionFence,
-                    null);
-            }
-        }
+            device,
+            recording,
+            CopyRecorder);
     }
 
     /// <summary>
@@ -350,14 +236,54 @@ public static unsafe class VulkanBufferTransfer
         }
     }
 
-    private static void EnsureSuccess(
-        Result result,
-        string operation)
+    private static void RecordCopy(
+        Vk api,
+        CommandBuffer commandBuffer,
+        CopyRecording recording)
     {
-        if (result != Result.Success)
+        BufferCopy region = new()
         {
-            throw new InvalidOperationException(
-                $"{operation} failed: {result}.");
-        }
+            SrcOffset = recording.SourceOffset,
+            DstOffset = recording.DestinationOffset,
+            Size = recording.ByteCount
+        };
+
+        api.CmdCopyBuffer(
+            commandBuffer,
+            recording.Source,
+            recording.Destination,
+            1,
+            in region);
+
+        // Transfer writes become available to subsequent device
+        // accesses and to the host memory domain. The host must
+        // still wait for submission completion before reading.
+        BufferMemoryBarrier memoryBarrier = new()
+        {
+            SType = StructureType.BufferMemoryBarrier,
+            SrcAccessMask = AccessFlags.TransferWriteBit,
+            DstAccessMask =
+                AccessFlags.MemoryReadBit |
+                AccessFlags.MemoryWriteBit |
+                AccessFlags.HostReadBit,
+            SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+            DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+            Buffer = recording.Destination,
+            Offset = recording.DestinationOffset,
+            Size = recording.ByteCount
+        };
+
+        api.CmdPipelineBarrier(
+            commandBuffer,
+            PipelineStageFlags.TransferBit,
+            PipelineStageFlags.AllCommandsBit |
+                PipelineStageFlags.HostBit,
+            DependencyFlags.None,
+            0,
+            null,
+            1,
+            &memoryBarrier,
+            0,
+            null);
     }
 }
