@@ -18,6 +18,7 @@ public sealed unsafe class World : IDisposable
     private readonly Dictionary<Archetype, List<ArchetypeChunk>> _chunks = [];
     private readonly Dictionary<Archetype, HashSet<ArchetypeChunk>> _availableChunks = [];
     private readonly Dictionary<(Archetype Source, Archetype Destination), ComponentCopy[]> _migrationPlans = [];
+    private readonly Dictionary<(Archetype Source, ComponentType Component, bool Add), Archetype> _transitionArchetypes = [];
 
     private readonly record struct ComponentCopy(
         int SourceIndex,
@@ -185,8 +186,7 @@ public sealed unsafe class World : IDisposable
             throw new InvalidOperationException("The entity already has this component.");
         }
 
-        ComponentSignature destinationSignature = source.Chunk.Archetype.Signature.With(type);
-        Migrate(entity, source, destinationSignature, addValue: true, value);
+        Migrate(entity, source, type, addValue: true, value);
         _structuralVersion++;
     }
 
@@ -202,8 +202,7 @@ public sealed unsafe class World : IDisposable
             return false;
         }
 
-        ComponentSignature destinationSignature = source.Chunk.Archetype.Signature.Without(type);
-        Migrate(entity, source, destinationSignature, addValue: false, default(T));
+        Migrate(entity, source, type, addValue: false, default(T));
         _structuralVersion++;
         return true;
     }
@@ -262,6 +261,7 @@ public sealed unsafe class World : IDisposable
         _locations.Clear();
         _queryCache.Clear();
         _migrationPlans.Clear();
+        _transitionArchetypes.Clear();
 
         GC.SuppressFinalize(this);
     }
@@ -441,14 +441,39 @@ public sealed unsafe class World : IDisposable
         return plan;
     }
 
+    private Archetype GetTransitionArchetype(
+        Archetype source,
+        ComponentType component,
+        bool add)
+    {
+        var key = (Source: source, Component: component, Add: add);
+
+        if (_transitionArchetypes.TryGetValue(key, out Archetype? destination))
+        {
+            return destination;
+        }
+
+        ComponentSignature signature = add
+            ? source.Signature.With(component)
+            : source.Signature.Without(component);
+
+        destination = GetOrCreateArchetype(signature);
+        _transitionArchetypes.Add(key, destination);
+        return destination;
+    }
+
     private void Migrate<T>(
         Entity entity,
         EntityLocation source,
-        ComponentSignature destinationSignature,
+        ComponentType component,
         bool addValue,
         T value) where T : unmanaged
     {
-        Archetype destinationArchetype = GetOrCreateArchetype(destinationSignature);
+        Archetype sourceArchetype = source.Chunk.Archetype;
+        Archetype destinationArchetype = GetTransitionArchetype(
+            sourceArchetype,
+            component,
+            addValue);
         ArchetypeChunk destinationChunk = GetOrCreateAvailableChunk(destinationArchetype);
 
         bool wasFull = destinationChunk.IsFull;
@@ -457,8 +482,6 @@ public sealed unsafe class World : IDisposable
         try
         {
             UpdateChunkAvailability(destinationChunk, wasFull);
-            Archetype sourceArchetype = source.Chunk.Archetype;
-
             ComponentCopy[] plan = GetMigrationPlan(
                 sourceArchetype,
                 destinationArchetype);

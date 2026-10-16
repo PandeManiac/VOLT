@@ -225,6 +225,32 @@ public sealed class WorldTests
     }
 
     [Fact]
+    public void RepeatedComponentTransitions_PreserveEntityLocationsAndValues()
+    {
+        using World world = new();
+        Entity first = world.CreateEntity();
+        Entity second = world.CreateEntity();
+
+        world.AddComponent(first, new Position { X = 10, Y = 20 });
+        world.AddComponent(second, new Position { X = 30, Y = 40 });
+
+        for (int i = 0; i < 20; i++)
+        {
+            world.AddComponent(first, new Health { Value = 100 + i });
+            world.AddComponent(second, new Health { Value = 200 + i });
+
+            Assert.True(world.RemoveComponent<Health>(first));
+            Assert.True(world.RemoveComponent<Health>(second));
+
+            Assert.False(world.HasComponent<Health>(first));
+            Assert.False(world.HasComponent<Health>(second));
+            Assert.Equal(new Position { X = 10, Y = 20 }, world.GetComponent<Position>(first));
+            Assert.Equal(new Position { X = 30, Y = 40 }, world.GetComponent<Position>(second));
+            Assert.Equal(2, world.Count);
+        }
+    }
+
+    [Fact]
     public void GetComponent_Missing_Throws()
     {
         using World world = new();
