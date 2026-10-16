@@ -13,7 +13,8 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// UploadDeviceLocal uses a temporary host-visible staging buffer
 /// and creates a destination allocation requiring device-local memory.
 ///
-/// Copy records a buffer copy and a transfer-to-memory dependency.
+/// Copy records a buffer copy and a transfer-to-memory dependency
+/// that includes subsequent device accesses and host reads.
 /// It submits on the logical device's graphics queue and waits for
 /// completion before returning.
 ///
@@ -106,8 +107,8 @@ public static unsafe class VulkanBufferTransfer
     /// before this method returns.
     ///
     /// An explicit buffer memory barrier makes transfer writes
-    /// available and visible to later device-memory accesses on
-    /// the same queue.
+    /// available and visible to subsequent device-memory accesses
+    /// and host reads. Host access must still wait for completion.
     ///
     /// No synchronization is provided against unrelated pending
     /// GPU work that may already be using either buffer.
@@ -177,17 +178,17 @@ public static unsafe class VulkanBufferTransfer
             1,
             in region);
 
-        // The transfer writes must be visible to later shader,
-        // vertex, index, indirect, or other buffer consumers.
-        // This deliberately uses broad synchronization for a
-        // general-purpose, synchronous copy helper.
+        // Transfer writes become available to subsequent device
+        // accesses and to the host memory domain. The host must
+        // still wait for submission completion before reading.
         BufferMemoryBarrier memoryBarrier = new()
         {
             SType = StructureType.BufferMemoryBarrier,
             SrcAccessMask = AccessFlags.TransferWriteBit,
             DstAccessMask =
                 AccessFlags.MemoryReadBit |
-                AccessFlags.MemoryWriteBit,
+                AccessFlags.MemoryWriteBit |
+                AccessFlags.HostReadBit,
             SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
             DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
             Buffer = destination.Handle,
@@ -198,7 +199,8 @@ public static unsafe class VulkanBufferTransfer
         api.CmdPipelineBarrier(
             commandBuffer,
             PipelineStageFlags.TransferBit,
-            PipelineStageFlags.AllCommandsBit,
+            PipelineStageFlags.AllCommandsBit |
+                PipelineStageFlags.HostBit,
             DependencyFlags.None,
             0,
             null,

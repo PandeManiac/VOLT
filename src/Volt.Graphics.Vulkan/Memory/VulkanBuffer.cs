@@ -13,9 +13,8 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// <remarks>
 /// The caller chooses both buffer usage and required memory properties.
 ///
-/// Upload operations require host-visible memory. GPU-only allocations
-/// can be created, but uploading to them through staging is not yet
-/// implemented by this class.
+/// Host-visible allocations support direct writes and reads.
+/// GPU-only allocations require an external transfer mechanism.
 ///
 /// This class does not track pending GPU accesses. Callers must
 /// synchronize uploads, reads, and destruction with GPU execution.
@@ -311,6 +310,112 @@ public sealed unsafe class VulkanBuffer : IDisposable
                         in range),
                     "Flush Vulkan buffer memory");
             }
+        }
+
+        finally
+        {
+            _api.UnmapMemory(
+                deviceHandle,
+                _memory);
+        }
+    }
+
+    /// <summary>
+    /// Copies bytes from host-visible Vulkan memory into a span.
+    /// </summary>
+    /// <remarks>
+    /// The caller must establish completion and visibility of GPU
+    /// writes before reading the allocation.
+    ///
+    /// Non-coherent mapped memory is invalidated before copying.
+    /// Invalidating the entire allocation avoids partial-range
+    /// nonCoherentAtomSize alignment requirements.
+    ///
+    /// This method does not wait for GPU work or synchronize
+    /// against concurrent GPU or host access.
+    /// </remarks>
+    public void Read(
+        Span<byte> destination,
+        ulong sourceOffset = 0)
+    {
+        ThrowIfDisposed();
+
+        if ((MemoryProperties &
+            MemoryPropertyFlags.HostVisibleBit) == 0)
+        {
+            throw new InvalidOperationException(
+                "This buffer is not host-visible.");
+        }
+
+        if (sourceOffset > Size ||
+            (ulong)destination.Length > Size - sourceOffset)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(sourceOffset),
+                "The read exceeds the buffer size.");
+        }
+
+        if (destination.IsEmpty)
+        {
+            return;
+        }
+
+        if (sourceOffset > long.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(sourceOffset));
+        }
+
+        Device deviceHandle = _device.Handle;
+
+        void* mappedMemory = null;
+
+        EnsureSuccess(
+            _api.MapMemory(
+                deviceHandle,
+                _memory,
+                0,
+                Vk.WholeSize,
+                MemoryMapFlags.None,
+                &mappedMemory),
+            "Map Vulkan buffer memory for reading");
+
+        try
+        {
+            if (mappedMemory == null)
+            {
+                throw new InvalidOperationException(
+                    "Vulkan mapped memory to a null pointer.");
+            }
+
+            if ((MemoryProperties &
+                MemoryPropertyFlags.HostCoherentBit) == 0)
+            {
+                MappedMemoryRange range = new()
+                {
+                    SType = StructureType.MappedMemoryRange,
+                    Memory = _memory,
+                    Offset = 0,
+                    Size = Vk.WholeSize
+                };
+
+                EnsureSuccess(
+                    _api.InvalidateMappedMemoryRanges(
+                        deviceHandle,
+                        1,
+                        in range),
+                    "Invalidate Vulkan buffer memory");
+            }
+
+            byte* source =
+                (byte*)mappedMemory +
+                checked((long)sourceOffset);
+
+            ReadOnlySpan<byte> bytes = new(
+                source,
+                destination.Length);
+
+            bytes.CopyTo(destination);
         }
 
         finally
