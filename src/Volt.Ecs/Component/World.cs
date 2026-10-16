@@ -477,7 +477,7 @@ public sealed unsafe class World : IDisposable
         ArchetypeChunk destinationChunk = GetOrCreateAvailableChunk(destinationArchetype);
 
         bool wasFull = destinationChunk.IsFull;
-        int destinationRow = destinationChunk.Add(entity);
+        int destinationRow = destinationChunk.AddForMigration(entity);
 
         try
         {

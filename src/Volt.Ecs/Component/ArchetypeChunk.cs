@@ -225,23 +225,7 @@ public sealed unsafe class ArchetypeChunk : IDisposable
     /// </summary>
     public int Add(Entity entity)
     {
-        ThrowIfDisposed();
-
-        if (entity == default)
-        {
-            throw new ArgumentException(
-                "Cannot store an invalid entity.",
-                nameof(entity));
-        }
-
-        if (IsFull)
-        {
-            throw new InvalidOperationException(
-                "The archetype chunk is full.");
-        }
-
-        int row = Count;
-        GetEntityColumnPointer()[row] = entity;
+        int row = PrepareRow(entity);
 
         for (int i = 0; i < ComponentCount; i++)
         {
@@ -252,6 +236,14 @@ public sealed unsafe class ArchetypeChunk : IDisposable
                 _componentStrides[i]);
         }
 
+        Count++;
+        return row;
+    }
+
+    // Migration must overwrite every component column before the row is observed.
+    internal int AddForMigration(Entity entity)
+    {
+        int row = PrepareRow(entity);
         Count++;
         return row;
     }
@@ -387,6 +379,28 @@ public sealed unsafe class ArchetypeChunk : IDisposable
         }
 
         return cursor;
+    }
+
+    private int PrepareRow(Entity entity)
+    {
+        ThrowIfDisposed();
+
+        if (entity == default)
+        {
+            throw new ArgumentException(
+                "Cannot store an invalid entity.",
+                nameof(entity));
+        }
+
+        if (IsFull)
+        {
+            throw new InvalidOperationException(
+                "The archetype chunk is full.");
+        }
+
+        int row = Count;
+        GetEntityColumnPointer()[row] = entity;
+        return row;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
