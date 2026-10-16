@@ -54,11 +54,7 @@ public sealed class JobScheduler
     {
         ArgumentNullException.ThrowIfNull(job);
 
-        return Task.Run(() =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            job();
-        }, cancellationToken);
+        return Task.Run(job, cancellationToken);
     }
 
     /// <summary>
