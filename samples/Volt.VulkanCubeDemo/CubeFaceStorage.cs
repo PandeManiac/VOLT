@@ -1,4 +1,3 @@
-
 using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
@@ -284,9 +283,9 @@ internal sealed unsafe class CubeFaceStorage : IDisposable
             throw new ArgumentOutOfRangeException(nameof(colorIndex));
         }
 
-        return axis |
-            ((positive ? 1u : 0u) << 2) |
-            (colorIndex << 3);
+        return axis
+            | ((positive ? 1u : 0u) << 2)
+            | (colorIndex << 3);
     }
 
     private static void EnsureSuccess(

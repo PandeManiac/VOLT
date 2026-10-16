@@ -1,4 +1,3 @@
-
 using System.Diagnostics;
 using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Commands;
