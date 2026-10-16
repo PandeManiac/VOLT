@@ -17,8 +17,9 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// added to the batch. Each submitted item receives its own
 /// device-local destination buffer.
 ///
-/// Each upload must have a byte length divisible by four,
-/// matching the Vulkan buffer-copy alignment requirements.
+/// Buffer copies support arbitrary positive byte counts without
+/// additional staging alignment or padding. Applications remain
+/// responsible for alignment required by their buffer consumers.
 ///
 /// The default submission path creates temporary staging storage.
 /// An optional VulkanStagingBufferCache enables staging allocation
@@ -77,9 +78,8 @@ public sealed unsafe class VulkanBufferUploadBatch
     /// Adds raw bytes to the upload batch.
     /// </summary>
     /// <remarks>
-    /// Byte counts must be positive multiples of four.
-    /// Callers with smaller or unaligned payloads should pack
-    /// or pad their application data explicitly.
+    /// Payloads must be nonempty. No alignment padding is inserted
+    /// between successive uploads.
     /// </remarks>
     public int AddBytes(
         ReadOnlySpan<byte> data,
@@ -226,13 +226,6 @@ public sealed unsafe class VulkanBufferUploadBatch
             throw new ArgumentOutOfRangeException(
                 nameof(byteCount),
                 "An upload must contain at least one byte.");
-        }
-
-        if ((byteCount & 3UL) != 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(byteCount),
-                "Upload sizes must be multiples of four bytes.");
         }
 
         if (destinationUsage == BufferUsageFlags.None)

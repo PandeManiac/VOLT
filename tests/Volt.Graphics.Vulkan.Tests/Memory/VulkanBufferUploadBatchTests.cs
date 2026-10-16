@@ -80,6 +80,51 @@ public sealed class VulkanBufferUploadBatchTests
     }
 
     [Fact]
+    public void AddBytes_AcceptsByteGranularPayloads()
+    {
+        VulkanBufferUploadBatch batch = new();
+
+        int first = batch.AddBytes(
+            new byte[] { 10 },
+            BufferUsageFlags.StorageBufferBit);
+
+        int second = batch.AddBytes(
+            new byte[] { 20, 30, 40 },
+            BufferUsageFlags.StorageBufferBit);
+
+        int third = batch.AddBytes(
+            new byte[] { 50, 60 },
+            BufferUsageFlags.StorageBufferBit);
+
+        BufferCopy firstRegion = batch.GetCopyRegion(first);
+        BufferCopy secondRegion = batch.GetCopyRegion(second);
+        BufferCopy thirdRegion = batch.GetCopyRegion(third);
+
+        Assert.Equal(0, first);
+        Assert.Equal(1, second);
+        Assert.Equal(2, third);
+
+        Assert.Equal(0UL, firstRegion.SrcOffset);
+        Assert.Equal(1UL, firstRegion.Size);
+        Assert.Equal(0UL, firstRegion.DstOffset);
+
+        Assert.Equal(1UL, secondRegion.SrcOffset);
+        Assert.Equal(3UL, secondRegion.Size);
+        Assert.Equal(0UL, secondRegion.DstOffset);
+
+        Assert.Equal(4UL, thirdRegion.SrcOffset);
+        Assert.Equal(2UL, thirdRegion.Size);
+        Assert.Equal(0UL, thirdRegion.DstOffset);
+
+        Assert.Equal(3, batch.UploadCount);
+        Assert.Equal(6UL, batch.StagingByteCount);
+
+        Assert.Equal(
+            new byte[] { 10, 20, 30, 40, 50, 60 },
+            batch.GetStagingBytes());
+    }
+
+    [Fact]
     public void Add_AcceptsPackedUIntDescriptors()
     {
         VulkanBufferUploadBatch batch = new();
@@ -104,17 +149,33 @@ public sealed class VulkanBufferUploadBatchTests
     }
 
     [Fact]
-    public void Add_AcceptsMultipleValuesThatFormFourBytes()
+    public void Add_AcceptsSingleByte()
     {
         VulkanBufferUploadBatch batch = new();
 
-        ushort[] values = [1, 2];
+        byte[] values = [42];
+
+        batch.Add<byte>(
+            values,
+            BufferUsageFlags.StorageBufferBit);
+
+        Assert.Equal(1UL, batch.StagingByteCount);
+        Assert.Equal(new byte[] { 42 }, batch.GetStagingBytes());
+    }
+
+    [Fact]
+    public void Add_AcceptsSingleUShort()
+    {
+        VulkanBufferUploadBatch batch = new();
+
+        ushort[] values = [42];
 
         batch.Add<ushort>(
             values,
             BufferUsageFlags.StorageBufferBit);
 
-        Assert.Equal(4UL, batch.StagingByteCount);
+        Assert.Equal(2UL, batch.StagingByteCount);
+        Assert.Equal(2UL, batch.GetCopyRegion(0).Size);
     }
 
     [Fact]
@@ -125,17 +186,6 @@ public sealed class VulkanBufferUploadBatchTests
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             batch.AddBytes(
                 Array.Empty<byte>(),
-                BufferUsageFlags.StorageBufferBit));
-    }
-
-    [Fact]
-    public void AddBytes_RejectsUnalignedPayload()
-    {
-        VulkanBufferUploadBatch batch = new();
-
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            batch.AddBytes(
-                new byte[3],
                 BufferUsageFlags.StorageBufferBit));
 
         Assert.Equal(0, batch.UploadCount);
@@ -154,11 +204,31 @@ public sealed class VulkanBufferUploadBatchTests
     }
 
     [Fact]
-    public void ValidateUpload_RejectsUnalignedSize()
+    public void ValidateUpload_AcceptsArbitraryPositiveSize()
+    {
+        VulkanBufferUploadBatch.ValidateUpload(
+            1,
+            BufferUsageFlags.StorageBufferBit);
+
+        VulkanBufferUploadBatch.ValidateUpload(
+            2,
+            BufferUsageFlags.StorageBufferBit);
+
+        VulkanBufferUploadBatch.ValidateUpload(
+            3,
+            BufferUsageFlags.StorageBufferBit);
+
+        VulkanBufferUploadBatch.ValidateUpload(
+            7,
+            BufferUsageFlags.StorageBufferBit);
+    }
+
+    [Fact]
+    public void ValidateUpload_RejectsZeroSize()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             VulkanBufferUploadBatch.ValidateUpload(
-                7,
+                0,
                 BufferUsageFlags.StorageBufferBit));
     }
 

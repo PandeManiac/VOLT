@@ -53,10 +53,13 @@ The sample uses:
 - `VulkanBufferTransfer` for individual synchronous transfers
 - `VulkanBufferUploadBatch` for batched synchronous uploads
 
+VOLT also provides `VulkanStagingBufferCache`, which can
+retain staging allocations across multiple completed batches.
+
 ### Batched uploads
 
 `VulkanBufferUploadBatch` collects multiple payloads into
-one staging allocation.
+one staging buffer.
 
 Each payload receives its own device-local destination buffer.
 
@@ -64,10 +67,13 @@ The batch records all buffer copies into one command buffer,
 inserts a transfer memory barrier, submits the commands once,
 and waits for one completion fence.
 
-After completion, the staging allocation is destroyed and
-the destination buffers are returned to the caller.
+The default submission path destroys its temporary staging
+allocation after completion.
 
-The caller owns the returned buffers.
+An optional staging cache can retain the staging buffer for
+reuse by subsequent batches.
+
+The caller owns all returned destination buffers.
 
 ### Example
 
@@ -93,9 +99,53 @@ In this example, `buffers[facesIndex]` and
 
 Both were populated through the same Vulkan submission.
 
-Uploads must currently be positive multiples of four bytes.
-Applications are responsible for packing or padding their
-data to meet that requirement.
+### Reusable staging storage
+
+Applications performing repeated synchronous uploads can
+create a staging cache:
+
+```csharp
+using VulkanStagingBufferCache stagingCache = new(
+    instance,
+    device,
+    physicalDevice);
+```
+
+Pass the cache to successive upload batches:
+
+```csharp
+VulkanBuffer[] buffers = batch.Submit(
+    instance,
+    device,
+    physicalDevice,
+    stagingCache);
+```
+
+The cache retains its allocation between completed batches.
+It grows when a larger staging capacity is required.
+
+Only one upload can use the cache at a time.
+
+The cache does not own destination buffers or perform
+asynchronous transfers.
+
+The cube sample currently uses the default submission path.
+
+### Data layout and alignment
+
+Vulkan buffer-copy operations support arbitrary positive
+byte counts and do not require four-byte-aligned source
+offsets, destination offsets, or copy sizes.
+
+The batch packs payloads contiguously without automatically
+inserting alignment padding.
+
+Applications must still respect alignment and data-layout
+requirements imposed by their actual buffer consumers,
+such as storage-buffer descriptors or shader structures.
+
+VOLT does not impose a mandatory vertex format or mesh
+representation.
 
 ## Requirements
 
@@ -151,7 +201,8 @@ This is a focused graphics sample, not VOLT's final renderer.
 - Upload batches are synchronous and one-shot.
 - Each destination buffer has a dedicated Vulkan allocation.
 - Uploads are staged in managed memory before submission.
-- No persistent staging ring or upload allocation pool exists.
+- Reusable staging storage is optional and synchronous.
+- No persistent asynchronous staging ring exists.
 - There is no asynchronous transfer scheduling.
 - No dedicated transfer queue is used.
 - Buffer device addresses are not required.
@@ -159,8 +210,8 @@ This is a focused graphics sample, not VOLT's final renderer.
 - The sample does not render ECS-managed scene objects.
 
 For frequently changing geometry, future improvements should
-include staging allocation reuse, device-memory suballocation,
-and asynchronous completion tracking.
+include device-memory suballocation, asynchronous completion
+tracking, and more advanced staging allocation management.
 
 ## Resource Ownership
 
@@ -170,8 +221,12 @@ to the caller and must be disposed explicitly.
 The batch waits for the transfer to complete before releasing
 its temporary Vulkan resources.
 
+A reusable staging cache owns its retained staging buffer.
+It must be disposed before the Vulkan device is destroyed.
+
 The demo waits for the device to become idle before releasing
 persistent rendering resources.
 
 GPU buffer accesses must be synchronized with unrelated
 pending operations by the application.
+```
