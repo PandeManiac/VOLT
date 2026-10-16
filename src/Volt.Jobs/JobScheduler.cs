@@ -107,14 +107,23 @@ public sealed class JobScheduler
             return Task.CompletedTask;
         }
 
-        return Task.Run(() =>
-        {
-            RunBatches(
-                itemCount,
-                batchSize,
-                executeBatch,
-                cancellationToken);
-        }, cancellationToken);
+        BatchWork work = new(
+            this,
+            itemCount,
+            batchSize,
+            executeBatch,
+            cancellationToken);
+
+        // A static callback avoids allocating a captured closure and
+        // delegate for every scheduled batch operation.
+        // Explicitly use the ThreadPool scheduler and DenyChildAttach
+        // to preserve Task.Run's scheduling semantics.
+        return Task.Factory.StartNew(
+            static state => ((BatchWork)state!).Execute(),
+            work,
+            cancellationToken,
+            TaskCreationOptions.DenyChildAttach,
+            TaskScheduler.Default);
     }
 
     /// <summary>
@@ -216,5 +225,37 @@ public sealed class JobScheduler
         ArgumentOutOfRangeException.ThrowIfNegative(itemCount);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         ArgumentNullException.ThrowIfNull(executeBatch);
+    }
+
+    private sealed class BatchWork
+    {
+        private readonly JobScheduler _scheduler;
+        private readonly int _itemCount;
+        private readonly int _batchSize;
+        private readonly Action<int, int> _executeBatch;
+        private readonly CancellationToken _cancellationToken;
+
+        internal BatchWork(
+            JobScheduler scheduler,
+            int itemCount,
+            int batchSize,
+            Action<int, int> executeBatch,
+            CancellationToken cancellationToken)
+        {
+            _scheduler = scheduler;
+            _itemCount = itemCount;
+            _batchSize = batchSize;
+            _executeBatch = executeBatch;
+            _cancellationToken = cancellationToken;
+        }
+
+        internal void Execute()
+        {
+            _scheduler.RunBatches(
+                _itemCount,
+                _batchSize,
+                _executeBatch,
+                _cancellationToken);
+        }
     }
 }
