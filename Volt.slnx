@@ -7,11 +7,13 @@
     <Project Path="src/Volt.Ecs/Volt.Ecs.csproj" />
     <Project Path="src/Volt.Jobs/Volt.Jobs.csproj" />
     <Project Path="src/Volt.Rendering/Volt.Rendering.csproj" />
+    <Project Path="src/Volt.Graphics/Volt.Graphics.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Volt.Core.Tests/Volt.Core.Tests.csproj" />
     <Project Path="tests/Volt.Ecs.Tests/Volt.Ecs.Tests.csproj" />
     <Project Path="tests/Volt.Jobs.Tests/Volt.Jobs.Tests.csproj" />
     <Project Path="tests/Volt.Rendering.Tests/Volt.Rendering.Tests.csproj" />
+    <Project Path="tests/Volt.Graphics.Tests/Volt.Graphics.Tests.csproj" />
   </Folder>
 </Solution>
