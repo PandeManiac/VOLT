@@ -7,7 +7,8 @@ using Volt.Graphics.Vulkan.Instance;
 namespace Volt.VulkanProbe;
 
 /// <summary>
-/// Exercises VOLT's Vulkan instance and physical-device discovery.
+/// Exercises VOLT's Vulkan instance, physical-device discovery,
+/// logical-device creation, and graphics queue initialization.
 /// </summary>
 internal static class Program
 {
@@ -37,7 +38,6 @@ internal static class Program
             Console.Error.WriteLine();
             Console.Error.WriteLine("Vulkan probe failed:");
             Console.Error.WriteLine(exception);
-
             return 1;
         }
     }
@@ -65,7 +65,8 @@ internal static class Program
 
         using (VulkanInstance instance = new(description))
         {
-            Console.WriteLine("Vulkan instance created successfully.");
+            Console.WriteLine(
+                "Vulkan instance created successfully.");
 
             Console.WriteLine(
                 $"Vulkan loader API: " +
@@ -104,7 +105,11 @@ internal static class Program
 
             if (selectedIndex is int deviceIndex)
             {
-                VulkanPhysicalDeviceInfo selected = devices[deviceIndex];
+                VulkanPhysicalDeviceInfo selected =
+                    devices[deviceIndex];
+
+                PhysicalDevice selectedNativeDevice =
+                    nativeDevices[deviceIndex];
 
                 GraphicsDeviceCapabilities capabilities =
                     VulkanCapabilityMapper.Map(selected);
@@ -117,6 +122,68 @@ internal static class Program
                 Console.WriteLine();
 
                 PrintCapabilities(capabilities);
+
+                Console.WriteLine();
+
+                if (selected.GraphicsQueueFamilyIndex
+                    is not uint graphicsQueueFamilyIndex)
+                {
+                    throw new InvalidOperationException(
+                        "The selected physical device has no " +
+                        "graphics queue family.");
+                }
+
+                using (VulkanLogicalDevice logicalDevice = new(
+                    instance,
+                    selectedNativeDevice,
+                    graphicsQueueFamilyIndex))
+                {
+                    Console.WriteLine("Vulkan logical device");
+                    Console.WriteLine("---------------------");
+
+                    Console.WriteLine(
+                        "Logical device created successfully.");
+
+                    Console.WriteLine(
+                        $"Device handle: " +
+                        $"0x{logicalDevice.Handle.Handle:X}");
+
+                    Console.WriteLine(
+                        $"Graphics queue family: " +
+                        $"{logicalDevice.GraphicsQueueFamilyIndex}");
+
+                    Console.WriteLine("Graphics queue index: 0");
+
+                    Queue graphicsQueue =
+                        logicalDevice.GraphicsQueue;
+
+                    if (graphicsQueue.Handle == 0)
+                    {
+                        throw new InvalidOperationException(
+                            "The graphics queue handle is null.");
+                    }
+
+                    Console.WriteLine(
+                        $"Graphics queue handle: " +
+                        $"0x{graphicsQueue.Handle:X}");
+
+                    Console.WriteLine(
+                        "Graphics queue acquired successfully.");
+
+                    Console.WriteLine();
+
+                    Console.WriteLine(
+                        "Waiting for Vulkan device idle...");
+
+                    logicalDevice.WaitIdle();
+
+                    Console.WriteLine(
+                        "Vulkan device idle wait succeeded.");
+                }
+
+                Console.WriteLine();
+                Console.WriteLine(
+                    "Vulkan logical device destroyed successfully.");
             }
 
             else
