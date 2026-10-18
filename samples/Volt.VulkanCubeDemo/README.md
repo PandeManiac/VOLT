@@ -21,6 +21,10 @@ batched device-local GPU uploads.
 - Two independently synchronized frames in flight
 - Per-swapchain-image depth attachments
 - Per-image graphics submission tracking
+- Resizable window with swapchain recreation
+- Minimize and restore support
+- Rebuilding of swapchain-dependent graphics resources
+- Preservation of command buffers across swapchain recreation
 
 ## Vertex Pulling
 
@@ -199,8 +203,12 @@ This is a focused graphics sample intended to demonstrate VOLT's Vulkan infrastr
 
 ### Windowing and Presentation
 
-- The window is intentionally non-resizable.
-- Swapchain recreation is not yet supported.
+- Swapchain recreation uses a device-idle wait and temporarily
+  interrupts rendering.
+- The sample does not yet implement deferred retirement of old
+  swapchains.
+- Presentation-fence synchronization through
+  `VK_EXT_swapchain_maintenance1` is not implemented.
 
 ### GPU Uploads and Transfers
 
