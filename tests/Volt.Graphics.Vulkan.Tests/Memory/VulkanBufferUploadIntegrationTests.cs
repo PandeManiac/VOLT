@@ -925,6 +925,92 @@ public sealed class VulkanBufferUploadIntegrationTests
             device.WaitIdle();
         });
     }
+
+    [VulkanIntegrationFact]
+    public void BatchedUpload_ChunkBoundaryRoundTrips()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            byte[][] payloads =
+            [
+                new byte[65_535],
+                [0xA1, 0xB2, 0xC3],
+                new byte[65_537]
+            ];
+
+            for (int payloadIndex = 0;
+                 payloadIndex < payloads.Length;
+                 payloadIndex++)
+            {
+                byte[] payload = payloads[payloadIndex];
+
+                for (int index = 0; index < payload.Length; index++)
+                {
+                    payload[index] = unchecked(
+                        (byte)(payloadIndex * 23 + index * 17));
+                }
+            }
+
+            for (int mode = 0; mode < 2; mode++)
+            {
+                VulkanBufferUploadBatch batch = new();
+
+                foreach (byte[] payload in payloads)
+                {
+                    batch.AddBytes(payload, UploadUsage);
+                }
+
+                VulkanBuffer[] uploaded;
+
+                if (mode == 0)
+                {
+                    uploaded = batch.Submit(
+                        instance,
+                        device,
+                        physicalDevice);
+                }
+
+                else
+                {
+                    using VulkanBufferUploadBatchTicket ticket =
+                        batch.SubmitAsync(
+                            instance,
+                            device,
+                            physicalDevice);
+
+                    Assert.True(ticket.Wait(ulong.MaxValue));
+
+                    uploaded = ticket.TakeBuffers();
+                }
+
+                try
+                {
+                    Assert.Equal(payloads.Length, uploaded.Length);
+
+                    for (int index = 0;
+                         index < uploaded.Length;
+                         index++)
+                    {
+                        byte[] actual = Readback(
+                            instance,
+                            device,
+                            physicalDevice,
+                            uploaded[index]);
+
+                        Assert.Equal(payloads[index], actual);
+                    }
+                }
+
+                finally
+                {
+                    foreach (VulkanBuffer buffer in uploaded)
+                    {
+                        buffer.Dispose();
+                    }
+                }
+            }
+        });
+    }
 }
 
 /// <summary>

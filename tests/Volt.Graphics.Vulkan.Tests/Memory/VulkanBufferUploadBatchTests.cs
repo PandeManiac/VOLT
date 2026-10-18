@@ -247,4 +247,109 @@ public sealed class VulkanBufferUploadBatchTests
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             batch.GetCopyRegion(1));
     }
+
+    [Fact]
+    public void AddBytes_CrossesChunkBoundariesWithoutPadding()
+    {
+        VulkanBufferUploadBatch batch = new();
+
+        byte[] first = new byte[65_535];
+        byte[] second = [0xA1, 0xB2, 0xC3];
+        byte[] third = new byte[65_537];
+
+        for (int index = 0; index < first.Length; index++)
+        {
+            first[index] = unchecked((byte)(index * 17 + 11));
+        }
+
+        for (int index = 0; index < third.Length; index++)
+        {
+            third[index] = unchecked((byte)(index * 31 + 7));
+        }
+
+        byte[] expected = new byte[
+            first.Length + second.Length + third.Length];
+
+        first.CopyTo(expected, 0);
+        second.CopyTo(expected, first.Length);
+        third.CopyTo(
+            expected,
+            first.Length + second.Length);
+
+        int firstIndex = batch.AddBytes(
+            first,
+            BufferUsageFlags.StorageBufferBit);
+
+        int secondIndex = batch.AddBytes(
+            second,
+            BufferUsageFlags.StorageBufferBit);
+
+        int thirdIndex = batch.AddBytes(
+            third,
+            BufferUsageFlags.StorageBufferBit);
+
+        Array.Fill(first, (byte)0);
+        Array.Fill(second, (byte)0);
+        Array.Fill(third, (byte)0);
+
+        Assert.Equal(3, batch.UploadCount);
+        Assert.Equal((ulong)expected.Length, batch.StagingByteCount);
+
+        Assert.Equal(
+            0UL,
+            batch.GetCopyRegion(firstIndex).SrcOffset);
+
+        Assert.Equal(
+            65_535UL,
+            batch.GetCopyRegion(secondIndex).SrcOffset);
+
+        Assert.Equal(
+            65_538UL,
+            batch.GetCopyRegion(thirdIndex).SrcOffset);
+
+        Assert.Equal(expected, batch.GetStagingBytes());
+    }
+
+    [Fact]
+    public void AddBytes_LargeBatchAvoidsGeometricGrowthOverhead()
+    {
+        VulkanBufferUploadBatch batch = new();
+        byte[] payload = new byte[1024 * 1024];
+
+        for (int index = 0; index < 8; index++)
+        {
+            batch.AddBytes(
+                payload,
+                BufferUsageFlags.StorageBufferBit);
+        }
+
+        ulong totalBytes = 8UL * 1024 * 1024;
+        Assert.Equal(totalBytes, batch.StagingByteCount);
+
+        Assert.InRange(
+            batch.ReservedStagingByteCount,
+            totalBytes,
+            totalBytes + 64UL * 1024);
+    }
+
+    [Fact]
+    public void AddBytes_TinyPayloadUsesSmallInitialChunk()
+    {
+        VulkanBufferUploadBatch batch = new();
+
+        batch.AddBytes(
+            [0x42],
+            BufferUsageFlags.StorageBufferBit);
+
+        Assert.Equal(1UL, batch.StagingByteCount);
+
+        Assert.InRange(
+            batch.ReservedStagingByteCount,
+            1UL,
+            256UL);
+
+        Assert.Equal(
+            new byte[] { 0x42 },
+            batch.GetStagingBytes());
+    }
 }

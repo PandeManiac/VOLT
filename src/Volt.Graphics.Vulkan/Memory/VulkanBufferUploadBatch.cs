@@ -1,5 +1,3 @@
-
-using System.Buffers;
 using System.Runtime.InteropServices;
 using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Devices;
@@ -13,9 +11,11 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// graphics queue submission.
 /// </summary>
 /// <remarks>
-/// Application data is copied into managed staging storage when
-/// added to the batch. Each upload receives its own device-local
-/// destination buffer.
+/// Application data is copied into bounded managed staging chunks
+/// when added to the batch. Growing staging storage does not
+/// reallocate or copy previously staged payloads.
+///
+/// Each upload receives its own device-local destination buffer.
 ///
 /// Buffer copies support arbitrary positive byte counts without
 /// additional staging alignment or padding. Applications remain
@@ -45,6 +45,9 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// </remarks>
 public sealed unsafe class VulkanBufferUploadBatch
 {
+    private const int InitialStagingChunkBytes = 256;
+    private const int StagingChunkBytes = 64 * 1024;
+
     private readonly record struct UploadRequest(
         ulong StagingOffset,
         ulong ByteCount,
@@ -58,8 +61,12 @@ public sealed unsafe class VulkanBufferUploadBatch
     private static readonly Action<Vk, CommandBuffer, BatchCopyRecording>
         CopyRecorder = RecordCopies;
 
-    private readonly ArrayBufferWriter<byte> _stagingData = new();
+    private readonly List<byte[]> _stagingChunks = [];
     private readonly List<UploadRequest> _requests = [];
+
+    private int _stagingByteCount;
+    private int _nextChunkIndex;
+    private int _nextChunkOffset;
 
     private bool _submitted;
 
@@ -71,8 +78,31 @@ public sealed unsafe class VulkanBufferUploadBatch
     /// <summary>
     /// Gets the total number of staged bytes.
     /// </summary>
+
+    /// <summary>
+    /// Gets the total number of staged bytes.
+    /// </summary>
     public ulong StagingByteCount =>
-        checked((ulong)_stagingData.WrittenCount);
+        (ulong)_stagingByteCount;
+
+    /// <summary>
+    /// Gets the total managed staging capacity reserved
+    /// across all chunks.
+    /// </summary>
+    internal ulong ReservedStagingByteCount
+    {
+        get
+        {
+            ulong capacity = 0;
+
+            foreach (byte[] chunk in _stagingChunks)
+            {
+                capacity += (ulong)chunk.Length;
+            }
+
+            return capacity;
+        }
+    }
 
     /// <summary>
     /// Adds unmanaged data to the upload batch.
@@ -95,8 +125,15 @@ public sealed unsafe class VulkanBufferUploadBatch
     /// Adds raw bytes to the upload batch.
     /// </summary>
     /// <remarks>
-    /// Payloads must be nonempty. No alignment padding is inserted
-    /// between successive uploads.
+    /// Input data is copied into owned managed storage.
+    /// The caller may modify or release the original data
+    /// after this method returns.
+    ///
+    /// Staging storage grows by adding bounded chunks.
+    /// Previously staged data is never copied during growth.
+    ///
+    /// Payloads must be nonempty. Copy offsets are contiguous
+    /// regardless of internal chunk boundaries.
     /// </remarks>
     public int AddBytes(
         ReadOnlySpan<byte> data,
@@ -108,7 +145,7 @@ public sealed unsafe class VulkanBufferUploadBatch
             checked((ulong)data.Length),
             destinationUsage);
 
-        if (data.Length > int.MaxValue - _stagingData.WrittenCount)
+        if (data.Length > int.MaxValue - _stagingByteCount)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(data),
@@ -116,21 +153,56 @@ public sealed unsafe class VulkanBufferUploadBatch
         }
 
         int index = _requests.Count;
+        int originalByteCount = _stagingByteCount;
 
-        ulong offset = checked(
-            (ulong)_stagingData.WrittenCount);
+        int chunkIndex = _nextChunkIndex;
+        int chunkOffset = _nextChunkOffset;
 
-        Span<byte> destination =
-            _stagingData.GetSpan(data.Length);
+        ReadOnlySpan<byte> remaining = data;
 
-        data.CopyTo(destination);
+        while (!remaining.IsEmpty)
+        {
+            if (chunkIndex == _stagingChunks.Count)
+            {
+                int capacity = _stagingChunks.Count == 0
+                    ? Math.Min(
+                        StagingChunkBytes,
+                        Math.Max(
+                            InitialStagingChunkBytes,
+                            remaining.Length))
+                    : StagingChunkBytes;
 
-        _stagingData.Advance(data.Length);
+                _stagingChunks.Add(
+                    new byte[capacity]);
+            }
+
+            byte[] chunk = _stagingChunks[chunkIndex];
+
+            int count = Math.Min(
+                remaining.Length,
+                chunk.Length - chunkOffset);
+
+            remaining[..count].CopyTo(
+                chunk.AsSpan(chunkOffset, count));
+
+            remaining = remaining[count..];
+            chunkOffset += count;
+
+            if (chunkOffset == chunk.Length)
+            {
+                chunkIndex++;
+                chunkOffset = 0;
+            }
+        }
 
         _requests.Add(new UploadRequest(
-            offset,
-            checked((ulong)data.Length),
+            (ulong)originalByteCount,
+            (ulong)data.Length,
             destinationUsage));
+
+        _stagingByteCount = originalByteCount + data.Length;
+        _nextChunkIndex = chunkIndex;
+        _nextChunkOffset = chunkOffset;
 
         return index;
     }
@@ -281,7 +353,10 @@ public sealed unsafe class VulkanBufferUploadBatch
                 MemoryPropertyFlags.HostVisibleBit,
                 MemoryPropertyFlags.HostCoherentBit);
 
-            staging.Write(_stagingData.WrittenSpan);
+            staging.WriteSegments(
+                _stagingChunks,
+                _stagingByteCount);
+
             destinations = new VulkanBuffer[_requests.Count];
 
             for (int index = 0; index < _requests.Count; index++)
@@ -412,12 +487,32 @@ public sealed unsafe class VulkanBufferUploadBatch
     }
 
     /// <summary>
-    /// Returns a copy of the accumulated staging payload.
+    /// Returns a contiguous copy of the accumulated payload.
     /// Used by device-independent tests.
     /// </summary>
     internal byte[] GetStagingBytes()
     {
-        return _stagingData.WrittenSpan.ToArray();
+        byte[] result = new byte[_stagingByteCount];
+        int offset = 0;
+
+        foreach (byte[] chunk in _stagingChunks)
+        {
+            int count = Math.Min(
+                chunk.Length,
+                result.Length - offset);
+
+            if (count == 0)
+            {
+                break;
+            }
+
+            chunk.AsSpan(0, count).CopyTo(
+                result.AsSpan(offset, count));
+
+            offset += count;
+        }
+
+        return result;
     }
 
     private VulkanBuffer[] SubmitUsingStaging(
@@ -431,7 +526,9 @@ public sealed unsafe class VulkanBufferUploadBatch
 
         try
         {
-            staging.Write(_stagingData.WrittenSpan);
+            staging.WriteSegments(
+                _stagingChunks,
+                _stagingByteCount);
 
             foreach (UploadRequest request in _requests)
             {

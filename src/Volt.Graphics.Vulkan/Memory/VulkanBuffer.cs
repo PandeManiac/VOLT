@@ -321,6 +321,141 @@ public sealed unsafe class VulkanBuffer : IDisposable
     }
 
     /// <summary>
+    /// Copies multiple managed byte-array segments into one
+    /// contiguous host-visible Vulkan allocation.
+    /// </summary>
+    /// <remarks>
+    /// Segments are copied in order, without padding.
+    /// Only the requested number of bytes is written.
+    ///
+    /// The allocation is mapped once for the entire operation.
+    /// Non-coherent memory is flushed once after copying.
+    ///
+    /// This method does not provide GPU synchronization.
+    /// </remarks>
+    internal void WriteSegments(
+        IReadOnlyList<byte[]> segments,
+        int byteCount)
+    {
+        ArgumentNullException.ThrowIfNull(segments);
+        ThrowIfDisposed();
+
+        if ((MemoryProperties
+            & MemoryPropertyFlags.HostVisibleBit) == 0)
+        {
+            throw new InvalidOperationException(
+                "This buffer is not host-visible.");
+        }
+
+        if (byteCount <= 0 ||
+            (ulong)byteCount > Size)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(byteCount),
+                "The segment upload exceeds the buffer size.");
+        }
+
+        int availableBytes = 0;
+
+        foreach (byte[] segment in segments)
+        {
+            ArgumentNullException.ThrowIfNull(segment);
+
+            availableBytes += Math.Min(
+                segment.Length,
+                byteCount - availableBytes);
+
+            if (availableBytes == byteCount)
+            {
+                break;
+            }
+        }
+
+        if (availableBytes != byteCount)
+        {
+            throw new ArgumentException(
+                "The supplied segments do not contain " +
+                "the requested number of bytes.",
+                nameof(segments));
+        }
+
+        Device deviceHandle = _device.Handle;
+        void* mappedMemory = null;
+
+        EnsureSuccess(
+            _api.MapMemory(
+                deviceHandle,
+                _memory,
+                0,
+                Vk.WholeSize,
+                MemoryMapFlags.None,
+                &mappedMemory),
+            "Map Vulkan buffer memory");
+
+        try
+        {
+            if (mappedMemory == null)
+            {
+                throw new InvalidOperationException(
+                    "Vulkan mapped memory to a null pointer.");
+            }
+
+            byte* destination = (byte*)mappedMemory;
+            int written = 0;
+
+            foreach (byte[] segment in segments)
+            {
+                int count = Math.Min(
+                    segment.Length,
+                    byteCount - written);
+
+                if (count == 0)
+                {
+                    if (written == byteCount)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                segment.AsSpan(0, count).CopyTo(
+                    new Span<byte>(
+                        destination + written,
+                        count));
+
+                written += count;
+            }
+
+            if ((MemoryProperties
+                & MemoryPropertyFlags.HostCoherentBit) == 0)
+            {
+                MappedMemoryRange range = new()
+                {
+                    SType = StructureType.MappedMemoryRange,
+                    Memory = _memory,
+                    Offset = 0,
+                    Size = Vk.WholeSize
+                };
+
+                EnsureSuccess(
+                    _api.FlushMappedMemoryRanges(
+                        deviceHandle,
+                        1,
+                        in range),
+                    "Flush Vulkan buffer memory");
+            }
+        }
+
+        finally
+        {
+            _api.UnmapMemory(
+                deviceHandle,
+                _memory);
+        }
+    }
+
+    /// <summary>
     /// Copies bytes from host-visible Vulkan memory into a span.
     /// </summary>
     /// <remarks>
