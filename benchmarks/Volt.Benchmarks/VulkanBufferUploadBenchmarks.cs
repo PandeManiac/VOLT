@@ -265,9 +265,7 @@ public class VulkanBufferUploadBenchmarks
         }
 
         VulkanBuffer[] destinations = ticket.TakeBuffers();
-
         DisposeDestinations(destinations);
-
         return _totalBytes;
     }
 
@@ -306,6 +304,86 @@ public class VulkanBufferUploadBenchmarks
         DisposeDestinations(destinations);
 
         return _totalBytes;
+    }
+
+    /// <summary>
+    /// Measures creation and destruction of all device-local
+    /// destination buffers without staging or GPU submission.
+    /// </summary>
+    /// <remarks>
+    /// All buffers remain allocated until the final buffer has
+    /// been created, matching the peak destination allocation
+    /// count of a completed upload batch.
+    /// </remarks>
+    [Benchmark]
+    public ulong DestinationAllocationsOnly()
+    {
+        VulkanInstance instance = _instance!;
+        VulkanLogicalDevice device = _device!;
+
+        VulkanBuffer?[] destinations =
+            new VulkanBuffer?[_payloads.Length];
+
+        try
+        {
+            for (int index = 0; index < _payloads.Length; index++)
+            {
+                destinations[index] = new VulkanBuffer(
+                    instance,
+                    device,
+                    _physicalDevice,
+                    (ulong)_payloads[index].Length,
+                    DestinationUsage |
+                        BufferUsageFlags.TransferDstBit,
+                    MemoryPropertyFlags.DeviceLocalBit);
+            }
+        }
+
+        finally
+        {
+            foreach (VulkanBuffer? destination in destinations)
+            {
+                destination?.Dispose();
+            }
+        }
+
+        return _totalBytes;
+    }
+
+    /// <summary>
+    /// Measures creating and destroying one host-visible
+    /// Vulkan staging buffer.
+    /// </summary>
+    /// <remarks>
+    /// Does not copy payload data, record commands, or submit
+    /// GPU work.
+    /// </remarks>
+    [Benchmark]
+    public ulong StagingAllocationOnly()
+    {
+        using VulkanBuffer staging = new(
+            _instance!,
+            _device!,
+            _physicalDevice,
+            _totalBytes,
+            BufferUsageFlags.TransferSrcBit,
+            MemoryPropertyFlags.HostVisibleBit,
+            MemoryPropertyFlags.HostCoherentBit);
+
+        return staging.Size;
+    }
+
+    /// <summary>
+    /// Measures managed upload-batch construction without
+    /// Vulkan allocation or GPU submission.
+    /// </summary>
+    [Benchmark]
+    public ulong ManagedBatchPreparationOnly()
+    {
+        VulkanBufferUploadBatch batch = CreateBatch();
+        ulong byteCount = batch.StagingByteCount;
+        GC.KeepAlive(batch);
+        return byteCount;
     }
 
     private VulkanBufferUploadBatch CreateBatch()

@@ -121,21 +121,8 @@ public sealed unsafe class VulkanBuffer : IDisposable
                     deviceHandle,
                     buffer);
 
-            PhysicalDeviceMemoryProperties nativeProperties =
-                _api.GetPhysicalDeviceMemoryProperties(
-                    physicalDevice);
-
-            int memoryTypeCount =
-                checked((int)nativeProperties.MemoryTypeCount);
-
-            Span<MemoryPropertyFlags> availableProperties =
-                stackalloc MemoryPropertyFlags[memoryTypeCount];
-
-            for (int index = 0; index < memoryTypeCount; index++)
-            {
-                availableProperties[index] =
-                    nativeProperties.MemoryTypes[index].PropertyFlags;
-            }
+            ReadOnlySpan<MemoryPropertyFlags> availableProperties =
+                device.GetMemoryTypeFlags(physicalDevice);
 
             int memoryIndex = SelectMemoryType(
                 requirements.MemoryTypeBits,

@@ -31,11 +31,13 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
 
     private readonly Vk _api;
     private readonly VulkanInstance _instance;
+    private readonly PhysicalDevice _physicalDevice;
+    private readonly MemoryPropertyFlags[] _memoryTypeFlags;
     private readonly VulkanDeferredResourceReleases _retirement = new();
+    private readonly object _ticketGate = new();
 
     private Device _handle;
     private Queue _graphicsQueue;
-    private readonly object _ticketGate = new();
     private int _activeTransferTickets;
     private bool _disposed;
 
@@ -98,7 +100,6 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
         }
 
         string[] extensions = requiredExtensions?.ToArray() ?? [];
-
         ValidateExtensionNames(extensions);
 
         _api = instance.Api;
@@ -115,6 +116,25 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
             _api,
             physicalDevice,
             extensions);
+
+        PhysicalDeviceMemoryProperties memoryProperties =
+            _api.GetPhysicalDeviceMemoryProperties(
+                physicalDevice);
+
+        int memoryTypeCount =
+            checked((int)memoryProperties.MemoryTypeCount);
+
+        MemoryPropertyFlags[] memoryTypeFlags =
+            new MemoryPropertyFlags[memoryTypeCount];
+
+        for (int index = 0; index < memoryTypeCount; index++)
+        {
+            memoryTypeFlags[index] =
+                memoryProperties.MemoryTypes[index].PropertyFlags;
+        }
+
+        _physicalDevice = physicalDevice;
+        _memoryTypeFlags = memoryTypeFlags;
 
         Device createdDevice = CreateNativeDevice(
             _api,
@@ -220,6 +240,34 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
         _disposed = true;
 
         GC.KeepAlive(_instance);
+    }
+
+    /// <summary>
+    /// Gets cached memory-type properties for this logical
+    /// device's physical device.
+    /// </summary>
+    /// <remarks>
+    /// Memory-type properties are cached during construction.
+    /// The returned span does not allocate and must not be
+    /// retained beyond the logical device's lifetime.
+    ///
+    /// Resource-specific memory compatibility masks must still
+    /// be applied when selecting an allocation memory type.
+    /// </remarks>
+    internal ReadOnlySpan<MemoryPropertyFlags> GetMemoryTypeFlags(
+        PhysicalDevice physicalDevice)
+    {
+        ThrowIfDisposed();
+
+        if (physicalDevice.Handle != _physicalDevice.Handle)
+        {
+            throw new ArgumentException(
+                "The physical device does not belong to " +
+                "this logical device.",
+                nameof(physicalDevice));
+        }
+
+        return _memoryTypeFlags;
     }
 
     /// <summary>

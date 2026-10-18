@@ -1011,6 +1011,36 @@ public sealed class VulkanBufferUploadIntegrationTests
             }
         });
     }
+
+    [VulkanIntegrationFact]
+    public void BufferMemoryTypeCache_MatchesPhysicalDevice()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            PhysicalDeviceMemoryProperties nativeProperties =
+                instance.Api.GetPhysicalDeviceMemoryProperties(
+                    physicalDevice);
+
+            MemoryPropertyFlags[] cached =
+                device.GetMemoryTypeFlags(physicalDevice).ToArray();
+
+            Assert.Equal(
+                checked((int)nativeProperties.MemoryTypeCount),
+                cached.Length);
+
+            for (int index = 0; index < cached.Length; index++)
+            {
+                Assert.Equal(
+                    nativeProperties.MemoryTypes[index].PropertyFlags,
+                    cached[index]);
+            }
+
+            Assert.Throws<ArgumentException>(() =>
+            {
+                device.GetMemoryTypeFlags(default);
+            });
+        });
+    }
 }
 
 /// <summary>
