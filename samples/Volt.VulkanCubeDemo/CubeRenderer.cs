@@ -28,18 +28,22 @@ internal sealed unsafe class CubeRenderer : IDisposable
         public float Aspect;
     }
 
+    private struct DepthAttachment
+    {
+        public Image Image;
+        public DeviceMemory Memory;
+        public ImageView View;
+    }
+
     private readonly VulkanLogicalDevice _device;
     private readonly Vk _api;
     private readonly Framebuffer[] _framebuffers;
+    private readonly DepthAttachment[] _depthAttachments;
     private readonly CubeFaceStorage _faces;
 
     private RenderPass _renderPass;
     private PipelineLayout _layout;
     private Pipeline _pipeline;
-
-    private Image _depthImage;
-    private DeviceMemory _depthMemory;
-    private ImageView _depthView;
 
     private bool _disposed;
 
@@ -88,9 +92,8 @@ internal sealed unsafe class CubeRenderer : IDisposable
             api,
             physicalDevice);
 
-        Image depthImage = default;
-        DeviceMemory depthMemory = default;
-        ImageView depthView = default;
+        DepthAttachment[] depthAttachments =
+            new DepthAttachment[imageViews.Count];
 
         RenderPass renderPass = default;
         PipelineLayout layout = default;
@@ -102,31 +105,39 @@ internal sealed unsafe class CubeRenderer : IDisposable
 
         try
         {
-            depthImage = CreateDepthImage(
-                api,
-                deviceHandle,
-                swapchain.Extent,
-                depthFormat);
+            for (int index = 0;
+                 index < depthAttachments.Length;
+                 index++)
+            {
+                ref DepthAttachment depth =
+                    ref depthAttachments[index];
 
-            depthMemory = AllocateDepthMemory(
-                api,
-                physicalDevice,
-                deviceHandle,
-                depthImage);
-
-            EnsureSuccess(
-                api.BindImageMemory(
+                depth.Image = CreateDepthImage(
+                    api,
                     deviceHandle,
-                    depthImage,
-                    depthMemory,
-                    0),
-                "Bind depth image memory");
+                    swapchain.Extent,
+                    depthFormat);
 
-            depthView = CreateDepthView(
-                api,
-                deviceHandle,
-                depthImage,
-                depthFormat);
+                depth.Memory = AllocateDepthMemory(
+                    api,
+                    physicalDevice,
+                    deviceHandle,
+                    depth.Image);
+
+                EnsureSuccess(
+                    api.BindImageMemory(
+                        deviceHandle,
+                        depth.Image,
+                        depth.Memory,
+                        0),
+                    "Bind depth image memory");
+
+                depth.View = CreateDepthView(
+                    api,
+                    deviceHandle,
+                    depth.Image,
+                    depthFormat);
+            }
 
             renderPass = CreateRenderPass(
                 api,
@@ -160,7 +171,7 @@ internal sealed unsafe class CubeRenderer : IDisposable
                     deviceHandle,
                     renderPass,
                     imageViews.GetView(index),
-                    depthView,
+                    depthAttachments[index].View,
                     swapchain.Extent);
             }
         }
@@ -174,9 +185,7 @@ internal sealed unsafe class CubeRenderer : IDisposable
                 pipeline,
                 layout,
                 renderPass,
-                depthView,
-                depthImage,
-                depthMemory);
+                depthAttachments);
 
             faces?.Dispose();
             throw;
@@ -193,9 +202,7 @@ internal sealed unsafe class CubeRenderer : IDisposable
         _layout = layout;
         _pipeline = pipeline;
 
-        _depthImage = depthImage;
-        _depthMemory = depthMemory;
-        _depthView = depthView;
+        _depthAttachments = depthAttachments;
 
         Extent = swapchain.Extent;
         DepthFormat = depthFormat;
@@ -314,19 +321,13 @@ internal sealed unsafe class CubeRenderer : IDisposable
             _pipeline,
             _layout,
             _renderPass,
-            _depthView,
-            _depthImage,
-            _depthMemory);
+            _depthAttachments);
 
         _faces.Dispose();
 
         _pipeline = default;
         _layout = default;
         _renderPass = default;
-
-        _depthImage = default;
-        _depthMemory = default;
-        _depthView = default;
 
         _disposed = true;
     }
@@ -938,11 +939,11 @@ internal sealed unsafe class CubeRenderer : IDisposable
         Pipeline pipeline,
         PipelineLayout layout,
         RenderPass renderPass,
-        ImageView depthView,
-        Image depthImage,
-        DeviceMemory depthMemory)
+        DepthAttachment[] depthAttachments)
     {
-        for (int index = framebuffers.Length - 1; index >= 0; index--)
+        for (int index = framebuffers.Length - 1;
+             index >= 0;
+             index--)
         {
             if (framebuffers[index].Handle != 0)
             {
@@ -950,6 +951,8 @@ internal sealed unsafe class CubeRenderer : IDisposable
                     device,
                     framebuffers[index],
                     null);
+
+                framebuffers[index] = default;
             }
         }
 
@@ -968,19 +971,37 @@ internal sealed unsafe class CubeRenderer : IDisposable
             api.DestroyRenderPass(device, renderPass, null);
         }
 
-        if (depthView.Handle != 0)
+        for (int index = depthAttachments.Length - 1;
+             index >= 0;
+             index--)
         {
-            api.DestroyImageView(device, depthView, null);
-        }
+            DepthAttachment depth = depthAttachments[index];
 
-        if (depthImage.Handle != 0)
-        {
-            api.DestroyImage(device, depthImage, null);
-        }
+            if (depth.View.Handle != 0)
+            {
+                api.DestroyImageView(
+                    device,
+                    depth.View,
+                    null);
+            }
 
-        if (depthMemory.Handle != 0)
-        {
-            api.FreeMemory(device, depthMemory, null);
+            if (depth.Image.Handle != 0)
+            {
+                api.DestroyImage(
+                    device,
+                    depth.Image,
+                    null);
+            }
+
+            if (depth.Memory.Handle != 0)
+            {
+                api.FreeMemory(
+                    device,
+                    depth.Memory,
+                    null);
+            }
+
+            depthAttachments[index] = default;
         }
     }
 

@@ -18,6 +18,9 @@ batched device-local GPU uploads.
 - Compact, application-defined geometry descriptors
 - Device-local GPU buffers
 - Multiple buffer uploads in one transfer submission
+- Two independently synchronized frames in flight
+- Per-swapchain-image depth attachments
+- Per-image graphics submission tracking
 
 ## Vertex Pulling
 
@@ -192,21 +195,25 @@ Close the window to exit.
 
 ## Limitations
 
-This is a focused graphics sample, not VOLT's final renderer.
+This is a focused graphics sample intended to demonstrate VOLT's Vulkan infrastructure, not a general-purpose renderer.
 
-- Only one graphics submission is in flight.
-- The depth attachment is shared between framebuffers.
+### Windowing and Presentation
+
 - The window is intentionally non-resizable.
 - Swapchain recreation is not yet supported.
-- Upload batches are synchronous and one-shot.
-- Each destination buffer has a dedicated Vulkan allocation.
-- Uploads are staged in managed memory before submission.
-- Reusable staging storage is optional and synchronous.
-- No persistent asynchronous staging ring exists.
-- There is no asynchronous transfer scheduling.
-- No dedicated transfer queue is used.
+
+### GPU Uploads and Transfers
+
+- The sample uses synchronous, one-shot upload batches.
+- Upload payloads originate in managed memory and are copied into Vulkan staging memory before submission.
+- Reusable staging storage is optional and supports synchronous uploads only.
+- The sample does not use a persistent asynchronous staging ring.
+- The sample does not schedule asynchronous transfers or use a dedicated transfer queue.
+
+### Rendering and Scene Management
+
 - Buffer device addresses are not required.
-- No engine-defined mesh or material system is required.
+- No engine-defined mesh or material system is used.
 - The sample does not render ECS-managed scene objects.
 
 For frequently changing geometry, future improvements should

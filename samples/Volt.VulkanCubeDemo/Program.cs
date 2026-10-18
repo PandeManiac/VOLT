@@ -23,6 +23,8 @@ internal static class Program
     private const ulong FenceTimeoutNanoseconds = 5_000_000_000UL;
     private const ulong AcquireTimeoutNanoseconds = 100_000_000UL;
 
+    private const int MaxFramesInFlight = 2;
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -166,17 +168,21 @@ internal static class Program
             instance,
             device);
 
+        int framesInFlight = Math.Min(
+            MaxFramesInFlight,
+            checked((int)swapchain.ImageCount));
+
         using VulkanCommandBuffers commandBuffers = new(
             instance,
             device,
             commandPool,
-            1);
+            framesInFlight);
 
         using VulkanFrameSynchronization synchronization = new(
             instance,
             device,
-            framesInFlight: 1,
-            swapchainImageCount: checked((int)swapchain.ImageCount));
+            framesInFlight,
+            checked((int)swapchain.ImageCount));
 
         string shaderDirectory = Path.Combine(
             AppContext.BaseDirectory,
@@ -194,6 +200,7 @@ internal static class Program
         Console.WriteLine($"Swapchain: {swapchain.Extent.Width}x{swapchain.Extent.Height}");
         Console.WriteLine($"Swapchain images: {swapchain.ImageCount}");
         Console.WriteLine($"Depth format: {renderer.DepthFormat}");
+        Console.WriteLine($"Frames in flight: {framesInFlight}");
         Console.WriteLine("Rendering cube. Close the window to exit.");
 
         try
@@ -203,7 +210,7 @@ internal static class Program
                 instance,
                 device,
                 swapchain,
-                commandBuffers.GetBuffer(0),
+                commandBuffers,
                 synchronization,
                 renderer);
         }
@@ -221,19 +228,17 @@ internal static class Program
         VulkanInstance instance,
         VulkanLogicalDevice device,
         VulkanSwapchain swapchain,
-        CommandBuffer commandBuffer,
+        VulkanCommandBuffers commandBuffers,
         VulkanFrameSynchronization synchronization,
         CubeRenderer renderer)
     {
-        Silk.NET.Vulkan.Semaphore imageAvailable =
-            synchronization.GetImageAvailableSemaphore(0);
-
-        Fence frameFence =
-            synchronization.GetInFlightFence(0);
+        Fence[] imageInFlightFences =
+            new Fence[checked((int)swapchain.ImageCount)];
 
         Stopwatch clock = Stopwatch.StartNew();
         Stopwatch statisticsClock = Stopwatch.StartNew();
 
+        int frameIndex = 0;
         int framesSinceReport = 0;
         long totalFrames = 0;
 
@@ -271,11 +276,18 @@ internal static class Program
                 break;
             }
 
+            Fence frameFence =
+                synchronization.GetInFlightFence(frameIndex);
+
             VulkanQueueSubmission.WaitForFence(
                 instance,
                 device,
                 frameFence,
                 FenceTimeoutNanoseconds);
+
+            Silk.NET.Vulkan.Semaphore imageAvailable =
+                synchronization.GetImageAvailableSemaphore(
+                    frameIndex);
 
             VulkanImageAcquisitionResult acquisition =
                 VulkanSwapchainAcquisition.Acquire(
@@ -289,7 +301,9 @@ internal static class Program
             {
                 if (acquisition.RequiresRecreation)
                 {
-                    Console.WriteLine("Swapchain is out of date. Exiting.");
+                    Console.WriteLine(
+                        "Swapchain is out of date. Exiting.");
+
                     break;
                 }
 
@@ -301,6 +315,22 @@ internal static class Program
                     "Acquisition returned no image index.");
 
             int framebufferIndex = checked((int)imageIndex);
+
+            Fence imageFence =
+                imageInFlightFences[framebufferIndex];
+
+            if (imageFence.Handle != 0 &&
+                imageFence.Handle != frameFence.Handle)
+            {
+                VulkanQueueSubmission.WaitForFence(
+                    instance,
+                    device,
+                    imageFence,
+                    FenceTimeoutNanoseconds);
+            }
+
+            CommandBuffer commandBuffer =
+                commandBuffers.GetBuffer(frameIndex);
 
             Result resetResult = instance.Api.ResetCommandBuffer(
                 commandBuffer,
@@ -325,14 +355,14 @@ internal static class Program
                 instance,
                 commandBuffer);
 
+            Silk.NET.Vulkan.Semaphore renderFinished =
+                synchronization.GetRenderFinishedSemaphore(
+                    framebufferIndex);
+
             VulkanQueueSubmission.ResetFence(
                 instance,
                 device,
                 frameFence);
-
-            Silk.NET.Vulkan.Semaphore renderFinished =
-                synchronization.GetRenderFinishedSemaphore(
-                    framebufferIndex);
 
             VulkanQueueSubmission.Submit(
                 instance,
@@ -342,6 +372,9 @@ internal static class Program
                 PipelineStageFlags.AllCommandsBit,
                 renderFinished,
                 frameFence);
+
+            imageInFlightFences[framebufferIndex] =
+                frameFence;
 
             VulkanSwapchainPresentationResult presentation =
                 VulkanSwapchainPresentation.Present(
@@ -361,6 +394,9 @@ internal static class Program
 
                 break;
             }
+
+            frameIndex =
+                (frameIndex + 1) % synchronization.FramesInFlight;
 
             totalFrames++;
             framesSinceReport++;
