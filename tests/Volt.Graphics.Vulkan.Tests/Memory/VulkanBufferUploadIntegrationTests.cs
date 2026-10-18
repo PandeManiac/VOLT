@@ -467,6 +467,184 @@ public sealed class VulkanBufferUploadIntegrationTests
         });
     }
 
+    [VulkanIntegrationFact]
+    public void UploadAsync_RoundTripsAfterSourceModification()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            byte[] source = new byte[257];
+
+            for (int index = 0; index < source.Length; index++)
+            {
+                source[index] = unchecked(
+                    (byte)(index * 37 + 11));
+            }
+
+            byte[] expected = source.ToArray();
+
+            using VulkanBufferUploadTicket ticket =
+                VulkanBufferTransfer.UploadDeviceLocalAsync<byte>(
+                    instance,
+                    device,
+                    physicalDevice,
+                    source,
+                    UploadUsage);
+
+            Array.Fill(source, (byte)0);
+            bool completed = ticket.Wait(0);
+
+            if (!completed)
+            {
+                Assert.True(ticket.Wait(ulong.MaxValue));
+            }
+
+            Assert.True(ticket.IsCompleted);
+
+            using VulkanBuffer uploaded =
+                ticket.TakeBuffer();
+
+            Assert.Throws<ObjectDisposedException>(
+                () => _ = ticket.IsCompleted);
+
+            byte[] actual = Readback(
+                instance,
+                device,
+                physicalDevice,
+                uploaded);
+
+            Assert.Equal(expected, actual);
+        });
+    }
+
+    [VulkanIntegrationFact]
+    public void UploadAsync_MultipleInFlightUploadsPreserveData()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            List<(byte[] Expected, VulkanBufferUploadTicket Ticket)>
+                uploads = [];
+
+            try
+            {
+                for (int uploadIndex = 0;
+                     uploadIndex < 16;
+                     uploadIndex++)
+                {
+                    int byteCount = uploadIndex * 7 + 1;
+                    byte[] payload = new byte[byteCount];
+
+                    for (int index = 0;
+                         index < payload.Length;
+                         index++)
+                    {
+                        payload[index] = unchecked(
+                            (byte)(uploadIndex * 19 + index * 13));
+                    }
+
+                    VulkanBufferUploadTicket ticket =
+                        VulkanBufferTransfer
+                            .UploadDeviceLocalAsync<byte>(
+                                instance,
+                                device,
+                                physicalDevice,
+                                payload,
+                                UploadUsage);
+
+                    uploads.Add((
+                        payload.ToArray(),
+                        ticket));
+                }
+
+                foreach (var upload in uploads)
+                {
+                    Assert.True(
+                        upload.Ticket.Wait(ulong.MaxValue));
+                }
+
+                foreach (var upload in uploads)
+                {
+                    using VulkanBuffer buffer =
+                        upload.Ticket.TakeBuffer();
+
+                    byte[] actual = Readback(
+                        instance,
+                        device,
+                        physicalDevice,
+                        buffer);
+
+                    Assert.Equal(upload.Expected, actual);
+                }
+            }
+
+            finally
+            {
+                foreach (var upload in uploads)
+                {
+                    upload.Ticket.Dispose();
+                }
+            }
+        });
+    }
+
+    [VulkanIntegrationFact]
+    public void UploadAsync_EarlyDisposalKeepsDeviceUsable()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            byte[] firstPayload = [1, 2, 3, 4, 5];
+
+            VulkanBufferUploadTicket first =
+                VulkanBufferTransfer.UploadDeviceLocalAsync<byte>(
+                    instance,
+                    device,
+                    physicalDevice,
+                    firstPayload,
+                    UploadUsage);
+
+            try
+            {
+                Assert.Throws<InvalidOperationException>(
+                    device.Dispose);
+            }
+
+            finally
+            {
+                first.Dispose();
+            }
+
+            Assert.Throws<ObjectDisposedException>(
+                () => first.Wait(0));
+
+            device.WaitIdle();
+
+            byte[] secondPayload =
+            [
+                0x10, 0x20, 0x30, 0x40,
+                0x50, 0x60, 0x70
+            ];
+
+            using VulkanBufferUploadTicket second =
+                VulkanBufferTransfer.UploadDeviceLocalAsync<byte>(
+                    instance,
+                    device,
+                    physicalDevice,
+                    secondPayload,
+                    UploadUsage);
+
+            Assert.True(second.Wait(ulong.MaxValue));
+
+            using VulkanBuffer uploaded =
+                second.TakeBuffer();
+
+            byte[] actual = Readback(
+                instance,
+                device,
+                physicalDevice,
+                uploaded);
+
+            Assert.Equal(secondPayload, actual);
+        });
+    }
 }
 
 /// <summary>

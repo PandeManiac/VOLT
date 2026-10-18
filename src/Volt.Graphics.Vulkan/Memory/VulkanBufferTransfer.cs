@@ -104,6 +104,106 @@ public static unsafe class VulkanBufferTransfer
     }
 
     /// <summary>
+    /// Submits an asynchronous upload into a newly allocated
+    /// device-local Vulkan buffer.
+    /// </summary>
+    /// <returns>
+    /// A ticket that owns staging and destination resources
+    /// until GPU completion or disposal.
+    /// </returns>
+    /// <remarks>
+    /// The input span may be reused after this method returns.
+    /// GPU completion is not awaited during successful submission.
+    ///
+    /// The graphics queue requires external host synchronization.
+    /// </remarks>
+    public static VulkanBufferUploadTicket UploadDeviceLocalAsync<T>(
+        VulkanInstance instance,
+        VulkanLogicalDevice device,
+        PhysicalDevice physicalDevice,
+        ReadOnlySpan<T> values,
+        BufferUsageFlags destinationUsage)
+        where T : unmanaged
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        ArgumentNullException.ThrowIfNull(device);
+
+        device.EnsureTransferAvailable();
+
+        ulong size = checked(
+            (ulong)values.Length * (ulong)sizeof(T));
+
+        ValidateUpload(size, destinationUsage);
+
+        VulkanBuffer? staging = null;
+        VulkanBuffer? destination = null;
+        VulkanBufferCopyTicket? copyTicket = null;
+
+        try
+        {
+            staging = new VulkanBuffer(
+                instance,
+                device,
+                physicalDevice,
+                size,
+                BufferUsageFlags.TransferSrcBit,
+                MemoryPropertyFlags.HostVisibleBit,
+                MemoryPropertyFlags.HostCoherentBit);
+
+            staging.Write(values);
+
+            destination = new VulkanBuffer(
+                instance,
+                device,
+                physicalDevice,
+                size,
+                destinationUsage | BufferUsageFlags.TransferDstBit,
+                MemoryPropertyFlags.DeviceLocalBit);
+
+            copyTicket = CopyAsync(
+                instance,
+                device,
+                staging,
+                destination,
+                size);
+
+            VulkanBufferUploadTicket uploadTicket = new(
+                copyTicket,
+                staging,
+                destination);
+
+            copyTicket = null;
+            staging = null;
+            destination = null;
+
+            return uploadTicket;
+        }
+
+        catch
+        {
+            try
+            {
+                copyTicket?.Dispose();
+            }
+
+            finally
+            {
+                try
+                {
+                    destination?.Dispose();
+                }
+
+                finally
+                {
+                    staging?.Dispose();
+                }
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Copies bytes between two existing Vulkan buffers.
     /// </summary>
     /// <remarks>
