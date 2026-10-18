@@ -317,6 +317,7 @@ public sealed unsafe class VulkanBufferUploadBatch
         }
     }
 
+
     private void ValidateSubmission(
         VulkanInstance instance,
         VulkanLogicalDevice device)
@@ -331,7 +332,10 @@ public sealed unsafe class VulkanBufferUploadBatch
             throw new InvalidOperationException(
                 "Cannot submit an empty upload batch.");
         }
+
+        device.EnsureTransferAvailable();
     }
+
 
     private void ExecuteCopies(
         VulkanInstance instance,

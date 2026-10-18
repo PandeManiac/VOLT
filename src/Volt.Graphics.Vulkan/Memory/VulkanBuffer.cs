@@ -16,8 +16,11 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// Host-visible allocations support direct writes and reads.
 /// GPU-only allocations require an external transfer mechanism.
 ///
-/// This class does not track pending GPU accesses. Callers must
+/// This class does not track individual GPU accesses. Callers must
 /// synchronize uploads, reads, and destruction with GPU execution.
+///
+/// If the logical device has unresolved transfer execution,
+/// native destruction is deferred until it is safe.
 /// </remarks>
 public sealed unsafe class VulkanBuffer : IDisposable
 {
@@ -292,9 +295,6 @@ public sealed unsafe class VulkanBuffer : IDisposable
             if ((MemoryProperties &
                 MemoryPropertyFlags.HostCoherentBit) == 0)
             {
-                // Flushing the entire mapped allocation avoids
-                // nonCoherentAtomSize alignment problems for
-                // partial writes.
                 MappedMemoryRange range = new()
                 {
                     SType = StructureType.MappedMemoryRange,
@@ -426,6 +426,13 @@ public sealed unsafe class VulkanBuffer : IDisposable
         }
     }
 
+    /// <summary>
+    /// Releases the owned Vulkan buffer and allocation.
+    /// </summary>
+    /// <remarks>
+    /// Native destruction may be deferred if a previous transfer
+    /// has unresolved execution on the associated logical device.
+    /// </remarks>
     public void Dispose()
     {
         if (_disposed)
@@ -437,15 +444,21 @@ public sealed unsafe class VulkanBuffer : IDisposable
 
         Device deviceHandle = _device.Handle;
 
-        _api.DestroyBuffer(
-            deviceHandle,
-            _buffer,
-            null);
+        VkBuffer buffer = _buffer;
+        DeviceMemory memory = _memory;
 
-        _api.FreeMemory(
-            deviceHandle,
-            _memory,
-            null);
+        _device.ReleaseOrDefer(() =>
+        {
+            _api.DestroyBuffer(
+                deviceHandle,
+                buffer,
+                null);
+
+            _api.FreeMemory(
+                deviceHandle,
+                memory,
+                null);
+        });
 
         _buffer = default;
         _memory = default;

@@ -58,6 +58,8 @@ public static unsafe class VulkanBufferTransfer
         ArgumentNullException.ThrowIfNull(instance);
         ArgumentNullException.ThrowIfNull(device);
 
+        device.EnsureTransferAvailable();
+
         ulong size = checked(
             (ulong)values.Length * (ulong)sizeof(T));
 
