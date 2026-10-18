@@ -9,27 +9,39 @@ using VkBuffer = Silk.NET.Vulkan.Buffer;
 namespace Volt.Graphics.Vulkan.Memory;
 
 /// <summary>
-/// Collects multiple buffer uploads into a single synchronous
-/// Vulkan graphics queue submission.
+/// Collects multiple buffer uploads into a single Vulkan
+/// graphics queue submission.
 /// </summary>
 /// <remarks>
 /// Application data is copied into managed staging storage when
-/// added to the batch. Each submitted item receives its own
-/// device-local destination buffer.
+/// added to the batch. Each upload receives its own device-local
+/// destination buffer.
 ///
 /// Buffer copies support arbitrary positive byte counts without
 /// additional staging alignment or padding. Applications remain
 /// responsible for alignment required by their buffer consumers.
 ///
-/// The default submission path creates temporary staging storage.
-/// An optional VulkanStagingBufferCache enables staging allocation
-/// reuse across completed batches.
+/// Synchronous submission creates temporary staging storage and
+/// blocks until GPU execution completes. An optional
+/// VulkanStagingBufferCache enables staging allocation reuse
+/// across completed synchronous batches.
 ///
-/// This class is a one-shot upload builder. It is not thread-safe,
-/// does not synchronize unrelated GPU work, and does not
-/// implement asynchronous transfers or device-memory suballocation.
+/// Asynchronous submission creates independently owned staging
+/// storage and returns a VulkanBufferUploadBatchTicket without
+/// waiting for GPU completion. The ticket retains the staging
+/// allocation, destination buffers, and submission resources
+/// until completion or disposal.
 ///
-/// The caller owns every destination buffer returned by Submit.
+/// Synchronous Submit returns caller-owned destination buffers.
+/// Asynchronous SubmitAsync transfers destination ownership
+/// through VulkanBufferUploadBatchTicket.TakeBuffers.
+///
+/// This class is a one-shot upload builder. It is not thread-safe
+/// and does not synchronize unrelated GPU work or concurrent
+/// host-side graphics queue submissions.
+///
+/// It does not implement device-memory suballocation or
+/// asynchronous staging allocation reuse.
 /// </remarks>
 public sealed unsafe class VulkanBufferUploadBatch
 {
@@ -220,6 +232,144 @@ public sealed unsafe class VulkanBufferUploadBatch
     }
 
     /// <summary>
+    /// Submits all queued uploads through one asynchronous
+    /// Vulkan graphics-queue submission.
+    /// </summary>
+    /// <returns>
+    /// A ticket owning the shared staging buffer, submission,
+    /// and destination buffers until completion.
+    /// </returns>
+    /// <remarks>
+    /// Upload payloads are already copied into managed staging
+    /// storage when they are added to the batch.
+    ///
+    /// This method creates one host-visible staging buffer and
+    /// one device-local destination buffer per upload request.
+    ///
+    /// All buffer copies share one command buffer submission
+    /// and one completion fence.
+    ///
+    /// Successful return does not imply GPU completion.
+    ///
+    /// The batch cannot be submitted again, even if submission
+    /// fails. Graphics queue host access requires external
+    /// synchronization.
+    ///
+    /// Destination ownership passes to the caller only through
+    /// VulkanBufferUploadBatchTicket.TakeBuffers.
+    /// </remarks>
+    public VulkanBufferUploadBatchTicket SubmitAsync(
+        VulkanInstance instance,
+        VulkanLogicalDevice device,
+        PhysicalDevice physicalDevice)
+    {
+        ValidateSubmission(instance, device);
+        _submitted = true;
+
+        VulkanBuffer? staging = null;
+        VulkanBuffer[]? destinations = null;
+        VulkanBufferCopyTicket? copyTicket = null;
+
+        try
+        {
+            staging = new VulkanBuffer(
+                instance,
+                device,
+                physicalDevice,
+                StagingByteCount,
+                BufferUsageFlags.TransferSrcBit,
+                MemoryPropertyFlags.HostVisibleBit,
+                MemoryPropertyFlags.HostCoherentBit);
+
+            staging.Write(_stagingData.WrittenSpan);
+            destinations = new VulkanBuffer[_requests.Count];
+
+            for (int index = 0; index < _requests.Count; index++)
+            {
+                UploadRequest request = _requests[index];
+
+                destinations[index] = new VulkanBuffer(
+                    instance,
+                    device,
+                    physicalDevice,
+                    request.ByteCount,
+                    request.DestinationUsage |
+                        BufferUsageFlags.TransferDstBit,
+                    MemoryPropertyFlags.DeviceLocalBit);
+            }
+
+            BatchCopyRecording recording = new(
+                this,
+                staging.Handle,
+                destinations);
+
+            copyTicket = VulkanBufferCopyTicket.Submit(
+                instance,
+                device,
+                recording,
+                CopyRecorder);
+
+            return new VulkanBufferUploadBatchTicket(
+                copyTicket,
+                staging,
+                destinations);
+        }
+
+        catch (Exception submissionError)
+        {
+            List<Exception>? cleanupErrors = null;
+
+            try
+            {
+                copyTicket?.Dispose();
+            }
+
+            catch (Exception exception)
+            {
+                (cleanupErrors ??= []).Add(exception);
+            }
+
+            if (destinations is not null)
+            {
+                foreach (VulkanBuffer? destination in destinations)
+                {
+                    try
+                    {
+                        destination?.Dispose();
+                    }
+
+                    catch (Exception exception)
+                    {
+                        (cleanupErrors ??= []).Add(exception);
+                    }
+                }
+            }
+
+            try
+            {
+                staging?.Dispose();
+            }
+
+            catch (Exception exception)
+            {
+                (cleanupErrors ??= []).Add(exception);
+            }
+
+            if (cleanupErrors is not null)
+            {
+                cleanupErrors.Insert(0, submissionError);
+
+                throw new AggregateException(
+                    "Batched Vulkan upload submission and " +
+                    "resource cleanup both reported failures.",
+                    cleanupErrors);
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Validates the requested payload size and destination usage.
     /// </summary>
     internal static void ValidateUpload(
@@ -277,7 +427,7 @@ public sealed unsafe class VulkanBufferUploadBatch
         VulkanBuffer staging)
     {
         List<VulkanBuffer> destinations =
-            new(_requests.Count);
+            [with(_requests.Count)];
 
         try
         {
@@ -316,7 +466,6 @@ public sealed unsafe class VulkanBufferUploadBatch
             throw;
         }
     }
-
 
     private void ValidateSubmission(
         VulkanInstance instance,

@@ -1,4 +1,4 @@
-
+using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Memory;
 
 namespace Volt.Graphics.Vulkan.Tests.Memory;
@@ -92,5 +92,28 @@ public sealed class VulkanStagingBufferCacheTests
                 ulong.MaxValue);
 
         Assert.Equal(ulong.MaxValue, capacity);
+    }
+
+    [Fact]
+    public void SubmitAsync_NullInstanceDoesNotConsumeBatch()
+    {
+        VulkanBufferUploadBatch batch = new();
+
+        batch.AddBytes(
+            [1, 2, 3],
+            BufferUsageFlags.StorageBufferBit);
+
+        Assert.Throws<ArgumentNullException>(() =>
+            batch.SubmitAsync(
+                null!,
+                null!,
+                default));
+
+        batch.AddBytes(
+            [4, 5],
+            BufferUsageFlags.StorageBufferBit);
+
+        Assert.Equal(2, batch.UploadCount);
+        Assert.Equal(5UL, batch.StagingByteCount);
     }
 }

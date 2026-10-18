@@ -645,6 +645,286 @@ public sealed class VulkanBufferUploadIntegrationTests
             Assert.Equal(secondPayload, actual);
         });
     }
+
+    [VulkanIntegrationFact]
+    public void BatchAsync_RoundTripsOddSizedPayloads()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            byte[][] payloads =
+            [
+                [0x5A],
+                [0x10, 0x20, 0x30],
+                [0x01, 0x02, 0x03, 0x04, 0x05],
+                [0xFF, 0x00, 0x7F, 0x80, 0x11, 0x22, 0x33]
+            ];
+
+            byte[][] expected = payloads
+                .Select(payload => payload.ToArray())
+                .ToArray();
+
+            VulkanBufferUploadBatch batch = new();
+
+            foreach (byte[] payload in payloads)
+            {
+                batch.AddBytes(
+                    payload,
+                    UploadUsage);
+            }
+
+            // AddBytes owns a copy of the payload.
+            // Modifying the original arrays must not change
+            // the data eventually uploaded to the GPU.
+            foreach (byte[] payload in payloads)
+            {
+                Array.Fill(payload, (byte)0);
+            }
+
+            using VulkanBufferUploadBatchTicket ticket =
+                batch.SubmitAsync(
+                    instance,
+                    device,
+                    physicalDevice);
+
+            Assert.Equal(expected.Length, ticket.UploadCount);
+
+            Assert.Throws<InvalidOperationException>(() =>
+                batch.SubmitAsync(
+                    instance,
+                    device,
+                    physicalDevice));
+
+            Assert.Throws<InvalidOperationException>(() =>
+                batch.AddBytes(
+                    [1],
+                    UploadUsage));
+
+            if (!ticket.Wait(0))
+            {
+                Assert.True(ticket.Wait(ulong.MaxValue));
+            }
+
+            Assert.True(ticket.IsCompleted);
+
+            VulkanBuffer[] uploaded = ticket.TakeBuffers();
+
+            try
+            {
+                Assert.Equal(expected.Length, uploaded.Length);
+
+                for (int index = 0; index < uploaded.Length; index++)
+                {
+                    byte[] actual = Readback(
+                        instance,
+                        device,
+                        physicalDevice,
+                        uploaded[index]);
+
+                    Assert.Equal(expected[index], actual);
+                }
+            }
+
+            finally
+            {
+                foreach (VulkanBuffer buffer in uploaded)
+                {
+                    buffer.Dispose();
+                }
+            }
+
+            Assert.Throws<ObjectDisposedException>(
+                () => _ = ticket.IsCompleted);
+        });
+    }
+
+    [VulkanIntegrationFact]
+    public void BatchAsync_MultipleBatchesRemainIndependent()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            List<(
+                byte[][] Expected,
+                VulkanBufferUploadBatchTicket Ticket)> uploads = [];
+
+            try
+            {
+                // All eight batches are submitted before
+                // waiting for any of them.
+                for (int batchIndex = 0; batchIndex < 8; batchIndex++)
+                {
+                    byte[][] payloads = new byte[3][];
+
+                    for (int index = 0; index < payloads.Length; index++)
+                    {
+                        int byteCount =
+                            batchIndex * 11 + index * 7 + 1;
+
+                        byte[] payload = new byte[byteCount];
+
+                        for (int offset = 0;
+                             offset < payload.Length;
+                             offset++)
+                        {
+                            payload[offset] = unchecked(
+                                (byte)(
+                                    batchIndex * 29 +
+                                    index * 17 +
+                                    offset * 13));
+                        }
+
+                        payloads[index] = payload;
+                    }
+
+                    VulkanBufferUploadBatch batch = new();
+
+                    foreach (byte[] payload in payloads)
+                    {
+                        batch.AddBytes(
+                            payload,
+                            UploadUsage);
+                    }
+
+                    VulkanBufferUploadBatchTicket ticket =
+                        batch.SubmitAsync(
+                            instance,
+                            device,
+                            physicalDevice);
+
+                    uploads.Add((payloads, ticket));
+                }
+
+                foreach (var upload in uploads)
+                {
+                    Assert.True(
+                        upload.Ticket.Wait(ulong.MaxValue));
+                }
+
+                foreach (var upload in uploads)
+                {
+                    VulkanBuffer[] buffers =
+                        upload.Ticket.TakeBuffers();
+
+                    try
+                    {
+                        Assert.Equal(
+                            upload.Expected.Length,
+                            buffers.Length);
+
+                        for (int index = 0;
+                             index < buffers.Length;
+                             index++)
+                        {
+                            byte[] actual = Readback(
+                                instance,
+                                device,
+                                physicalDevice,
+                                buffers[index]);
+
+                            Assert.Equal(
+                                upload.Expected[index],
+                                actual);
+                        }
+                    }
+
+                    finally
+                    {
+                        foreach (VulkanBuffer buffer in buffers)
+                        {
+                            buffer.Dispose();
+                        }
+                    }
+                }
+            }
+
+            finally
+            {
+                foreach (var upload in uploads)
+                {
+                    upload.Ticket.Dispose();
+                }
+            }
+        });
+    }
+
+    [VulkanIntegrationFact]
+    public void BatchAsync_EarlyDisposalKeepsDeviceUsable()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            VulkanBufferUploadBatch firstBatch = new();
+
+            firstBatch.AddBytes(
+                [1, 2, 3],
+                UploadUsage);
+
+            firstBatch.AddBytes(
+                [4, 5, 6, 7, 8],
+                UploadUsage);
+
+            VulkanBufferUploadBatchTicket first =
+                firstBatch.SubmitAsync(
+                    instance,
+                    device,
+                    physicalDevice);
+
+            try
+            {
+                Assert.Throws<InvalidOperationException>(
+                    device.Dispose);
+            }
+
+            finally
+            {
+                first.Dispose();
+            }
+
+            Assert.Throws<ObjectDisposedException>(
+                () => first.Wait(0));
+
+            VulkanBufferUploadBatch secondBatch = new();
+
+            byte[] expected =
+            [
+                0xA1, 0xB2, 0xC3, 0xD4, 0xE5
+            ];
+
+            secondBatch.AddBytes(
+                expected,
+                UploadUsage);
+
+            using VulkanBufferUploadBatchTicket second =
+                secondBatch.SubmitAsync(
+                    instance,
+                    device,
+                    physicalDevice);
+
+            Assert.True(second.Wait(ulong.MaxValue));
+            VulkanBuffer[] uploaded = second.TakeBuffers();
+
+            try
+            {
+                Assert.Single(uploaded);
+
+                byte[] actual = Readback(
+                    instance,
+                    device,
+                    physicalDevice,
+                    uploaded[0]);
+
+                Assert.Equal(expected, actual);
+            }
+
+            finally
+            {
+                foreach (VulkanBuffer buffer in uploaded)
+                {
+                    buffer.Dispose();
+                }
+            }
+
+            device.WaitIdle();
+        });
+    }
 }
 
 /// <summary>
