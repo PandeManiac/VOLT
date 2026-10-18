@@ -27,6 +27,7 @@ public sealed unsafe class VulkanBuffer : IDisposable
     private readonly VulkanInstance _instance;
     private readonly VulkanLogicalDevice _device;
     private readonly Vk _api;
+    private readonly VulkanSharedBufferMemory? _sharedMemory;
 
     private VkBuffer _buffer;
     private DeviceMemory _memory;
@@ -38,6 +39,20 @@ public sealed unsafe class VulkanBuffer : IDisposable
     public BufferUsageFlags Usage { get; }
 
     public MemoryPropertyFlags MemoryProperties { get; }
+
+    internal bool UsesSharedAllocation =>
+        _sharedMemory is not null;
+
+    internal ulong BindingOffset { get; }
+
+    internal DeviceMemory BoundMemory
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _memory;
+        }
+    }
 
     public VkBuffer Handle
     {
@@ -116,10 +131,33 @@ public sealed unsafe class VulkanBuffer : IDisposable
                     "Vulkan returned a null buffer handle.");
             }
 
+
+            BufferMemoryRequirementsInfo2 requirementsInfo = new()
+            {
+                SType =
+                    StructureType.BufferMemoryRequirementsInfo2,
+                Buffer = buffer
+            };
+
+            MemoryDedicatedRequirements dedicatedRequirements = new()
+            {
+                SType =
+                    StructureType.MemoryDedicatedRequirements
+            };
+
+            MemoryRequirements2 requirementsResult = new()
+            {
+                SType = StructureType.MemoryRequirements2,
+                PNext = &dedicatedRequirements
+            };
+
+            _api.GetBufferMemoryRequirements2(
+                deviceHandle,
+                &requirementsInfo,
+                &requirementsResult);
+
             MemoryRequirements requirements =
-                _api.GetBufferMemoryRequirements(
-                    deviceHandle,
-                    buffer);
+                requirementsResult.MemoryRequirements;
 
             ReadOnlySpan<MemoryPropertyFlags> availableProperties =
                 device.GetMemoryTypeFlags(physicalDevice);
@@ -139,9 +177,19 @@ public sealed unsafe class VulkanBuffer : IDisposable
 
             selectedProperties = availableProperties[memoryIndex];
 
+
+            MemoryDedicatedAllocateInfo dedicatedAllocation = new()
+            {
+                SType = StructureType.MemoryDedicatedAllocateInfo,
+                Buffer = buffer
+            };
+
             MemoryAllocateInfo allocation = new()
             {
                 SType = StructureType.MemoryAllocateInfo,
+                PNext = dedicatedRequirements.RequiresDedicatedAllocation
+                    ? &dedicatedAllocation
+                    : null,
                 AllocationSize = requirements.Size,
                 MemoryTypeIndex = checked((uint)memoryIndex)
             };
@@ -190,6 +238,63 @@ public sealed unsafe class VulkanBuffer : IDisposable
         Size = size;
         Usage = usage;
         MemoryProperties = selectedProperties;
+    }
+
+    /// <summary>
+    /// Adopts a previously created and bound Vulkan buffer whose
+    /// memory is owned by a shared allocation.
+    /// </summary>
+    /// <remarks>
+    /// The caller must transfer ownership of exactly one bound
+    /// buffer. Shared allocations in this initial implementation
+    /// must not be host-visible.
+    /// </remarks>
+    internal VulkanBuffer(
+        VulkanInstance instance,
+        VulkanLogicalDevice device,
+        VkBuffer buffer,
+        DeviceMemory memory,
+        VulkanSharedBufferMemory sharedMemory,
+        ulong bindingOffset,
+        ulong size,
+        BufferUsageFlags usage,
+        MemoryPropertyFlags memoryProperties)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        ArgumentNullException.ThrowIfNull(device);
+        ArgumentNullException.ThrowIfNull(sharedMemory);
+
+        if (buffer.Handle == 0 || memory.Handle == 0)
+        {
+            throw new ArgumentException(
+                "Valid native buffer and memory handles are required.");
+        }
+
+        if (size == 0 || usage == BufferUsageFlags.None)
+        {
+            throw new ArgumentException(
+                "A positive buffer size and usage are required.");
+        }
+
+        if ((memoryProperties &
+            MemoryPropertyFlags.HostVisibleBit) != 0)
+        {
+            throw new ArgumentException(
+                "Shared host-visible allocations are not supported.",
+                nameof(memoryProperties));
+        }
+
+        _instance = instance;
+        _device = device;
+        _api = instance.Api;
+        _sharedMemory = sharedMemory;
+        _buffer = buffer;
+        _memory = memory;
+
+        Size = size;
+        Usage = usage;
+        MemoryProperties = memoryProperties;
+        BindingOffset = bindingOffset;
     }
 
     /// <summary>
@@ -567,6 +672,7 @@ public sealed unsafe class VulkanBuffer : IDisposable
         Device deviceHandle = _device.Handle;
         VkBuffer buffer = _buffer;
         DeviceMemory memory = _memory;
+        VulkanSharedBufferMemory? sharedMemory = _sharedMemory;
 
         bool bufferDestroyed = false;
         bool memoryFreed = false;
@@ -589,10 +695,18 @@ public sealed unsafe class VulkanBuffer : IDisposable
 
             if (!memoryFreed)
             {
-                _api.FreeMemory(
-                    deviceHandle,
-                    memory,
-                    null);
+                if (sharedMemory is not null)
+                {
+                    sharedMemory.ReleaseBuffer();
+                }
+
+                else
+                {
+                    _api.FreeMemory(
+                        deviceHandle,
+                        memory,
+                        null);
+                }
 
                 memoryFreed = true;
             }

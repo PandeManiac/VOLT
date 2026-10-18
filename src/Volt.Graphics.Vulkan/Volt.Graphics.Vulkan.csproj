@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Volt.Graphics.Vulkan.Tests" />
+    <InternalsVisibleTo Include="Volt.Benchmarks" />
   </ItemGroup>
 
 </Project>

@@ -1,6 +1,9 @@
 
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Engines;
+using BenchmarkDotNet.Jobs;
+using BenchmarkDotNet.Toolchains.InProcess.Emit;
 using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
@@ -36,12 +39,7 @@ public enum VulkanUploadWorkload
 /// VOLT_VULKAN_BENCHMARKS=1.
 /// </remarks>
 [MemoryDiagnoser]
-[SimpleJob(
-    RunStrategy.Monitoring,
-    launchCount: 1,
-    warmupCount: 2,
-    iterationCount: 10,
-    invocationCount: 1)]
+[Config(typeof(VulkanUploadBenchmarkConfig))]
 public class VulkanBufferUploadBenchmarks
 {
     private const BufferUsageFlags DestinationUsage =
@@ -386,6 +384,45 @@ public class VulkanBufferUploadBenchmarks
         return byteCount;
     }
 
+    /// <summary>
+    /// Measures shared device-memory allocation and independent
+    /// destination-buffer creation and destruction.
+    /// </summary>
+    [Benchmark]
+    public ulong SharedDestinationAllocationsOnly()
+    {
+        VulkanBufferAllocationRequest[] requests =
+            new VulkanBufferAllocationRequest[_payloads.Length];
+
+        for (int index = 0; index < requests.Length; index++)
+        {
+            requests[index] = new VulkanBufferAllocationRequest(
+                (ulong)_payloads[index].Length,
+                DestinationUsage |
+                    BufferUsageFlags.TransferDstBit);
+        }
+
+        VulkanBuffer[] destinations =
+            VulkanBatchDestinationAllocator.Create(
+                _instance!,
+                _device!,
+                _physicalDevice,
+                requests);
+
+        try
+        {
+            return _totalBytes;
+        }
+
+        finally
+        {
+            foreach (VulkanBuffer destination in destinations)
+            {
+                destination.Dispose();
+            }
+        }
+    }
+
     private VulkanBufferUploadBatch CreateBatch()
     {
         VulkanBufferUploadBatch batch = new();
@@ -429,5 +466,26 @@ public class VulkanBufferUploadBenchmarks
             _ => throw new ArgumentOutOfRangeException(
                 nameof(workload))
         };
+    }
+}
+
+/// <summary>
+/// Runs Vulkan upload benchmarks in the current process so
+/// unrelated benchmark projects do not affect project discovery.
+/// </summary>
+public sealed class VulkanUploadBenchmarkConfig : ManualConfig
+{
+    public VulkanUploadBenchmarkConfig()
+    {
+        AddJob(
+            Job.Default
+                .WithToolchain(InProcessEmitToolchain.Instance)
+                .WithStrategy(RunStrategy.Monitoring)
+                .WithLaunchCount(1)
+                .WithWarmupCount(2)
+                .WithIterationCount(10)
+                .WithInvocationCount(1)
+                .WithUnrollFactor(1)
+                .WithId("VulkanInProcess"));
     }
 }

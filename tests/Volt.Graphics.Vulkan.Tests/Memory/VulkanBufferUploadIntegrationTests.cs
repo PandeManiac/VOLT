@@ -273,10 +273,85 @@ public sealed class VulkanBufferUploadIntegrationTests
             source.Size);
 
         byte[] actual = new byte[checked((int)source.Size)];
-
         readback.Read(actual);
-
         return actual;
+    }
+
+    private static unsafe bool CanUseSharedDeviceMemory(
+        VulkanInstance instance,
+        VulkanLogicalDevice device,
+        PhysicalDevice physicalDevice,
+        IReadOnlyList<VulkanBuffer> buffers)
+    {
+        if (buffers.Count < 2)
+        {
+            return false;
+        }
+
+        uint compatibleTypes = uint.MaxValue;
+
+        foreach (VulkanBuffer buffer in buffers)
+        {
+            BufferMemoryRequirementsInfo2 info = new()
+            {
+                SType =
+                    StructureType.BufferMemoryRequirementsInfo2,
+                Buffer = buffer.Handle
+            };
+
+            MemoryDedicatedRequirements dedicated = new()
+            {
+                SType =
+                    StructureType.MemoryDedicatedRequirements
+            };
+
+            MemoryRequirements2 result = new()
+            {
+                SType = StructureType.MemoryRequirements2,
+                PNext = &dedicated
+            };
+
+            instance.Api.GetBufferMemoryRequirements2(
+                device.Handle,
+                &info,
+                &result);
+
+            if (dedicated.RequiresDedicatedAllocation)
+            {
+                return false;
+            }
+
+            compatibleTypes &=
+                result.MemoryRequirements.MemoryTypeBits;
+        }
+
+        MemoryPropertyFlags[] memoryTypes =
+            device.GetMemoryTypeFlags(physicalDevice).ToArray();
+
+        for (int index = 0; index < memoryTypes.Length; index++)
+        {
+            uint bit = 1u << index;
+
+            if ((compatibleTypes & bit) == 0)
+            {
+                continue;
+            }
+
+            MemoryPropertyFlags properties = memoryTypes[index];
+
+            bool deviceLocal =
+                (properties & MemoryPropertyFlags.DeviceLocalBit) != 0;
+
+            bool hostVisible =
+                (properties & MemoryPropertyFlags.HostVisibleBit) != 0;
+
+            if (deviceLocal && !hostVisible)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void RunWithDevice(
@@ -1039,6 +1114,239 @@ public sealed class VulkanBufferUploadIntegrationTests
             {
                 device.GetMemoryTypeFlags(default);
             });
+        });
+    }
+
+    [VulkanIntegrationFact]
+    public void BatchedUpload_DisposingOneBufferPreservesOthers()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            byte[][] payloads =
+            [
+                new byte[64],
+                new byte[4096],
+                new byte[257]
+            ];
+
+            for (int bufferIndex = 0;
+                 bufferIndex < payloads.Length;
+                 bufferIndex++)
+            {
+                byte[] payload = payloads[bufferIndex];
+
+                for (int index = 0; index < payload.Length; index++)
+                {
+                    payload[index] = unchecked(
+                        (byte)(bufferIndex * 53 + index * 17));
+                }
+            }
+
+            for (int mode = 0; mode < 2; mode++)
+            {
+                VulkanBufferUploadBatch batch = new();
+
+                foreach (byte[] payload in payloads)
+                {
+                    batch.AddBytes(payload, UploadUsage);
+                }
+
+                VulkanBuffer[] uploaded;
+
+                if (mode == 0)
+                {
+                    uploaded = batch.Submit(
+                        instance,
+                        device,
+                        physicalDevice);
+                }
+
+                else
+                {
+                    using VulkanBufferUploadBatchTicket ticket =
+                        batch.SubmitAsync(
+                            instance,
+                            device,
+                            physicalDevice);
+
+                    Assert.True(ticket.Wait(ulong.MaxValue));
+                    uploaded = ticket.TakeBuffers();
+                }
+
+                try
+                {
+                    Assert.Equal(3, uploaded.Length);
+                    uploaded[1].Dispose();
+
+                    Assert.Equal(
+                        payloads[0],
+                        Readback(
+                            instance,
+                            device,
+                            physicalDevice,
+                            uploaded[0]));
+
+                    Assert.Equal(
+                        payloads[2],
+                        Readback(
+                            instance,
+                            device,
+                            physicalDevice,
+                            uploaded[2]));
+
+                    uploaded[0].Dispose();
+
+                    Assert.Equal(
+                        payloads[2],
+                        Readback(
+                            instance,
+                            device,
+                            physicalDevice,
+                            uploaded[2]));
+                }
+
+                finally
+                {
+                    foreach (VulkanBuffer destination in uploaded)
+                    {
+                        destination.Dispose();
+                    }
+                }
+            }
+        });
+    }
+    [VulkanIntegrationFact]
+    public void BatchedUpload_UsesValidSharedMemoryBindings()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            byte[][] payloads =
+            [
+                new byte[64],
+                new byte[257],
+                new byte[4096]
+            ];
+
+            for (int payloadIndex = 0;
+                 payloadIndex < payloads.Length;
+                 payloadIndex++)
+            {
+                for (int index = 0;
+                     index < payloads[payloadIndex].Length;
+                     index++)
+                {
+                    payloads[payloadIndex][index] = unchecked(
+                        (byte)(payloadIndex * 43 + index * 19));
+                }
+            }
+
+            for (int mode = 0; mode < 2; mode++)
+            {
+                VulkanBufferUploadBatch batch = new();
+
+                foreach (byte[] payload in payloads)
+                {
+                    batch.AddBytes(payload, UploadUsage);
+                }
+
+                VulkanBuffer[] uploaded;
+
+                if (mode == 0)
+                {
+                    uploaded = batch.Submit(
+                        instance,
+                        device,
+                        physicalDevice);
+                }
+
+                else
+                {
+                    using VulkanBufferUploadBatchTicket ticket =
+                        batch.SubmitAsync(
+                            instance,
+                            device,
+                            physicalDevice);
+
+                    Assert.True(ticket.Wait(ulong.MaxValue));
+                    uploaded = ticket.TakeBuffers();
+                }
+
+                try
+                {
+                    bool shouldShare = CanUseSharedDeviceMemory(
+                        instance,
+                        device,
+                        physicalDevice,
+                        uploaded);
+
+                    foreach (VulkanBuffer buffer in uploaded)
+                    {
+                        Assert.Equal(
+                            shouldShare,
+                            buffer.UsesSharedAllocation);
+                    }
+
+                    if (shouldShare)
+                    {
+                        ulong memoryHandle =
+                            uploaded[0].BoundMemory.Handle;
+
+                        ulong previousEnd = 0;
+
+                        foreach (VulkanBuffer buffer in uploaded)
+                        {
+                            MemoryRequirements requirements =
+                                instance.Api.GetBufferMemoryRequirements(
+                                    device.Handle,
+                                    buffer.Handle);
+
+                            Assert.Equal(
+                                memoryHandle,
+                                buffer.BoundMemory.Handle);
+
+                            Assert.Equal(
+                                0UL,
+                                buffer.BindingOffset %
+                                    requirements.Alignment);
+
+                            Assert.True(
+                                buffer.BindingOffset >= previousEnd);
+
+                            previousEnd = checked(
+                                buffer.BindingOffset +
+                                requirements.Size);
+                        }
+                    }
+
+                    uploaded[1].Dispose();
+
+                    Assert.Equal(
+                        payloads[0],
+                        Readback(
+                            instance,
+                            device,
+                            physicalDevice,
+                            uploaded[0]));
+
+                    Assert.Equal(
+                        payloads[2],
+                        Readback(
+                            instance,
+                            device,
+                            physicalDevice,
+                            uploaded[2]));
+                }
+
+                finally
+                {
+                    for (int index = uploaded.Length - 1;
+                         index >= 0;
+                         index--)
+                    {
+                        uploaded[index].Dispose();
+                    }
+                }
+            }
         });
     }
 }

@@ -15,7 +15,11 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// when added to the batch. Growing staging storage does not
 /// reallocate or copy previously staged payloads.
 ///
-/// Each upload receives its own device-local destination buffer.
+/// Each upload receives an independent device-local destination
+/// buffer. Compatible destinations may share a native device-memory
+/// allocation while retaining independent buffer ownership.
+///
+/// When sharing is unsuitable, destinations use dedicated memory.
 ///
 /// Buffer copies support arbitrary positive byte counts without
 /// additional staging alignment or padding. Applications remain
@@ -357,21 +361,11 @@ public sealed unsafe class VulkanBufferUploadBatch
                 _stagingChunks,
                 _stagingByteCount);
 
-            destinations = new VulkanBuffer[_requests.Count];
 
-            for (int index = 0; index < _requests.Count; index++)
-            {
-                UploadRequest request = _requests[index];
-
-                destinations[index] = new VulkanBuffer(
-                    instance,
-                    device,
-                    physicalDevice,
-                    request.ByteCount,
-                    request.DestinationUsage |
-                        BufferUsageFlags.TransferDstBit,
-                    MemoryPropertyFlags.DeviceLocalBit);
-            }
+            destinations = CreateDestinations(
+                instance,
+                device,
+                physicalDevice);
 
             BatchCopyRecording recording = new(
                 this,
@@ -515,42 +509,55 @@ public sealed unsafe class VulkanBufferUploadBatch
         return result;
     }
 
+    private VulkanBuffer[] CreateDestinations(
+        VulkanInstance instance,
+        VulkanLogicalDevice device,
+        PhysicalDevice physicalDevice)
+    {
+        VulkanBufferAllocationRequest[] requests =
+            new VulkanBufferAllocationRequest[_requests.Count];
+
+        for (int index = 0; index < requests.Length; index++)
+        {
+            UploadRequest request = _requests[index];
+
+            requests[index] = new VulkanBufferAllocationRequest(
+                request.ByteCount,
+                request.DestinationUsage
+                    | BufferUsageFlags.TransferDstBit);
+        }
+
+        return VulkanBatchDestinationAllocator.Create(
+            instance,
+            device,
+            physicalDevice,
+            requests);
+    }
+
     private VulkanBuffer[] SubmitUsingStaging(
         VulkanInstance instance,
         VulkanLogicalDevice device,
         PhysicalDevice physicalDevice,
         VulkanBuffer staging)
     {
-        List<VulkanBuffer> destinations =
-            new(_requests.Count);
+        staging.WriteSegments(
+            _stagingChunks,
+            _stagingByteCount);
+
+        VulkanBuffer[] destinations = CreateDestinations(
+            instance,
+            device,
+            physicalDevice);
 
         try
         {
-            staging.WriteSegments(
-                _stagingChunks,
-                _stagingByteCount);
-
-            foreach (UploadRequest request in _requests)
-            {
-                VulkanBuffer destination = new(
-                    instance,
-                    device,
-                    physicalDevice,
-                    request.ByteCount,
-                    request.DestinationUsage |
-                        BufferUsageFlags.TransferDstBit,
-                    MemoryPropertyFlags.DeviceLocalBit);
-
-                destinations.Add(destination);
-            }
-
             ExecuteCopies(
                 instance,
                 device,
                 staging,
                 destinations);
 
-            return destinations.ToArray();
+            return destinations;
         }
 
         catch
@@ -581,7 +588,6 @@ public sealed unsafe class VulkanBufferUploadBatch
 
         device.EnsureTransferAvailable();
     }
-
 
     private void ExecuteCopies(
         VulkanInstance instance,
