@@ -35,6 +35,8 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
 
     private Device _handle;
     private Queue _graphicsQueue;
+    private readonly object _ticketGate = new();
+    private int _activeTransferTickets;
     private bool _disposed;
 
     /// <summary>
@@ -172,18 +174,25 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
     }
 
     /// <summary>
-    /// Destroys the logical device after safe resource cleanup.
+    /// Destroys the logical device after GPU completion
+    /// and child-resource cleanup.
     /// </summary>
-    /// <remarks>
-    /// If idle waiting is unsuccessful or a deferred cleanup
-    /// callback fails, the device is left alive so the caller
-    /// can address the failure and retry disposal.
-    /// </remarks>
     public void Dispose()
     {
         if (_disposed)
         {
             return;
+        }
+
+        lock (_ticketGate)
+        {
+            if (_activeTransferTickets != 0)
+            {
+                throw new InvalidOperationException(
+                    "Cannot destroy the Vulkan device while " +
+                    "asynchronous transfer tickets are active. " +
+                    "Dispose all tickets first.");
+            }
         }
 
         Result result = _api.DeviceWaitIdle(_handle);
@@ -196,7 +205,16 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
         }
 
         _retirement.Reclaim(result);
+
+        if (_retirement.PendingReleaseCount != 0)
+        {
+            throw new InvalidOperationException(
+                "Cannot destroy the Vulkan device while " +
+                "deferred resource releases remain pending.");
+        }
+
         _api.DestroyDevice(_handle, null);
+
         _handle = default;
         _graphicsQueue = default;
         _disposed = true;
@@ -221,6 +239,41 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
     {
         ThrowIfDisposed();
         _retirement.MarkTransferUnresolved();
+    }
+
+    /// <summary>
+    /// Registers a transfer ticket that owns live Vulkan
+    /// command and synchronization resources.
+    /// </summary>
+    internal void RegisterPendingTransferTicket()
+    {
+        lock (_ticketGate)
+        {
+            ThrowIfDisposed();
+            _retirement.EnsureTransferAvailable();
+
+            _activeTransferTickets = checked(
+                _activeTransferTickets + 1);
+        }
+    }
+
+    /// <summary>
+    /// Unregisters a transfer ticket after its native
+    /// resources have been released or safely deferred.
+    /// </summary>
+    internal void UnregisterPendingTransferTicket()
+    {
+        lock (_ticketGate)
+        {
+            if (_activeTransferTickets <= 0)
+            {
+                throw new InvalidOperationException(
+                    "No pending Vulkan transfer ticket " +
+                    "is registered with this device.");
+            }
+
+            _activeTransferTickets--;
+        }
     }
 
     /// <summary>

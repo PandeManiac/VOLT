@@ -339,6 +339,134 @@ public sealed class VulkanBufferUploadIntegrationTests
             device,
             physicalDevice);
     }
+
+    [VulkanIntegrationFact]
+    public void CopyAsync_RoundTripsByteGranularData()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            byte[] sourceData =
+            [
+                10, 20, 30, 40, 50, 60, 70, 80, 90
+            ];
+
+            using VulkanBuffer source = new(
+                instance,
+                device,
+                physicalDevice,
+                (ulong)sourceData.Length,
+                BufferUsageFlags.TransferSrcBit,
+                MemoryPropertyFlags.HostVisibleBit);
+
+            using VulkanBuffer destination = new(
+                instance,
+                device,
+                physicalDevice,
+                11,
+                BufferUsageFlags.TransferDstBit,
+                MemoryPropertyFlags.HostVisibleBit);
+
+            source.Write(sourceData);
+
+            destination.Write(
+                new byte[]
+                {
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                });
+
+            using (VulkanBufferCopyTicket ticket =
+                VulkanBufferTransfer.CopyAsync(
+                    instance,
+                    device,
+                    source,
+                    destination,
+                    byteCount: 5,
+                    sourceOffset: 1,
+                    destinationOffset: 3))
+            {
+                // A zero-timeout wait may succeed immediately,
+                // depending on GPU scheduling.
+                bool completed = ticket.Wait(0);
+
+                if (!completed)
+                {
+                    Assert.True(ticket.Wait(ulong.MaxValue));
+                }
+
+                Assert.True(ticket.IsCompleted);
+                Assert.True(ticket.Wait(0));
+            }
+
+            byte[] actual = new byte[11];
+
+            destination.Read(actual);
+
+            Assert.Equal(
+                new byte[]
+                {
+                    0, 0, 0, 20, 30, 40, 50, 60, 0, 0, 0
+                },
+                actual);
+        });
+    }
+
+    [VulkanIntegrationFact]
+    public void CopyAsync_TicketPreventsPrematureDeviceDestruction()
+    {
+        RunWithDevice((instance, device, physicalDevice) =>
+        {
+            using VulkanBuffer source = new(
+                instance,
+                device,
+                physicalDevice,
+                4,
+                BufferUsageFlags.TransferSrcBit,
+                MemoryPropertyFlags.HostVisibleBit);
+
+            using VulkanBuffer destination = new(
+                instance,
+                device,
+                physicalDevice,
+                4,
+                BufferUsageFlags.TransferDstBit,
+                MemoryPropertyFlags.HostVisibleBit);
+
+            source.Write(
+                new byte[] { 1, 2, 3, 4 });
+
+            VulkanBufferCopyTicket ticket =
+                VulkanBufferTransfer.CopyAsync(
+                    instance,
+                    device,
+                    source,
+                    destination,
+                    4);
+
+            try
+            {
+                Assert.Throws<InvalidOperationException>(
+                    device.Dispose);
+
+                Assert.True(ticket.Wait(ulong.MaxValue));
+            }
+
+            finally
+            {
+                ticket.Dispose();
+            }
+
+            byte[] actual = new byte[4];
+
+            destination.Read(actual);
+
+            Assert.Equal(
+                new byte[] { 1, 2, 3, 4 },
+                actual);
+
+            device.WaitIdle();
+        });
+    }
+
 }
 
 /// <summary>

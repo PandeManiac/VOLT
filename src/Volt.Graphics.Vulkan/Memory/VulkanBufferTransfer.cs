@@ -167,6 +167,74 @@ public static unsafe class VulkanBufferTransfer
     }
 
     /// <summary>
+    /// Submits an asynchronous copy between two existing buffers.
+    /// </summary>
+    /// <returns>
+    /// A ticket that tracks completion and owns temporary
+    /// command and synchronization resources.
+    /// </returns>
+    /// <remarks>
+    /// The copy uses the graphics queue and returns without
+    /// waiting for GPU completion.
+    ///
+    /// The caller retains ownership of source and destination.
+    /// Both buffers must remain alive until the ticket completes,
+    /// and must not be accessed incompatibly while the GPU copy
+    /// is pending.
+    ///
+    /// The caller must dispose the returned ticket before
+    /// destroying its Vulkan logical device.
+    ///
+    /// Host-side submissions to the graphics queue require
+    /// external synchronization.
+    /// </remarks>
+    public static VulkanBufferCopyTicket CopyAsync(
+        VulkanInstance instance,
+        VulkanLogicalDevice device,
+        VulkanBuffer source,
+        VulkanBuffer destination,
+        ulong byteCount,
+        ulong sourceOffset = 0,
+        ulong destinationOffset = 0)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        ArgumentNullException.ThrowIfNull(device);
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(destination);
+
+        if (ReferenceEquals(source, destination))
+        {
+            throw new ArgumentException(
+                "This transfer operation requires distinct buffers.",
+                nameof(destination));
+        }
+
+        ValidateCopyRegion(
+            source.Size,
+            destination.Size,
+            source.Usage,
+            destination.Usage,
+            byteCount,
+            sourceOffset,
+            destinationOffset);
+
+        device.EnsureTransferAvailable();
+
+        CopyRecording recording = new(
+            source.Handle,
+            destination.Handle,
+            byteCount,
+            sourceOffset,
+            destinationOffset);
+
+        return VulkanBufferCopyTicket.Submit(
+            instance,
+            device,
+            recording,
+            CopyRecorder);
+    }
+
+    /// <summary>
     /// Validates the parameters for creating a device-local upload.
     /// </summary>
     internal static void ValidateUpload(
