@@ -443,26 +443,38 @@ public sealed unsafe class VulkanBuffer : IDisposable
         _ = _instance.Handle;
 
         Device deviceHandle = _device.Handle;
-
         VkBuffer buffer = _buffer;
         DeviceMemory memory = _memory;
 
-        _device.ReleaseOrDefer(() =>
-        {
-            _api.DestroyBuffer(
-                deviceHandle,
-                buffer,
-                null);
-
-            _api.FreeMemory(
-                deviceHandle,
-                memory,
-                null);
-        });
+        bool bufferDestroyed = false;
+        bool memoryFreed = false;
 
         _buffer = default;
         _memory = default;
         _disposed = true;
+
+        _device.ReleaseOrDefer(() =>
+        {
+            if (!bufferDestroyed)
+            {
+                _api.DestroyBuffer(
+                    deviceHandle,
+                    buffer,
+                    null);
+
+                bufferDestroyed = true;
+            }
+
+            if (!memoryFreed)
+            {
+                _api.FreeMemory(
+                    deviceHandle,
+                    memory,
+                    null);
+
+                memoryFreed = true;
+            }
+        });
     }
 
     /// <summary>

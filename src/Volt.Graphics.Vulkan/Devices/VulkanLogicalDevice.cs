@@ -18,9 +18,8 @@ namespace Volt.Graphics.Vulkan.Devices;
 /// This implementation creates one graphics queue and enables no
 /// optional physical-device features.
 ///
-/// If a transfer's completion cannot be established, resources
-/// awaiting destruction are retained until the device is known
-/// to be idle or lost.
+/// If transfer completion cannot be established, native resources
+/// are retained until the device is known to be idle or lost.
 ///
 /// Callers must externally synchronize queue operations and
 /// device destruction. This class does not provide general
@@ -32,14 +31,10 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
 
     private readonly Vk _api;
     private readonly VulkanInstance _instance;
-    private readonly object _retirementGate = new();
-    private readonly List<Action> _deferredReleases = [];
+    private readonly VulkanDeferredResourceReleases _retirement = new();
 
     private Device _handle;
     private Queue _graphicsQueue;
-
-    private bool _transferUnresolved;
-    private bool _deviceLost;
     private bool _disposed;
 
     /// <summary>
@@ -50,30 +45,13 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
     /// <summary>
     /// Indicates that a transfer may still be using GPU resources.
     /// </summary>
-    public bool HasUnresolvedTransfer
-    {
-        get
-        {
-            lock (_retirementGate)
-            {
-                return _transferUnresolved;
-            }
-        }
-    }
+    public bool HasUnresolvedTransfer =>
+        _retirement.HasUnresolvedTransfer;
 
     /// <summary>
     /// Indicates that device loss has been observed.
     /// </summary>
-    public bool IsLost
-    {
-        get
-        {
-            lock (_retirementGate)
-            {
-                return _deviceLost;
-            }
-        }
-    }
+    public bool IsLost => _retirement.IsLost;
 
     /// <summary>
     /// Gets the borrowed native Vulkan device handle.
@@ -173,11 +151,11 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
     /// Waits until all submitted work on this device has completed.
     /// </summary>
     /// <remarks>
-    /// Successful completion releases any resources retained after
-    /// an earlier unresolved transfer.
+    /// A safe idle result also attempts any pending deferred
+    /// resource releases.
     ///
-    /// A device-lost result also permits resource reclamation,
-    /// but leaves the device permanently unavailable for new work.
+    /// Device loss permits lifetime cleanup, but the lost
+    /// device cannot accept new transfers afterward.
     /// </remarks>
     public void WaitIdle()
     {
@@ -187,19 +165,19 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
 
         if (CanReclaimAfterWait(result))
         {
-            ReleaseDeferredResources(result);
+            _retirement.Reclaim(result);
         }
 
         EnsureSuccess(result, "Wait for Vulkan device idle");
     }
 
     /// <summary>
-    /// Destroys the device after safely releasing deferred resources.
+    /// Destroys the logical device after safe resource cleanup.
     /// </summary>
     /// <remarks>
-    /// If device-idle waiting returns neither success nor device
-    /// loss, destruction is refused because pending work may
-    /// still reference the retained native resources.
+    /// If idle waiting is unsuccessful or a deferred cleanup
+    /// callback fails, the device is left alive so the caller
+    /// can address the failure and retry disposal.
     /// </remarks>
     public void Dispose()
     {
@@ -217,10 +195,8 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
                 $"GPU completion is not established: {result}.");
         }
 
-        ReleaseDeferredResources(result);
-
+        _retirement.Reclaim(result);
         _api.DestroyDevice(_handle, null);
-
         _handle = default;
         _graphicsQueue = default;
         _disposed = true;
@@ -229,109 +205,49 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
     }
 
     /// <summary>
-    /// Rejects transfers while completion is uncertain or the
-    /// logical device has been lost.
+    /// Prevents new transfers while execution or cleanup
+    /// on this device is unresolved.
     /// </summary>
     internal void EnsureTransferAvailable()
     {
-        lock (_retirementGate)
-        {
-            ThrowIfDisposed();
-
-            if (_deviceLost)
-            {
-                throw new InvalidOperationException(
-                    "The Vulkan device has been lost and " +
-                    "cannot accept new transfers.");
-            }
-
-            if (_transferUnresolved)
-            {
-                throw new InvalidOperationException(
-                    "A previous Vulkan transfer has unresolved " +
-                    "GPU execution. Wait for device idle or " +
-                    "recreate the device before submitting more work.");
-            }
-        }
+        ThrowIfDisposed();
+        _retirement.EnsureTransferAvailable();
     }
 
     /// <summary>
-    /// Marks pending transfer execution as unresolved.
+    /// Marks transfer execution as unresolved.
     /// </summary>
     internal void MarkTransferUnresolved()
     {
-        lock (_retirementGate)
-        {
-            ThrowIfDisposed();
-            _transferUnresolved = true;
-        }
+        ThrowIfDisposed();
+        _retirement.MarkTransferUnresolved();
     }
 
     /// <summary>
-    /// Records device loss and prevents further transfer submissions.
+    /// Marks the logical device as permanently lost.
     /// </summary>
     internal void MarkDeviceLost()
     {
-        lock (_retirementGate)
-        {
-            ThrowIfDisposed();
-            _deviceLost = true;
-        }
+        ThrowIfDisposed();
+        _retirement.MarkDeviceLost();
     }
 
     /// <summary>
-    /// Executes resource destruction immediately when safe,
-    /// otherwise retains it until GPU completion is established.
+    /// Executes or retains native resource cleanup.
     /// </summary>
     internal void ReleaseOrDefer(Action release)
     {
-        ArgumentNullException.ThrowIfNull(release);
-
-        lock (_retirementGate)
-        {
-            ThrowIfDisposed();
-
-            if (_transferUnresolved)
-            {
-                _deferredReleases.Add(release);
-                return;
-            }
-        }
-
-        release();
+        ThrowIfDisposed();
+        _retirement.ReleaseOrDefer(release);
     }
 
     /// <summary>
-    /// Whether a device-idle result permits destruction of
-    /// resources potentially referenced by pending commands.
+    /// Determines whether a wait result permits resource cleanup.
     /// </summary>
     internal static bool CanReclaimAfterWait(Result result)
     {
-        return result is
-            Result.Success or Result.ErrorDeviceLost;
-    }
-
-    private void ReleaseDeferredResources(Result result)
-    {
-        Action[] releases;
-
-        lock (_retirementGate)
-        {
-            if (result == Result.ErrorDeviceLost)
-            {
-                _deviceLost = true;
-            }
-
-            _transferUnresolved = false;
-
-            releases = _deferredReleases.ToArray();
-            _deferredReleases.Clear();
-        }
-
-        foreach (Action release in releases)
-        {
-            release();
-        }
+        return VulkanDeferredResourceReleases
+            .CanReclaimAfterWait(result);
     }
 
     private static void VerifyPhysicalDevice(
@@ -566,30 +482,6 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
         }
     }
 
-    private static Result _CreateDevice(
-        Vk api,
-        PhysicalDevice physicalDevice,
-        in DeviceCreateInfo createInfo,
-        out Device device)
-    {
-        return api.CreateDevice(
-            physicalDevice,
-            in createInfo,
-            null,
-            out device);
-    }
-
-    private static void EnsureSuccess(
-        Result result,
-        string operation)
-    {
-        if (result != Result.Success)
-        {
-            throw new InvalidOperationException(
-                $"{operation} failed: {result}.");
-        }
-    }
-
     internal static void ValidateExtensionNames(
         string[] extensions)
     {
@@ -618,6 +510,17 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
                     $"Duplicate Vulkan device extension: '{extension}'.",
                     nameof(extensions));
             }
+        }
+    }
+
+    private static void EnsureSuccess(
+        Result result,
+        string operation)
+    {
+        if (result != Result.Success)
+        {
+            throw new InvalidOperationException(
+                $"{operation} failed: {result}.");
         }
     }
 

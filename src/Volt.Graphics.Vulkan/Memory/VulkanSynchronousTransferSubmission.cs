@@ -184,6 +184,8 @@ internal static unsafe class VulkanSynchronousTransferSubmission
                             deviceHandle,
                             ownedFence,
                             null);
+
+                        ownedFence = default;
                     }
                 }
 
@@ -191,12 +193,20 @@ internal static unsafe class VulkanSynchronousTransferSubmission
                 {
                     try
                     {
-                        ownedBuffers?.Dispose();
+                        if (ownedBuffers is not null)
+                        {
+                            ownedBuffers.Dispose();
+                            ownedBuffers = null;
+                        }
                     }
 
                     finally
                     {
-                        ownedPool?.Dispose();
+                        if (ownedPool is not null)
+                        {
+                            ownedPool.Dispose();
+                            ownedPool = null;
+                        }
                     }
                 }
             });
