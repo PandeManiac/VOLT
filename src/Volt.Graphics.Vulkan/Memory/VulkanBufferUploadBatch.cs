@@ -427,7 +427,7 @@ public sealed unsafe class VulkanBufferUploadBatch
         VulkanBuffer staging)
     {
         List<VulkanBuffer> destinations =
-            [with(_requests.Count)];
+            new(_requests.Count);
 
         try
         {

@@ -1,3 +1,4 @@
+
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -6,5 +7,6 @@
     <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
     <ProjectReference Include="../../src/Volt.Core/Volt.Core.csproj" />
     <ProjectReference Include="../../src/Volt.Ecs/Volt.Ecs.csproj" />
+    <ProjectReference Include="../../src/Volt.Graphics.Vulkan/Volt.Graphics.Vulkan.csproj" />
   </ItemGroup>
 </Project>
