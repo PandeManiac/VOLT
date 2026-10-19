@@ -52,10 +52,18 @@ internal readonly record struct MeshDraw(
 /// complete 32-bit indexed hexagon. Every draw shares one graphics
 /// pipeline and the uploaded mesh buffers.
 ///
+/// The render pass has a color attachment and a depth attachment.
+/// One <see cref="VulkanDepthAttachment"/> is created per swapchain
+/// image so concurrently active frames never share a depth image,
+/// and all of them use one depth format selected for this
+/// generation. Depth testing uses a clear value of 1.0 and the
+/// conventional less-than comparison.
+///
 /// The swapchain, image views, logical device, and instance must
 /// outlive this renderer. The caller must establish GPU completion
-/// before disposing it, because the meshes are referenced by
-/// submitted command buffers.
+/// before disposing it, because the meshes and depth attachments
+/// are referenced by submitted command buffers. Framebuffers are
+/// destroyed before the depth views they reference.
 /// </remarks>
 internal sealed unsafe class MeshRenderer : IDisposable
 {
@@ -65,6 +73,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 	private readonly Framebuffer[] _framebuffers;
 	private readonly DemoMeshes _meshes;
 	private readonly MeshDraw[] _drawPlan;
+	private readonly VulkanDepthAttachment[] _depthAttachments;
 
 	private PipelineLayout _pipelineLayout;
 	private RenderPass _renderPass;
@@ -74,9 +83,21 @@ internal sealed unsafe class MeshRenderer : IDisposable
 
 	public Extent2D Extent { get; }
 
+	/// <summary>
+	/// Gets the depth-only format shared by every attachment in this
+	/// swapchain generation.
+	/// </summary>
+	public Format DepthFormat { get; }
+
+	/// <summary>
+	/// Gets the number of depth attachments, one per swapchain image.
+	/// </summary>
+	public int DepthAttachmentCount => _depthAttachments.Length;
+
 	public MeshRenderer(
 		VulkanInstance instance,
 		VulkanLogicalDevice device,
+		PhysicalDevice physicalDevice,
 		VulkanSwapchain swapchain,
 		VulkanSwapchainImageViews imageViews,
 		DemoMeshes meshes,
@@ -90,6 +111,13 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		ArgumentNullException.ThrowIfNull(meshes);
 		ArgumentException.ThrowIfNullOrWhiteSpace(vertexShaderPath);
 		ArgumentException.ThrowIfNullOrWhiteSpace(fragmentShaderPath);
+
+		if (physicalDevice.Handle == 0)
+		{
+			throw new ArgumentException(
+				"A valid physical device is required.",
+				nameof(physicalDevice));
+		}
 
 		if (imageViews.Count != checked((int)swapchain.ImageCount))
 		{
@@ -109,6 +137,14 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		Vk api = instance.Api;
 		Device deviceHandle = device.Handle;
 
+		Format depthFormat =
+			VulkanDepthAttachment.SelectSupportedFormat(
+				instance,
+				physicalDevice);
+
+		VulkanDepthAttachment[] depthAttachments =
+			new VulkanDepthAttachment[imageViews.Count];
+
 		RenderPass renderPass = default;
 		PipelineLayout pipelineLayout = default;
 		Pipeline pipeline = default;
@@ -118,10 +154,23 @@ internal sealed unsafe class MeshRenderer : IDisposable
 
 		try
 		{
+			for (int index = 0;
+				index < depthAttachments.Length;
+				index++)
+			{
+				depthAttachments[index] = new VulkanDepthAttachment(
+					instance,
+					device,
+					physicalDevice,
+					swapchain.Extent,
+					depthFormat);
+			}
+
 			renderPass = CreateRenderPass(
 				api,
 				deviceHandle,
-				swapchain.ImageFormat);
+				swapchain.ImageFormat,
+				depthFormat);
 
 			pipelineLayout = CreatePipelineLayout(api, deviceHandle);
 
@@ -141,12 +190,15 @@ internal sealed unsafe class MeshRenderer : IDisposable
 					deviceHandle,
 					renderPass,
 					imageViews.GetView(index),
+					depthAttachments[index].View,
 					swapchain.Extent);
 			}
 		}
 
 		catch
 		{
+			// Framebuffers reference the depth views, so they are
+			// destroyed before the attachments are released.
 			DestroyResources(
 				api,
 				deviceHandle,
@@ -154,6 +206,8 @@ internal sealed unsafe class MeshRenderer : IDisposable
 				pipeline,
 				pipelineLayout,
 				renderPass);
+
+			DestroyDepthAttachments(depthAttachments);
 
 			throw;
 		}
@@ -164,12 +218,14 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		_framebuffers = framebuffers;
 		_meshes = meshes;
 		_drawPlan = drawPlan;
+		_depthAttachments = depthAttachments;
 
 		_renderPass = renderPass;
 		_pipelineLayout = pipelineLayout;
 		_pipeline = pipeline;
 
 		Extent = swapchain.Extent;
+		DepthFormat = depthFormat;
 	}
 
 	/// <summary>
@@ -276,13 +332,24 @@ internal sealed unsafe class MeshRenderer : IDisposable
 				"The aspect ratio must be finite and positive.");
 		}
 
-		ClearValue clearValue = new()
+		ClearValue* clearValues = stackalloc ClearValue[2];
+
+		clearValues[0] = new ClearValue
 		{
 			Color = new ClearColorValue(
 				float32_0: 0.035f,
 				float32_1: 0.055f,
 				float32_2: 0.095f,
 				float32_3: 1.0f)
+		};
+
+		clearValues[1] = new ClearValue
+		{
+			DepthStencil = new ClearDepthStencilValue
+			{
+				Depth = 1.0f,
+				Stencil = 0
+			}
 		};
 
 		RenderPassBeginInfo begin = new()
@@ -297,8 +364,8 @@ internal sealed unsafe class MeshRenderer : IDisposable
 				Extent = Extent
 			},
 
-			ClearValueCount = 1,
-			PClearValues = &clearValue
+			ClearValueCount = 2,
+			PClearValues = clearValues
 		};
 
 		float aspectValue = aspect;
@@ -372,6 +439,8 @@ internal sealed unsafe class MeshRenderer : IDisposable
 			_pipelineLayout,
 			_renderPass);
 
+		DestroyDepthAttachments(_depthAttachments);
+
 		_pipeline = default;
 		_pipelineLayout = default;
 		_renderPass = default;
@@ -382,9 +451,13 @@ internal sealed unsafe class MeshRenderer : IDisposable
 	private static RenderPass CreateRenderPass(
 		Vk api,
 		Device device,
-		Format colorFormat)
+		Format colorFormat,
+		Format depthFormat)
 	{
-		AttachmentDescription colorAttachment = new()
+		AttachmentDescription* attachments =
+			stackalloc AttachmentDescription[2];
+
+		attachments[0] = new AttachmentDescription
 		{
 			Format = colorFormat,
 			Samples = SampleCountFlags.Count1Bit,
@@ -396,17 +469,36 @@ internal sealed unsafe class MeshRenderer : IDisposable
 			FinalLayout = ImageLayout.PresentSrcKhr
 		};
 
+		attachments[1] = new AttachmentDescription
+		{
+			Format = depthFormat,
+			Samples = SampleCountFlags.Count1Bit,
+			LoadOp = AttachmentLoadOp.Clear,
+			StoreOp = AttachmentStoreOp.DontCare,
+			StencilLoadOp = AttachmentLoadOp.DontCare,
+			StencilStoreOp = AttachmentStoreOp.DontCare,
+			InitialLayout = ImageLayout.Undefined,
+			FinalLayout = ImageLayout.DepthStencilAttachmentOptimal
+		};
+
 		AttachmentReference colorReference = new()
 		{
 			Attachment = 0,
 			Layout = ImageLayout.ColorAttachmentOptimal
 		};
 
+		AttachmentReference depthReference = new()
+		{
+			Attachment = 1,
+			Layout = ImageLayout.DepthStencilAttachmentOptimal
+		};
+
 		SubpassDescription subpass = new()
 		{
 			PipelineBindPoint = PipelineBindPoint.Graphics,
 			ColorAttachmentCount = 1,
-			PColorAttachments = &colorReference
+			PColorAttachments = &colorReference,
+			PDepthStencilAttachment = &depthReference
 		};
 
 		SubpassDependency* dependencies =
@@ -416,27 +508,43 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		{
 			SrcSubpass = Vk.SubpassExternal,
 			DstSubpass = 0,
-			SrcStageMask = PipelineStageFlags.ColorAttachmentOutputBit,
-			DstStageMask = PipelineStageFlags.ColorAttachmentOutputBit,
+			SrcStageMask = PipelineStageFlags.TopOfPipeBit,
+
+			DstStageMask =
+				PipelineStageFlags.ColorAttachmentOutputBit |
+				PipelineStageFlags.EarlyFragmentTestsBit,
+
 			SrcAccessMask = AccessFlags.None,
-			DstAccessMask = AccessFlags.ColorAttachmentWriteBit
+
+			DstAccessMask =
+				AccessFlags.ColorAttachmentWriteBit |
+				AccessFlags.DepthStencilAttachmentWriteBit
 		};
 
 		dependencies[1] = new SubpassDependency
 		{
 			SrcSubpass = 0,
 			DstSubpass = Vk.SubpassExternal,
-			SrcStageMask = PipelineStageFlags.ColorAttachmentOutputBit,
+
+			SrcStageMask =
+				PipelineStageFlags.ColorAttachmentOutputBit |
+				PipelineStageFlags.EarlyFragmentTestsBit |
+				PipelineStageFlags.LateFragmentTestsBit,
+
 			DstStageMask = PipelineStageFlags.BottomOfPipeBit,
-			SrcAccessMask = AccessFlags.ColorAttachmentWriteBit,
+
+			SrcAccessMask =
+				AccessFlags.ColorAttachmentWriteBit |
+				AccessFlags.DepthStencilAttachmentWriteBit,
+
 			DstAccessMask = AccessFlags.None
 		};
 
 		RenderPassCreateInfo description = new()
 		{
 			SType = StructureType.RenderPassCreateInfo,
-			AttachmentCount = 1,
-			PAttachments = &colorAttachment,
+			AttachmentCount = 2,
+			PAttachments = attachments,
 			SubpassCount = 1,
 			PSubpasses = &subpass,
 			DependencyCount = 2,
@@ -637,6 +745,16 @@ internal sealed unsafe class MeshRenderer : IDisposable
 				SampleShadingEnable = Vk.False
 			};
 
+			PipelineDepthStencilStateCreateInfo depthState = new()
+			{
+				SType = StructureType.PipelineDepthStencilStateCreateInfo,
+				DepthTestEnable = Vk.True,
+				DepthWriteEnable = Vk.True,
+				DepthCompareOp = CompareOp.Less,
+				DepthBoundsTestEnable = Vk.False,
+				StencilTestEnable = Vk.False
+			};
+
 			PipelineColorBlendAttachmentState colorAttachment = new()
 			{
 				BlendEnable = Vk.False,
@@ -666,7 +784,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 				PViewportState = &viewportState,
 				PRasterizationState = &rasterization,
 				PMultisampleState = &multisampling,
-				PDepthStencilState = null,
+				PDepthStencilState = &depthState,
 				PColorBlendState = &blending,
 				Layout = layout,
 				RenderPass = renderPass,
@@ -770,14 +888,20 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		Device device,
 		RenderPass renderPass,
 		ImageView colorView,
+		ImageView depthView,
 		Extent2D extent)
 	{
+		ImageView* attachments = stackalloc ImageView[2];
+
+		attachments[0] = colorView;
+		attachments[1] = depthView;
+
 		FramebufferCreateInfo description = new()
 		{
 			SType = StructureType.FramebufferCreateInfo,
 			RenderPass = renderPass,
-			AttachmentCount = 1,
-			PAttachments = &colorView,
+			AttachmentCount = 2,
+			PAttachments = attachments,
 			Width = extent.Width,
 			Height = extent.Height,
 			Layers = 1
@@ -832,6 +956,17 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		if (renderPass.Handle != 0)
 		{
 			api.DestroyRenderPass(device, renderPass, null);
+		}
+	}
+
+	private static void DestroyDepthAttachments(
+		VulkanDepthAttachment?[] attachments)
+	{
+		for (int index = attachments.Length - 1;
+			index >= 0;
+			index--)
+		{
+			attachments[index]?.Dispose();
 		}
 	}
 

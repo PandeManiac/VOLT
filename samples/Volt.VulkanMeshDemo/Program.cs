@@ -366,6 +366,9 @@ internal static class Program
 						$"{resources.Swapchain.Extent.Height}, " +
 						$"images: {resources.Swapchain.ImageCount}, " +
 						$"format: {resources.Swapchain.ImageFormat}, " +
+						$"depth: {resources.DepthFormat}, " +
+						$"depth attachments: " +
+						$"{resources.DepthAttachmentCount}, " +
 						$"frames in flight: " +
 						$"{resources.Frames.FramesInFlight}");
 				}

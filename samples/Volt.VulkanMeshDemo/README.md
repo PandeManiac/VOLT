@@ -26,15 +26,42 @@ binding zero, not shader-based vertex pulling. A single push constant
 supplies the current aspect ratio, so the three shapes stay separated
 and keep their proportions when the window is resized.
 
+## Depth attachment
+
+The render pass has a color attachment and a depth attachment. Each
+swapchain generation creates one `VulkanDepthAttachment` per swapchain
+image, so concurrently active frames never write the same depth image.
+All attachments in a generation share one format chosen by
+`VulkanDepthAttachment.SelectSupportedFormat`: `D32Sfloat` when the
+physical device reports optimal-tiling depth-stencil attachment
+support, otherwise `D16Unorm`. Device support is queried per physical
+device instead of being assumed.
+
+The graphics pipeline enables depth testing and depth writes with the
+conventional `Less` comparison. Every frame clears depth to `1.0`
+when the render pass begins, and the depth attachment is used only as
+`DepthStencilAttachmentOptimal`; no stencil aspect is created or used.
+
+Depth resources belong to the swapchain generation. After a resize, the
+old generation is retired after device idle, which destroys its
+framebuffers before their depth views, then the depth images and their
+memory. The replacement generation builds fresh attachments for the
+new extent. Mesh buffers are not re-uploaded.
+
+The three shapes do not overlap, so adding the depth buffer leaves the
+image visually unchanged. That confirms correct attachment
+configuration but does not demonstrate depth occlusion for overlapping
+geometry.
+
 ## Rendering structure
 
 - `DemoMeshes` uploads the three meshes once for the lifetime of the
   logical device. Swapchain recreation does not re-upload them.
-- `MeshRenderer` owns the render pass, pipeline, and one framebuffer
-  per swapchain image. It records one render pass containing the draw
-  plan: three meshes and four draw calls. Complete meshes use
-  `VulkanMeshDrawCommands.Record`; the quad's two triangles use
-  `VulkanMeshDrawCommands.RecordRange`. `MeshRenderer.CreateDrawPlan`
+- `MeshRenderer` owns the render pass, pipeline, depth attachments,
+  and one framebuffer per swapchain image. It records one render pass
+  containing the draw plan: three meshes and four draw calls. Complete
+  meshes use `VulkanMeshDrawCommands.Record`; the quad's two triangles
+  use `VulkanMeshDrawCommands.RecordRange`. `MeshRenderer.CreateDrawPlan`
   derives that sequence from the mesh geometries, so the plan can be
   inspected and tested without a Vulkan device.
 - `MeshSwapchainResources` owns one swapchain generation, including

@@ -34,6 +34,17 @@ internal sealed class MeshSwapchainResources : IDisposable
 
 	public MeshRenderer Renderer { get; }
 
+	/// <summary>
+	/// Gets the depth-only format shared by this generation's
+	/// per-image depth attachments.
+	/// </summary>
+	public Format DepthFormat => Renderer.DepthFormat;
+
+	/// <summary>
+	/// Gets the number of depth attachments, one per swapchain image.
+	/// </summary>
+	public int DepthAttachmentCount => Renderer.DepthAttachmentCount;
+
 	public Action<CommandBuffer, int> RecordFrame { get; }
 
 	public MeshSwapchainResources(
@@ -90,6 +101,7 @@ internal sealed class MeshSwapchainResources : IDisposable
 			renderer = new MeshRenderer(
 				instance,
 				device,
+				physicalDevice,
 				swapchain,
 				imageViews,
 				meshes,
