@@ -66,9 +66,10 @@ geometry.
   inspected and tested without a Vulkan device.
 - `MeshSwapchainResources` owns one swapchain generation, including
   image views and the frame scheduler. It is recreated after resize or
-  presentation-driven swapchain changes.
+  presentation-driven swapchain changes. Each creation is reported with
+  its generation number, extent, depth format, and attachment count.
 - `Program` handles windowing, device selection, command buffers,
-  bounded execution, and resource lifetime.
+  bounded execution, the opt-in resize scenario, and resource lifetime.
 
 The frame scheduler provides the render-finished semaphore used by
 presentation and preserves the distinction between graphics completion
@@ -119,6 +120,48 @@ ten seconds, the bounded run reports the stall and exits instead of
 waiting forever. This covers a minimized window or an unavailable
 presentation surface.
 
+### Resize scenario
+
+An opt-in resize scenario exercises swapchain recreation without user
+input:
+
+```bash
+dotnet run \
+  --project samples/Volt.VulkanMeshDemo \
+  -c Release -- \
+  --validation \
+  --frames 600 \
+  --resize-at-frame 200 \
+  --resize-to 960x540
+```
+
+`--resize-at-frame N` and `--resize-to WIDTHxHEIGHT` must be supplied
+together. The trigger frame must be positive and less than `--frames`,
+and each dimension must be between 1 and 16384. The sample calls
+`SDL_SetWindowSize` on the main thread after presenting frame `N` and
+keeps rendering while the compositor applies the new size. It reports:
+
+- `Swapchain: generation 1, ...` for the initial generation.
+- `Resize requested at frame N: ...` with the requested size and the
+  current window and framebuffer sizes.
+- `Retiring swapchain generation 1, 1280x720.` before the old generation
+  is destroyed.
+- `Resize observed: framebuffer WxH, window WxH, generation 1 -> 2,
+  after N presented frames.` once the framebuffer extent actually
+  changed and the replacement generation was created.
+- `Swapchain: generation 2, ...` with the new extent, depth format, and
+  per-image depth attachment count.
+- `Frames presented after recreation: N.`
+
+The request triggers at most once. A bounded run fails with a nonzero
+status if the compositor never applies the resize, so a logged request
+alone never counts as success. Without both arguments the sample behaves
+exactly as before.
+
+Fullscreen compositor shells ignore client resize requests. The
+committed headless harness therefore offers an opt-in desktop shell for
+this scenario; see `tools/README.md`.
+
 ## Tests
 
 ```bash
@@ -126,6 +169,8 @@ dotnet test tests/Volt.VulkanMeshDemo.Tests -c Release
 ```
 
 The focused tests cover mesh counts, index validity, the four-draw
-plan including the quad's two partial index ranges, and command-line
-parsing for validation and bounded frames and the required swapchain
-maintenance1 negotiation.
+plan including the quad's two partial index ranges, command-line
+parsing for validation, bounded frames, and the resize scenario
+(paired arguments, bounds, malformed sizes, triggers at or past the
+frame limit, duplicates, and one-time triggering), plus the required
+swapchain maintenance1 negotiation.

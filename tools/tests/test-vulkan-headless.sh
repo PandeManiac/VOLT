@@ -171,10 +171,12 @@ run_harness() {
     MOCK_WESTON_MODE="$WESTON_MODE" \
     MOCK_RM_MODE="$RM_MODE" \
     MOCK_APP_PIDFILE="$CASE_DIR/app.pid" \
-    MOCK_APP_CHILD_PIDFILE="$CASE_DIR/app-child.pid" \
-    MOCK_WESTON_PIDFILE="$CASE_DIR/weston.pid" \
-    MOCK_WESTON_SOCKET_LOG="$CASE_DIR/socket.log" \
-        "$HARNESS" "$@" >"$CASE_DIR/console.out" 2>"$CASE_DIR/console.err"
+MOCK_APP_CHILD_PIDFILE="$CASE_DIR/app-child.pid" \
+MOCK_WESTON_PIDFILE="$CASE_DIR/weston.pid" \
+MOCK_WESTON_SOCKET_LOG="$CASE_DIR/socket.log" \
+MOCK_WESTON_ARGS_LOG="$CASE_DIR/weston.args" \
+MOCK_APP_ARGS_LOG="$CASE_DIR/app.args" \
+    "$HARNESS" "$@" >"$CASE_DIR/console.out" 2>"$CASE_DIR/console.err"
     RC=$?
 }
 
@@ -195,6 +197,14 @@ set -uo pipefail
 mode=${MOCK_WESTON_MODE:-ok}
 socket=""
 log=""
+
+if [ -n "${MOCK_WESTON_ARGS_LOG:-}" ]; then
+    : >"$MOCK_WESTON_ARGS_LOG"
+
+    for argument in "$@"; do
+        printf '%s\n' "$argument" >>"$MOCK_WESTON_ARGS_LOG"
+    done
+fi
 
 for argument in "$@"; do
     case "$argument" in
@@ -270,6 +280,16 @@ done
 
 if [ -n "${MOCK_APP_PIDFILE:-}" ]; then
     printf '%s\n' "$$" >"$MOCK_APP_PIDFILE"
+fi
+
+# The harness launches "dotnet <assembly> <args...>". Record only the
+# arguments after the assembly so forwarding can be compared exactly.
+if [ -n "${MOCK_APP_ARGS_LOG:-}" ]; then
+    : >"$MOCK_APP_ARGS_LOG"
+
+    for argument in "${arguments[@]:1}"; do
+        printf '%s\n' "$argument" >>"$MOCK_APP_ARGS_LOG"
+    done
 fi
 
 printf 'VOLT mock sample\n'
@@ -836,6 +856,116 @@ SOCKET_B=$(grep '^SOCKET=' "$CASE_DIR/project-b/socket.log" | tail -n 1)
 [ "$SOCKET_A" != "$SOCKET_B" ] || fail "concurrent runs shared a socket"
 [ -z "$(find "$CONCURRENT_TMP" -maxdepth 1 -name 'volt-headless-runtime.*' -print)" ] ||
     fail "concurrent runs left private runtime directories behind"
+end_case
+
+# --- compositor shell and sample argument forwarding -------------------------
+
+begin_case "default-kiosk-shell"
+run_default --frames 3
+assert_rc 0
+assert_run_dir
+assert_contains "$CASE_DIR/weston.args" "--shell=kiosk"
+assert_contains "$CASE_DIR/weston.args" "--no-config"
+assert_not_contains "$CASE_DIR/weston.args" "weston-desktop.ini"
+assert_contains "$RUN_DIR/summary.txt" "compositor=weston-headless-1280x720"
+assert_contains "$RUN_DIR/summary.txt" "weston_shell=kiosk"
+assert_not_contains "$RUN_DIR/summary.txt" "weston-headless-kiosk"
+assert_contains "$RUN_DIR/invocation.log" "weston_shell=kiosk"
+assert_no_file "$RUN_DIR/weston-desktop.ini"
+assert_runtime_clean
+end_case
+
+begin_case "desktop-shell"
+run_default --frames 3 --weston-shell desktop
+assert_rc 0
+assert_run_dir
+assert_contains "$CASE_DIR/weston.args" "--shell=desktop"
+assert_contains "$CASE_DIR/weston.args" "weston-desktop.ini"
+assert_not_contains "$CASE_DIR/weston.args" "--no-config"
+assert_file "$RUN_DIR/weston-desktop.ini"
+assert_contains "$RUN_DIR/weston-desktop.ini" "panel-position=none"
+assert_contains "$RUN_DIR/summary.txt" "compositor=weston-headless-1280x720"
+assert_contains "$RUN_DIR/summary.txt" "weston_shell=desktop"
+assert_contains "$RUN_DIR/invocation.log" "weston_shell=desktop"
+assert_contains "$RUN_DIR/invocation.log" "weston_config=$RUN_DIR/weston-desktop.ini"
+assert_contains "$CASE_DIR/console.out" "shell desktop"
+assert_process_dead "$CASE_DIR/app.pid"
+assert_process_dead "$CASE_DIR/weston.pid"
+assert_runtime_clean
+end_case
+
+begin_case "unsupported-shell"
+run_default --frames 3 --weston-shell ivi
+assert_rc 2
+assert_contains "$CASE_DIR/console.err" "--weston-shell must be kiosk or desktop"
+assert_no_file "$CASE_DIR/weston.args"
+end_case
+
+begin_case "sample-arg-missing-value"
+run_harness --project "$CASE_DIR/sample" --output-dir "$CASE_DIR/out" \
+    --sample-arg
+assert_rc 2
+assert_contains "$CASE_DIR/console.err" "option --sample-arg requires a value"
+end_case
+
+begin_case "sample-arg-empty-value"
+run_default --frames 3 --sample-arg=
+assert_rc 2
+assert_contains "$CASE_DIR/console.err" "--sample-arg requires a value"
+end_case
+
+begin_case "sample-arg-forwarding"
+run_default --frames 7 --validation \
+    --sample-arg=--resize-at-frame --sample-arg 200 \
+    --sample-arg=--resize-to --sample-arg=960x540 \
+    --sample-arg="two words"
+assert_rc 0
+assert_run_dir
+assert_contains "$RUN_DIR/summary.txt" \
+    "frames_reported=Presented 7 accepted frames"
+assert_contains "$RUN_DIR/summary.txt" "validation_line=True"
+assert_contains "$RUN_DIR/invocation.log" "sample_arg=--resize-at-frame"
+assert_contains "$RUN_DIR/invocation.log" "sample_arg=two words"
+
+printf '%s\n' \
+    "--frames" "7" "--validation" \
+    "--resize-at-frame" "200" "--resize-to" "960x540" "two words" \
+    >"$CASE_DIR/expected.args"
+
+if ! cmp -s "$CASE_DIR/expected.args" "$CASE_DIR/app.args"; then
+    fail "forwarded arguments differ from the requested array"
+fi
+
+assert_contains "$CASE_DIR/console.out" "sample arguments: --resize-at-frame 200"
+assert_process_dead "$CASE_DIR/app.pid"
+assert_runtime_clean
+end_case
+
+begin_case "sample-arg-forwarding-on-failure"
+APP_MODE=fail
+run_default --frames 3 \
+    --sample-arg=--resize-at-frame --sample-arg=100 \
+    --sample-arg=--resize-to --sample-arg=960x540
+assert_rc 7
+assert_run_dir
+assert_contains "$RUN_DIR/summary.txt" "application exited with status 3"
+assert_contains "$RUN_DIR/app.stderr.log" \
+    "mock application: device creation failed"
+assert_contains "$CASE_DIR/app.args" "--resize-at-frame"
+assert_contains "$CASE_DIR/app.args" "960x540"
+assert_process_dead "$CASE_DIR/app.pid"
+assert_runtime_clean
+end_case
+
+begin_case "desktop-shell-cleanup"
+APP_MODE=timeout
+run_default --frames 3 --timeout-seconds 2 --weston-shell desktop
+assert_rc 8
+assert_run_dir
+assert_contains "$RUN_DIR/summary.txt" "weston_shell=desktop"
+assert_process_dead "$CASE_DIR/app.pid"
+assert_process_dead "$CASE_DIR/weston.pid"
+assert_runtime_clean
 end_case
 
 # --- summary -----------------------------------------------------------------

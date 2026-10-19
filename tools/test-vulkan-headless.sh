@@ -36,6 +36,8 @@ FRAMES=600
 VALIDATION=0
 SCREENSHOTS=0
 EXPECT_CLUSTERS=""
+WESTON_SHELL=kiosk
+SAMPLE_ARGS=()
 OUTPUT_DIR="$REPO_ROOT/artifacts/headless"
 TIMEOUT_SECONDS=180
 WIDTH=1280
@@ -81,12 +83,23 @@ Options:
   --screenshots           Capture and verify a screenshot while it runs.
   --expect-clusters N     Require N horizontal content clusters in the
                           screenshot (use 3 for Volt.VulkanMeshDemo).
+  --weston-shell NAME     Shell for the private headless Weston: kiosk
+                          (default) or desktop. The desktop shell runs
+                          without its panel so the sample window covers
+                          the whole output and can be resized by the
+                          sample. It is opt-in and never changes the
+                          caller's desktop.
+  --sample-arg VALUE      Extra argument forwarded to the sample unchanged.
+                          Repeat it once per argument; --sample-arg=VALUE
+                          is also accepted. Values are forwarded as a
+                          separate array element and never re-split.
   --output-dir PATH       Artifact root (default: <repo>/artifacts/headless).
   --timeout-seconds N     Bound for the whole run (default: 180).
   -h, --help              Show this help.
 
 Sample contract:
-  The sample is launched as: dotnet <assembly>.dll --frames N [--validation]
+  The sample is launched as:
+    dotnet <assembly>.dll --frames N [--validation] [--sample-arg values]
   It must print "Presented N accepted frames." when it finishes and remain
   alive long enough to be captured when --screenshots is used. With
   --validation it must print "Validation: True"; missing or false
@@ -309,6 +322,7 @@ write_summary() {
         printf 'gpu=%s\n' "${GPU_LINE:-}"
         printf 'timeout_seconds=%s\n' "$TIMEOUT_SECONDS"
         printf 'compositor=weston-headless-%sx%s\n' "$WIDTH" "$HEIGHT"
+        printf 'weston_shell=%s\n' "$WESTON_SHELL"
 
         for failure in "${FAILURES[@]}"; do
             printf 'failure=%s\n' "$failure"
@@ -429,6 +443,36 @@ while [ $# -gt 0 ]; do
             EXPECT_CLUSTERS=$2
             shift 2
             ;;
+        --weston-shell)
+            require_value "$1" "$#" "${2-}"
+
+            case "$2" in
+                kiosk|desktop)
+                    WESTON_SHELL=$2
+                    ;;
+                *)
+                    usage_error \
+                        "--weston-shell must be kiosk or desktop (got: $2)"
+                    ;;
+            esac
+
+            shift 2
+            ;;
+        --sample-arg)
+            require_value "$1" "$#" "${2-}"
+            SAMPLE_ARGS+=("$2")
+            shift 2
+            ;;
+        --sample-arg=*)
+            sample_arg=${1#*=}
+
+            if [ -z "$sample_arg" ]; then
+                usage_error "--sample-arg requires a value"
+            fi
+
+            SAMPLE_ARGS+=("$sample_arg")
+            shift
+            ;;
         --output-dir)
             require_value "$1" "$#" "${2-}"
             OUTPUT_DIR=$2
@@ -545,6 +589,26 @@ if ! mkdir -- "$RUN_DIR"; then
     exit "$EXIT_FAILURE"
 fi
 
+# The kiosk shell runs every top-level window fullscreen, which makes
+# client-side resizing ineffective. The desktop shell is opt-in for
+# resize scenarios; its panel is disabled so the sample window covers
+# the whole output, keeping screenshot verification identical. The
+# configuration is private to this run and never touches the caller's
+# desktop configuration.
+WESTON_CONFIG_ARGS=(--no-config)
+WESTON_CONFIG=""
+
+if [ "$WESTON_SHELL" = "desktop" ]; then
+    WESTON_CONFIG="$RUN_DIR/weston-desktop.ini"
+
+    if ! printf '[shell]\npanel-position=none\n' >"$WESTON_CONFIG"; then
+        log_error "cannot write the private compositor configuration"
+        exit "$EXIT_FAILURE"
+    fi
+
+    WESTON_CONFIG_ARGS=(-c "$WESTON_CONFIG")
+fi
+
 DEADLINE=$(( $(now) + TIMEOUT_SECONDS ))
 
 {
@@ -557,6 +621,8 @@ DEADLINE=$(( $(now) + TIMEOUT_SECONDS ))
     printf 'validation=%s\n' "$VALIDATION"
     printf 'screenshots=%s\n' "$SCREENSHOTS"
     printf 'expect_clusters=%s\n' "${EXPECT_CLUSTERS:-}"
+    printf 'weston_shell=%s\n' "$WESTON_SHELL"
+    printf 'weston_config=%s\n' "$WESTON_CONFIG"
     printf 'output_dir=%s\n' "$OUTPUT_DIR"
     printf 'timeout_seconds=%s\n' "$TIMEOUT_SECONDS"
     printf 'weston=%s\n' "$(command -v weston)"
@@ -564,6 +630,10 @@ DEADLINE=$(( $(now) + TIMEOUT_SECONDS ))
 
     for argument in "${ORIGINAL_ARGS[@]}"; do
         printf 'argument=%s\n' "$argument"
+    done
+
+    for argument in "${SAMPLE_ARGS[@]}"; do
+        printf 'sample_arg=%s\n' "$argument"
     done
 } >"$RUN_DIR/invocation.log"
 
@@ -604,12 +674,12 @@ DISPLAY='' \
     weston \
         --backend=headless \
         --renderer=gl \
-        --shell=kiosk \
+        --shell="$WESTON_SHELL" \
         --width="$WIDTH" \
         --height="$HEIGHT" \
         --socket="$SOCKET" \
         --idle-time=0 \
-        --no-config \
+        "${WESTON_CONFIG_ARGS[@]}" \
         --debug \
         --log="$RUN_DIR/weston.log" \
         >"$RUN_DIR/weston.stdout.log" 2>&1 &
@@ -639,7 +709,7 @@ while [ ! -S "$SOCKET_PATH" ]; do
     sleep 0.05
 done
 
-log "compositor ready (pid $WESTON_PID, ${WIDTH}x${HEIGHT})"
+log "compositor ready (pid $WESTON_PID, shell $WESTON_SHELL, ${WIDTH}x${HEIGHT})"
 
 APP_TIMEOUT=$(remaining_seconds)
 
@@ -651,6 +721,11 @@ APP_ARGS=(--frames "$FRAMES")
 
 if [ "$VALIDATION" -eq 1 ]; then
     APP_ARGS+=(--validation)
+fi
+
+if [ "${#SAMPLE_ARGS[@]}" -gt 0 ]; then
+    APP_ARGS+=("${SAMPLE_ARGS[@]}")
+    log "sample arguments: ${SAMPLE_ARGS[*]}"
 fi
 
 # The sample runs behind a supervisor that is the leader of the private

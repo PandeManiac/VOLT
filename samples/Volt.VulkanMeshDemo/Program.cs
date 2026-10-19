@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using SDL3;
 using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Commands;
 using Volt.Graphics.Vulkan.Devices;
@@ -20,6 +21,20 @@ internal static class Program
 {
 	private const string ValidationArgument = "--validation";
 	private const string FramesArgument = "--frames";
+	private const string ResizeAtFrameArgument = "--resize-at-frame";
+	private const string ResizeToArgument = "--resize-to";
+
+	/// <summary>
+	/// Upper bound for a requested resize dimension. It keeps the
+	/// opt-in scenario within the limits every Vulkan surface reports.
+	/// </summary>
+	internal const int MaximumResizeDimension = 16384;
+
+	/// <summary>
+	/// Upper bound for a requested resize trigger frame. Bounded runs
+	/// cannot reach it because the trigger must precede the frame limit.
+	/// </summary>
+	internal const int MaximumResizeFrame = 1_000_000;
 
 	private const string SwapchainExtension = "VK_KHR_swapchain";
 	private const string GetSurfaceCapabilities2Extension =
@@ -47,7 +62,8 @@ internal static class Program
 		{
 			Console.Error.WriteLine(error);
 			Console.Error.WriteLine(
-				"Usage: Volt.VulkanMeshDemo [--validation] [--frames N]");
+				"Usage: Volt.VulkanMeshDemo [--validation] [--frames N] " +
+				"[--resize-at-frame N --resize-to WIDTHxHEIGHT]");
 
 			return 2;
 		}
@@ -282,6 +298,11 @@ internal static class Program
 		WindowSize lastFramebufferSize = default;
 		bool recreationRequested = true;
 
+		int swapchainGeneration = 0;
+		bool resizeRequested = false;
+		bool resizeObserved = false;
+		int resizeRecreationFrame = 0;
+
 		int framesSinceReport = 0;
 		int presentedFrames = 0;
 
@@ -339,8 +360,19 @@ internal static class Program
 						|| recreationRequested
 						|| framebufferSize != lastFramebufferSize)
 				{
+					WindowSize previousFramebufferSize =
+						lastFramebufferSize;
+
+					int previousGeneration = swapchainGeneration;
+
 					if (resources is not null)
 					{
+						Console.WriteLine(
+							$"Retiring swapchain generation " +
+							$"{previousGeneration}, " +
+							$"{previousFramebufferSize.Width}x" +
+							$"{previousFramebufferSize.Height}.");
+
 						device.WaitIdle();
 						resources.Dispose();
 						resources = null;
@@ -358,11 +390,35 @@ internal static class Program
 						vertexShaderPath,
 						fragmentShaderPath);
 
+					swapchainGeneration++;
+
+					if (IsResizeObserved(
+							resizeRequested,
+							resizeObserved,
+							previousFramebufferSize,
+							framebufferSize))
+					{
+						resizeObserved = true;
+						resizeRecreationFrame = presentedFrames;
+
+						WindowSize windowSize = window.Size;
+
+						Console.WriteLine(
+							$"Resize observed: framebuffer " +
+							$"{framebufferSize.Width}x" +
+							$"{framebufferSize.Height}, window " +
+							$"{windowSize.Width}x{windowSize.Height}, " +
+							$"generation {previousGeneration} -> " +
+							$"{swapchainGeneration}, after " +
+							$"{presentedFrames} presented frames.");
+					}
+
 					lastFramebufferSize = framebufferSize;
 					recreationRequested = false;
 
 					Console.WriteLine(
-						$"Swapchain: {resources.Swapchain.Extent.Width}x" +
+						$"Swapchain: generation {swapchainGeneration}, " +
+						$"{resources.Swapchain.Extent.Width}x" +
 						$"{resources.Swapchain.Extent.Height}, " +
 						$"images: {resources.Swapchain.ImageCount}, " +
 						$"format: {resources.Swapchain.ImageFormat}, " +
@@ -401,6 +457,34 @@ internal static class Program
 				framesSinceReport++;
 				stallClock.Restart();
 
+				if (ShouldRequestResize(
+						presentedFrames,
+						options,
+						resizeRequested) &&
+					options.ResizeTo is WindowSize resizeTarget)
+				{
+					resizeRequested = true;
+
+					WindowSize windowSize = window.Size;
+
+					Console.WriteLine(
+						$"Resize requested at frame {presentedFrames}: " +
+						$"{resizeTarget.Width}x{resizeTarget.Height} " +
+						$"(window {windowSize.Width}x{windowSize.Height}, " +
+						$"framebuffer {framebufferSize.Width}x" +
+						$"{framebufferSize.Height}).");
+
+					if (!SDL.SetWindowSize(
+							window.NativeHandle,
+							resizeTarget.Width,
+							resizeTarget.Height))
+					{
+						throw new InvalidOperationException(
+							$"SDL rejected the resize request: " +
+							$"{SDL.GetError()}");
+					}
+				}
+
 				if (statisticsClock.Elapsed.TotalSeconds >= 1.0)
 				{
 					double fps =
@@ -428,6 +512,26 @@ internal static class Program
 				throw new InvalidOperationException(
 					$"Presented {presentedFrames} frames, but " +
 					$"{requiredFrames} were requested.");
+			}
+
+			if (options.ResizeAtFrame.HasValue &&
+				options.FrameLimit.HasValue)
+			{
+				if (!resizeObserved)
+				{
+					throw new InvalidOperationException(
+						$"The resize requested at frame " +
+						$"{options.ResizeAtFrame.Value} was not " +
+						$"applied: the framebuffer remained " +
+						$"{lastFramebufferSize.Width}x" +
+						$"{lastFramebufferSize.Height} across " +
+						$"{swapchainGeneration} swapchain " +
+						$"generation(s).");
+				}
+
+				Console.WriteLine(
+					$"Frames presented after recreation: " +
+					$"{presentedFrames - resizeRecreationFrame}.");
 			}
 
 			Console.WriteLine(
@@ -515,6 +619,8 @@ internal static class Program
 	{
 		bool validation = false;
 		int? frameLimit = null;
+		int? resizeAtFrame = null;
+		WindowSize? resizeTo = null;
 
 		for (int index = 0; index < args.Length; index++)
 		{
@@ -565,6 +671,78 @@ internal static class Program
 					frameLimit = parsedFrames;
 					break;
 
+				case ResizeAtFrameArgument:
+					if (resizeAtFrame.HasValue)
+					{
+						options = default;
+						error =
+							"The --resize-at-frame argument was " +
+							"supplied twice.";
+						return false;
+					}
+
+					if (index + 1 >= args.Length)
+					{
+						options = default;
+						error =
+							"The --resize-at-frame argument requires " +
+							"a value.";
+						return false;
+					}
+
+					index++;
+
+					if (!int.TryParse(
+							args[index],
+							NumberStyles.None,
+							CultureInfo.InvariantCulture,
+							out int parsedResizeFrame)
+						|| parsedResizeFrame <= 0
+						|| parsedResizeFrame > MaximumResizeFrame)
+					{
+						options = default;
+						error =
+							"The --resize-at-frame value must be a " +
+							$"positive integer no greater than " +
+							$"{MaximumResizeFrame}.";
+						return false;
+					}
+
+					resizeAtFrame = parsedResizeFrame;
+					break;
+
+				case ResizeToArgument:
+					if (resizeTo.HasValue)
+					{
+						options = default;
+						error =
+							"The --resize-to argument was supplied " +
+							"twice.";
+						return false;
+					}
+
+					if (index + 1 >= args.Length)
+					{
+						options = default;
+						error =
+							"The --resize-to argument requires a value.";
+						return false;
+					}
+
+					index++;
+
+					if (!TryParseResizeTarget(
+							args[index],
+							out WindowSize parsedResizeTarget,
+							out error))
+					{
+						options = default;
+						return false;
+					}
+
+					resizeTo = parsedResizeTarget;
+					break;
+
 				default:
 					options = default;
 					error = $"Unknown argument: {argument}";
@@ -572,13 +750,127 @@ internal static class Program
 			}
 		}
 
-		options = new SampleOptions(validation, frameLimit);
+		if (resizeAtFrame.HasValue != resizeTo.HasValue)
+		{
+			options = default;
+			error =
+				"The --resize-at-frame and --resize-to arguments " +
+				"must be supplied together.";
+			return false;
+		}
+
+		if (resizeAtFrame is int triggerFrame &&
+			frameLimit is int limit &&
+			triggerFrame >= limit)
+		{
+			options = default;
+			error =
+				"The --resize-at-frame value must be less than " +
+				"the --frames limit.";
+			return false;
+		}
+
+		options = new SampleOptions(
+			validation,
+			frameLimit,
+			resizeAtFrame,
+			resizeTo);
+
 		error = string.Empty;
 		return true;
 	}
 
+	/// <summary>
+	/// Reports whether the opt-in resize scenario is due after the
+	/// given number of accepted frames.
+	/// </summary>
+	/// <remarks>
+	/// The caller passes the current requested state so the scenario
+	/// triggers at most once, even when frames are presented faster
+	/// than the request is observed.
+	/// </remarks>
+	internal static bool ShouldRequestResize(
+		int presentedFrames,
+		SampleOptions options,
+		bool resizeRequested)
+	{
+		return !resizeRequested &&
+			options.ResizeAtFrame is int resizeFrame &&
+			presentedFrames >= resizeFrame;
+	}
+
+	/// <summary>
+	/// Reports whether a requested resize has now been applied.
+	/// </summary>
+	/// <remarks>
+	/// The framebuffer extent must actually differ from the previous
+	/// generation's extent. A denied request, a same-size recreation,
+	/// or an internal state change alone never satisfies this test.
+	/// </remarks>
+	internal static bool IsResizeObserved(
+		bool resizeRequested,
+		bool alreadyObserved,
+		WindowSize previousExtent,
+		WindowSize currentExtent)
+	{
+		return resizeRequested &&
+			!alreadyObserved &&
+			currentExtent != previousExtent;
+	}
+
+	/// <summary>
+	/// Parses a WIDTHxHEIGHT resize target.
+	/// </summary>
+	internal static bool TryParseResizeTarget(
+		string value,
+		out WindowSize size,
+		out string error)
+	{
+		size = default;
+
+		int separator = value.IndexOf('x');
+
+		if (separator <= 0 || separator == value.Length - 1)
+		{
+			error =
+				"The --resize-to value must use the WIDTHxHEIGHT " +
+				"format, for example 960x540.";
+			return false;
+		}
+
+		string widthText = value[..separator];
+		string heightText = value[(separator + 1)..];
+
+		if (!int.TryParse(
+				widthText,
+				NumberStyles.None,
+				CultureInfo.InvariantCulture,
+				out int width) ||
+			!int.TryParse(
+				heightText,
+				NumberStyles.None,
+				CultureInfo.InvariantCulture,
+				out int height) ||
+			width <= 0 ||
+			height <= 0 ||
+			width > MaximumResizeDimension ||
+			height > MaximumResizeDimension)
+		{
+			error =
+				"The --resize-to dimensions must be positive " +
+				$"integers no greater than " +
+				$"{MaximumResizeDimension}.";
+			return false;
+		}
+
+		size = new WindowSize(width, height);
+		error = string.Empty;
+		return true;
+	}
 }
 
 internal readonly record struct SampleOptions(
 	bool Validation,
-	int? FrameLimit);
+	int? FrameLimit,
+	int? ResizeAtFrame,
+	WindowSize? ResizeTo);

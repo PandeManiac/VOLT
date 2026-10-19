@@ -21,6 +21,23 @@ without touching the desktop that launched it.
     --screenshots
 ```
 
+A sample-controlled resize scenario runs against the opt-in desktop
+shell, with the application arguments forwarded unchanged:
+
+```bash
+./tools/test-vulkan-headless.sh \
+    --project samples/Volt.VulkanMeshDemo \
+    --frames 600 \
+    --validation \
+    --screenshots \
+    --expect-clusters 3 \
+    --weston-shell desktop \
+    --sample-arg=--resize-at-frame \
+    --sample-arg 200 \
+    --sample-arg=--resize-to \
+    --sample-arg=960x540
+```
+
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--project PATH` | required | Sample project directory containing one `.csproj` |
@@ -28,6 +45,8 @@ without touching the desktop that launched it.
 | `--validation` | off | Passes `--validation` to the sample |
 | `--screenshots` | off | Captures and verifies a screenshot |
 | `--expect-clusters N` | off | Requires `N` horizontal content clusters; needs `--screenshots` |
+| `--weston-shell kiosk\|desktop` | `kiosk` | Shell for the private compositor |
+| `--sample-arg VALUE` | none | Extra sample argument forwarded unchanged; repeatable, `--sample-arg=VALUE` also accepted |
 | `--output-dir PATH` | `<repo>/artifacts/headless` | Root for run artifacts |
 | `--timeout-seconds N` | `180` | Bound for the whole run |
 | `--help` | | Usage information |
@@ -42,8 +61,9 @@ The harness never builds the sample. Build first:
 dotnet build Volt.slnx -c Release
 ```
 
-It then runs `dotnet <assembly>.dll --frames N [--validation]`. Samples
-used with this harness must:
+It then runs
+`dotnet <assembly>.dll --frames N [--validation] [--sample-arg values]`.
+Samples used with this harness must:
 
 - Accept `--frames N` and terminate after presenting that many frames.
 - Print `Presented N accepted frames.` when the run is complete. The
@@ -60,6 +80,31 @@ An optional `--expect-clusters N` compares the screenshot against a known
 scene. Use `3` for `Volt.VulkanMeshDemo`, which draws three separated
 meshes. Other samples should omit it until their expected layout is known.
 
+### Compositor shells
+
+The default `kiosk` shell makes every top-level window fullscreen. That
+is ideal for rendering tests but means a sample cannot resize its own
+window. `--weston-shell desktop` selects the desktop shell inside the
+same private headless compositor, which supports client window resizing.
+It is opt-in and never influences the caller's desktop session.
+
+The harness writes a private `weston-desktop.ini` into the run directory
+with `[shell] panel-position=none`. Without a panel the sample window
+covers the whole output, so the screenshot analysis, background
+detection, and `--expect-clusters` behavior are the same as with the
+kiosk shell. The configuration is created per run and is listed in
+`invocation.log`; it is never installed or reused globally.
+
+`--sample-arg` values are stored in a Bash array and appended to the
+sample command as separate elements. There is no `eval`, no string
+concatenation, and values that contain spaces stay intact. The exact
+forwarded array is recorded in `invocation.log` as `sample_arg=` lines.
+
+A resize scenario only counts as passing when the sample itself detects
+the new framebuffer extent and exits zero. The harness still verifies
+the accepted frame count, validation state, and screenshot exactly as it
+does for any other run.
+
 ### Isolation
 
 Each invocation creates:
@@ -67,7 +112,8 @@ Each invocation creates:
 - A private `XDG_RUNTIME_DIR` (`mktemp -d`, mode `0700`) under `TMPDIR`.
 - A uniquely named Wayland socket inside that directory.
 - A private headless Weston compositor using the `headless` backend, the
-  `gl` renderer, and a `1280x720` kiosk output.
+  `gl` renderer, and a `1280x720` output. The shell is `kiosk` unless
+  `--weston-shell desktop` requests the opt-in desktop shell.
 - A unique run directory under the output root.
 
 The sample receives only the private `XDG_RUNTIME_DIR` and
@@ -120,6 +166,7 @@ Every run creates `<output-dir>/run-<UTC timestamp>-<pid>-<random>/`:
 | `app.stderr.log` | Sample errors and Vulkan validation output |
 | `app.status` | Sample exit status recorded by its supervisor |
 | `weston.log`, `weston.stdout.log` | Compositor diagnostics |
+| `weston-desktop.ini` | Private desktop-shell configuration, when selected |
 | `screenshooter.log` | Screenshot tool output |
 | `image-analysis.log` | PNG verification results |
 | `*.png` | Captured screenshot, when requested |
@@ -192,8 +239,11 @@ missing confirmation), surviving sample descendants, frame-count
 mismatch, screenshot failures (including CRC-corrupted and incomplete
 PNGs), compositor failures, termination cleanup, controlled cleanup
 failures and their summary records, preservation of unrelated files, and
-consecutive/concurrent isolation. The missing-dependency test uses only
-ordinary utilities plus the mock `dotnet`, so it does not require a .NET
-installation on the test host.
+consecutive/concurrent isolation. Shell coverage includes the default
+kiosk invocation, the opt-in desktop shell and its private configuration,
+rejection of unknown shells, exact forwarded-argument arrays, forwarding
+that precedes an application failure, and cleanup in desktop-shell mode.
+The missing-dependency test uses only ordinary utilities plus the mock
+`dotnet`, so it does not require a .NET installation on the test host.
 
 `bash -n` and `shellcheck -S style` should stay clean for both scripts.

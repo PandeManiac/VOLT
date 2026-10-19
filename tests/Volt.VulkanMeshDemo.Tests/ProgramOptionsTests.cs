@@ -1,3 +1,4 @@
+using Volt.Platform.Windows;
 using Volt.VulkanMeshDemo;
 
 namespace Volt.VulkanMeshDemo.Tests;
@@ -16,6 +17,8 @@ public sealed class ProgramOptionsTests
 		Assert.Empty(error);
 		Assert.False(options.Validation);
 		Assert.Null(options.FrameLimit);
+		Assert.Null(options.ResizeAtFrame);
+		Assert.Null(options.ResizeTo);
 	}
 
 	[Fact]
@@ -103,6 +106,302 @@ public sealed class ProgramOptionsTests
 				out string error));
 
 		Assert.Contains("Unknown argument", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_ParsesResizeScenario()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--validation",
+					"--frames", "600",
+					"--resize-at-frame", "200",
+					"--resize-to", "960x540"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.True(options.Validation);
+		Assert.Equal(600, options.FrameLimit);
+		Assert.Equal(200, options.ResizeAtFrame);
+		Assert.Equal(new WindowSize(960, 540), options.ResizeTo);
+	}
+
+	[Fact]
+	public void TryParseOptions_InteractiveResizeScenario_Parses()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--resize-at-frame", "30", "--resize-to", "800x600"],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.Null(options.FrameLimit);
+		Assert.Equal(30, options.ResizeAtFrame);
+		Assert.Equal(new WindowSize(800, 600), options.ResizeTo);
+	}
+
+	[Fact]
+	public void TryParseOptions_ResizeFrameWithoutTarget_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--frames", "600", "--resize-at-frame", "200"],
+				out _,
+				out string error));
+
+		Assert.Contains("must be supplied together", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_ResizeTargetWithoutFrame_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--frames", "600", "--resize-to", "960x540"],
+				out _,
+				out string error));
+
+		Assert.Contains("must be supplied together", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_MissingResizeFrameValue_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--resize-at-frame"],
+				out _,
+				out string error));
+
+		Assert.Contains("requires a value", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_MissingResizeTargetValue_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--resize-to"],
+				out _,
+				out string error));
+
+		Assert.Contains("requires a value", error);
+	}
+
+	[Theory]
+	[InlineData("0x540")]
+	[InlineData("960x0")]
+	[InlineData("0x0")]
+	public void TryParseOptions_ZeroResizeDimension_Fails(string target)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--resize-at-frame", "200",
+					"--resize-to", target
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("must be positive", error);
+	}
+
+	[Theory]
+	[InlineData("960")]
+	[InlineData("960x")]
+	[InlineData("x540")]
+	[InlineData("960X540")]
+	[InlineData("960x540x1")]
+	[InlineData("abcxdef")]
+	[InlineData("-960x540")]
+	[InlineData("960x-540")]
+	[InlineData("960x 540")]
+	public void TryParseOptions_MalformedResizeTarget_Fails(string target)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--resize-at-frame", "200",
+					"--resize-to", target
+				],
+				out _,
+				out string error));
+
+		Assert.False(string.IsNullOrEmpty(error));
+	}
+
+	[Theory]
+	[InlineData("16385x540")]
+	[InlineData("960x16385")]
+	[InlineData("99999999999x540")]
+	public void TryParseOptions_OversizedResizeDimension_Fails(string target)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--resize-at-frame", "200",
+					"--resize-to", target
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("no greater than", error);
+	}
+
+	[Theory]
+	[InlineData("0")]
+	[InlineData("-5")]
+	[InlineData("abc")]
+	[InlineData("1000001")]
+	[InlineData("99999999999999999999")]
+	public void TryParseOptions_InvalidResizeFrame_Fails(string frame)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--resize-at-frame", frame,
+					"--resize-to", "960x540"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("positive integer", error);
+	}
+
+	[Theory]
+	[InlineData("200", "200")]
+	[InlineData("250", "200")]
+	[InlineData("1", "1")]
+	public void TryParseOptions_ResizeFrameAtOrAfterLimit_Fails(
+		string frame,
+		string limit)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", limit,
+					"--resize-at-frame", frame,
+					"--resize-to", "960x540"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("must be less than", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DuplicateResizeFrame_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--resize-at-frame", "100",
+					"--resize-at-frame", "200",
+					"--resize-to", "960x540"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("twice", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DuplicateResizeTarget_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--resize-at-frame", "200",
+					"--resize-to", "960x540",
+					"--resize-to", "800x600"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("twice", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_OrdinaryBoundedRunHasNoResize()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--frames", "120"],
+				out SampleOptions options,
+				out _));
+
+		Assert.Null(options.ResizeAtFrame);
+		Assert.Null(options.ResizeTo);
+	}
+
+	[Fact]
+	public void ShouldRequestResize_WithoutScenario_IsFalse()
+	{
+		SampleOptions options = new(
+			Validation: false,
+			FrameLimit: 600,
+			ResizeAtFrame: null,
+			ResizeTo: null);
+
+		Assert.False(Program.ShouldRequestResize(0, options, false));
+		Assert.False(Program.ShouldRequestResize(600, options, false));
+	}
+
+	[Fact]
+	public void ShouldRequestResize_WaitsForTriggerFrame()
+	{
+		SampleOptions options = ResizeOptions(frame: 10);
+
+		Assert.False(Program.ShouldRequestResize(9, options, false));
+		Assert.True(Program.ShouldRequestResize(10, options, false));
+		Assert.True(Program.ShouldRequestResize(11, options, false));
+	}
+
+	[Fact]
+	public void ShouldRequestResize_TriggersOnlyOnce()
+	{
+		SampleOptions options = ResizeOptions(frame: 10);
+
+		Assert.False(Program.ShouldRequestResize(10, options, true));
+		Assert.False(Program.ShouldRequestResize(11, options, true));
+	}
+
+	[Fact]
+	public void IsResizeObserved_RequiresARequestedExtentChange()
+	{
+		WindowSize original = new(1280, 720);
+		WindowSize resized = new(960, 540);
+
+		Assert.False(
+			Program.IsResizeObserved(false, false, original, resized));
+
+		Assert.False(
+			Program.IsResizeObserved(true, false, original, original));
+
+		Assert.True(
+			Program.IsResizeObserved(true, false, original, resized));
+
+		Assert.False(
+			Program.IsResizeObserved(true, true, original, resized));
+	}
+
+	private static SampleOptions ResizeOptions(int frame)
+	{
+		return new SampleOptions(
+			Validation: false,
+			FrameLimit: 600,
+			ResizeAtFrame: frame,
+			ResizeTo: new WindowSize(960, 540));
 	}
 
 	[Fact]
