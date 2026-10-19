@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Volt.Platform/Volt.Platform.csproj" />
+    <ProjectReference Include="../../src/Volt.Graphics.Vulkan/Volt.Graphics.Vulkan.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Volt.VulkanMeshDemo.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Shaders/mesh.vert.spv"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Shaders/mesh.frag.spv"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CompileMeshShaders"
+          BeforeTargets="GetCopyToOutputDirectoryItems"
+          Inputs="Shaders/mesh.vert;Shaders/mesh.frag"
+          Outputs="Shaders/mesh.vert.spv;Shaders/mesh.frag.spv">
+
+    <Exec Command="glslangValidator -V &quot;$(MSBuildProjectDirectory)/Shaders/mesh.vert&quot; -o &quot;$(MSBuildProjectDirectory)/Shaders/mesh.vert.spv&quot;" />
+    <Exec Command="glslangValidator -V &quot;$(MSBuildProjectDirectory)/Shaders/mesh.frag&quot; -o &quot;$(MSBuildProjectDirectory)/Shaders/mesh.frag.spv&quot;" />
+
+  </Target>
+
+</Project>

@@ -1,0 +1,164 @@
+using System.Runtime.ExceptionServices;
+using Silk.NET.Vulkan;
+using Volt.Graphics.Vulkan.Devices;
+using Volt.Graphics.Vulkan.Instance;
+using Volt.Graphics.Vulkan.Rendering;
+
+namespace Volt.VulkanMeshDemo;
+
+/// <summary>
+/// Owns the three uploaded demo meshes for the lifetime of the
+/// logical device.
+/// </summary>
+/// <remarks>
+/// Mesh data does not depend on a swapchain generation, so it is
+/// uploaded once and reused across swapchain recreation. The caller
+/// must establish GPU completion before disposing these buffers.
+///
+/// Disposal is idempotent. Cleanup continues when one mesh fails to
+/// dispose. Multiple failures are reported as an AggregateException.
+/// </remarks>
+internal sealed class DemoMeshes : IDisposable
+{
+	private readonly MeshGeometry[] _geometries;
+	private readonly VulkanMeshBuffers[] _buffers;
+
+	private bool _disposed;
+
+	public IReadOnlyList<MeshGeometry> Geometries => _geometries;
+
+	public IReadOnlyList<VulkanMeshBuffers> Buffers => _buffers;
+
+	private DemoMeshes(
+		MeshGeometry[] geometries,
+		VulkanMeshBuffers[] buffers)
+	{
+		_geometries = geometries;
+		_buffers = buffers;
+	}
+
+	/// <summary>
+	/// Creates and uploads the three meshes used by the sample.
+	/// </summary>
+	public static DemoMeshes Create(
+		VulkanInstance instance,
+		VulkanLogicalDevice device,
+		PhysicalDevice physicalDevice)
+	{
+		ArgumentNullException.ThrowIfNull(instance);
+		ArgumentNullException.ThrowIfNull(device);
+
+		if (physicalDevice.Handle == 0)
+		{
+			throw new ArgumentException(
+				"A valid physical device is required.",
+				nameof(physicalDevice));
+		}
+
+		MeshGeometry[] geometries = MeshGeometry.CreateDemoMeshes();
+		VulkanMeshBuffers[] buffers =
+			new VulkanMeshBuffers[geometries.Length];
+
+		int createdCount = 0;
+
+		try
+		{
+			for (int index = 0; index < geometries.Length; index++)
+			{
+				buffers[index] = CreateMeshBuffers(
+					instance,
+					device,
+					physicalDevice,
+					geometries[index]);
+
+				createdCount++;
+			}
+		}
+
+		catch
+		{
+			DisposeBuffers(buffers, createdCount);
+			throw;
+		}
+
+		return new DemoMeshes(geometries, buffers);
+	}
+
+	public void Dispose()
+	{
+		if (_disposed)
+		{
+			return;
+		}
+
+		DisposeBuffers(_buffers, _buffers.Length);
+		_disposed = true;
+	}
+
+	private static VulkanMeshBuffers CreateMeshBuffers(
+		VulkanInstance instance,
+		VulkanLogicalDevice device,
+		PhysicalDevice physicalDevice,
+		MeshGeometry geometry)
+	{
+		return geometry.IndexFormat switch
+		{
+			MeshIndexFormat.None => VulkanMeshBuffers.Create(
+				instance,
+				device,
+				physicalDevice,
+				geometry.Vertices.AsSpan()),
+
+			MeshIndexFormat.UInt16 => VulkanMeshBuffers.Create(
+				instance,
+				device,
+				physicalDevice,
+				geometry.Vertices.AsSpan(),
+				geometry.Indices16.AsSpan()),
+
+			MeshIndexFormat.UInt32 => VulkanMeshBuffers.Create(
+				instance,
+				device,
+				physicalDevice,
+				geometry.Vertices.AsSpan(),
+				geometry.Indices32.AsSpan()),
+
+			_ => throw new ArgumentOutOfRangeException(
+				nameof(geometry),
+				geometry.IndexFormat,
+				"Unsupported mesh index format.")
+		};
+	}
+
+	private static void DisposeBuffers(
+		VulkanMeshBuffers?[] buffers,
+		int count)
+	{
+		List<Exception>? failures = null;
+
+		for (int index = count - 1; index >= 0; index--)
+		{
+			try
+			{
+				buffers[index]?.Dispose();
+			}
+
+			catch (Exception exception)
+			{
+				(failures ??= []).Add(exception);
+			}
+		}
+
+		if (failures is { Count: 1 })
+		{
+			ExceptionDispatchInfo.Capture(failures[0]).Throw();
+		}
+
+		if (failures is { Count: > 1 })
+		{
+			throw new AggregateException(
+				"Multiple failures occurred while disposing demo meshes.",
+				failures);
+		}
+	}
+}
