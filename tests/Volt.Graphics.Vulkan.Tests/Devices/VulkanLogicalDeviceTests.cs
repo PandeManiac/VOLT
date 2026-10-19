@@ -102,4 +102,13 @@ public sealed class VulkanLogicalDeviceTests
 
         Assert.Equal("extensions", exception.ParamName);
     }
+
+    [Fact]
+    public void SwapchainMaintenanceSupport_NullInstance_IsRejected()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            VulkanLogicalDevice.SupportsSwapchainMaintenance1(
+                null!,
+                default));
+    }
 }

@@ -14,19 +14,18 @@ namespace Volt.VulkanCubeDemo;
 /// </summary>
 /// <remarks>
 /// Command buffers and their command pool belong to the application
-/// and outlive this generation. The caller must establish GPU
-/// completion before disposing or replacing this object.
+/// and outlive this generation. The caller must establish GPU and
+/// presentation completion before disposing or replacing this object.
 /// </remarks>
 internal sealed class CubeSwapchainResources : IDisposable
 {
     private readonly VulkanSwapchainImageViews _imageViews;
-    private readonly Fence[] _imageInFlightFences;
 
     private bool _disposed;
 
     public VulkanSwapchain Swapchain { get; }
 
-    public VulkanFrameSynchronization Synchronization { get; }
+    public VulkanSwapchainFrameScheduler Frames { get; }
 
     public CubeRenderer Renderer { get; }
 
@@ -35,6 +34,7 @@ internal sealed class CubeSwapchainResources : IDisposable
         PhysicalDevice physicalDevice,
         VulkanLogicalDevice device,
         VulkanSurface surface,
+        VulkanCommandBuffers commandBuffers,
         WindowSize framebufferSize,
         int maximumFramesInFlight,
         string vertexShaderPath,
@@ -43,6 +43,7 @@ internal sealed class CubeSwapchainResources : IDisposable
         ArgumentNullException.ThrowIfNull(instance);
         ArgumentNullException.ThrowIfNull(device);
         ArgumentNullException.ThrowIfNull(surface);
+        ArgumentNullException.ThrowIfNull(commandBuffers);
 
         if (!framebufferSize.IsPositive)
         {
@@ -59,7 +60,7 @@ internal sealed class CubeSwapchainResources : IDisposable
 
         VulkanSwapchain? swapchain = null;
         VulkanSwapchainImageViews? imageViews = null;
-        VulkanFrameSynchronization? synchronization = null;
+        VulkanSwapchainFrameScheduler? frames = null;
         CubeRenderer? renderer = null;
 
         try
@@ -77,16 +78,6 @@ internal sealed class CubeSwapchainResources : IDisposable
                 device,
                 swapchain);
 
-            int framesInFlight = Math.Min(
-                maximumFramesInFlight,
-                checked((int)swapchain.ImageCount));
-
-            synchronization = new VulkanFrameSynchronization(
-                instance,
-                device,
-                framesInFlight,
-                checked((int)swapchain.ImageCount));
-
             renderer = new CubeRenderer(
                 instance,
                 device,
@@ -95,6 +86,13 @@ internal sealed class CubeSwapchainResources : IDisposable
                 imageViews,
                 vertexShaderPath,
                 fragmentShaderPath);
+
+            frames = new VulkanSwapchainFrameScheduler(
+                instance,
+                device,
+                swapchain,
+                commandBuffers,
+                maximumFramesInFlight);
         }
 
         catch
@@ -108,7 +106,7 @@ internal sealed class CubeSwapchainResources : IDisposable
             {
                 try
                 {
-                    synchronization?.Dispose();
+                    frames?.Dispose();
                 }
 
                 finally
@@ -117,7 +115,6 @@ internal sealed class CubeSwapchainResources : IDisposable
                     {
                         imageViews?.Dispose();
                     }
-
                     finally
                     {
                         swapchain?.Dispose();
@@ -134,48 +131,26 @@ internal sealed class CubeSwapchainResources : IDisposable
         Swapchain = swapchain ?? throw new InvalidOperationException(
             "Swapchain was not initialized.");
 
-        Synchronization = synchronization ?? throw new InvalidOperationException(
-            "Frame synchronization was not initialized.");
+        Frames = frames ?? throw new InvalidOperationException(
+            "Frame scheduler was not initialized.");
 
         Renderer = renderer ?? throw new InvalidOperationException(
             "Cube renderer was not initialized.");
-
-        _imageInFlightFences = new Fence[checked((int)Swapchain.ImageCount)];
     }
 
     /// <summary>
-    /// Waits for a previous graphics submission using this image.
+    /// Releases resources belonging to this swapchain generation.
     /// </summary>
-    public void WaitForImage(
-        VulkanInstance instance,
-        VulkanLogicalDevice device,
-        int imageIndex,
-        Fence currentFrameFence,
-        ulong timeoutNanoseconds)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        Fence previousFence = _imageInFlightFences[imageIndex];
-
-        if (previousFence.Handle != 0
-                && previousFence.Handle != currentFrameFence.Handle)
-        {
-            VulkanQueueSubmission.WaitForFence(
-                instance,
-                device,
-                previousFence,
-                timeoutNanoseconds);
-        }
-    }
-
-    /// <summary>
-    /// Records ownership only after successful queue submission.
-    /// </summary>
-    public void MarkImageSubmitted(int imageIndex, Fence frameFence)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        _imageInFlightFences[imageIndex] = frameFence;
-    }
-
+    /// <remarks>
+    /// The caller must establish graphics completion first.
+    ///
+    /// The frame scheduler establishes presentation completion
+    /// when presentation fences are enabled.
+    ///
+    /// If presentation retirement fails, dependent resources
+    /// are intentionally retained rather than destroyed
+    /// while they may still be referenced by Vulkan.
+    /// </remarks>
     public void Dispose()
     {
         if (_disposed)
@@ -183,31 +158,10 @@ internal sealed class CubeSwapchainResources : IDisposable
             return;
         }
 
-        try
-        {
-            Renderer.Dispose();
-        }
-
-        finally
-        {
-            try
-            {
-                Synchronization.Dispose();
-            }
-
-            finally
-            {
-                try
-                {
-                    _imageViews.Dispose();
-                }
-
-                finally
-                {
-                    Swapchain.Dispose();
-                }
-            }
-        }
+        Frames.Dispose();
+        Renderer.Dispose();
+        _imageViews.Dispose();
+        Swapchain.Dispose();
 
         _disposed = true;
     }

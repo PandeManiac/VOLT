@@ -75,7 +75,8 @@ public static unsafe class VulkanSwapchainPresentation
         VulkanLogicalDevice device,
         VulkanSwapchain swapchain,
         uint imageIndex,
-        Semaphore renderFinishedSemaphore)
+        Semaphore renderFinishedSemaphore,
+        Fence presentationFence = default)
     {
         ArgumentNullException.ThrowIfNull(instance);
         ArgumentNullException.ThrowIfNull(device);
@@ -89,14 +90,22 @@ public static unsafe class VulkanSwapchainPresentation
             swapchain.ImageCount,
             renderFinishedSemaphore);
 
+        if (presentationFence.Handle != 0
+                && !device.SwapchainMaintenance1Enabled)
+        {
+            throw new NotSupportedException(
+                "Presentation fences require the swapchainMaintenance1 " +
+                "feature to be enabled on the logical device.");
+        }
+
         Vk api = instance.Api;
         Silk.NET.Vulkan.Instance instanceHandle = instance.Handle;
         Device deviceHandle = device.Handle;
 
         if (!api.TryGetDeviceExtension<KhrSwapchain>(
-            instanceHandle,
-            deviceHandle,
-            out KhrSwapchain? extension)
+                instanceHandle,
+                deviceHandle,
+                out KhrSwapchain? extension)
             || extension is null)
         {
             throw new NotSupportedException(
@@ -114,6 +123,17 @@ public static unsafe class VulkanSwapchainPresentation
                 &nativeImageIndex,
                 swapchain.ImageCount,
                 &nativeWaitSemaphore);
+
+            Fence nativePresentationFence = presentationFence;
+            SwapchainPresentFenceInfoEXT fenceDescription = default;
+
+            if (nativePresentationFence.Handle != 0)
+            {
+                fenceDescription = CreatePresentFenceDescription(
+                    &nativePresentationFence);
+
+                description.PNext = &fenceDescription;
+            }
 
             Result result = extension.QueuePresent(
                 device.GraphicsQueue,
@@ -227,6 +247,32 @@ public static unsafe class VulkanSwapchainPresentation
 
             _ => throw new InvalidOperationException(
                 $"Vulkan swapchain presentation failed: {result}.")
+        };
+    }
+
+    /// <summary>
+    /// Constructs the optional presentation-fence extension structure.
+    /// </summary>
+    /// <remarks>
+    /// The returned structure borrows its fence pointer. Both objects
+    /// must remain alive until vkQueuePresentKHR returns.
+    /// </remarks>
+    internal static SwapchainPresentFenceInfoEXT
+        CreatePresentFenceDescription(Fence* presentationFence)
+    {
+        if (presentationFence == null
+                || presentationFence->Handle == 0)
+        {
+            throw new ArgumentException(
+                "A valid presentation fence is required.",
+                nameof(presentationFence));
+        }
+
+        return new SwapchainPresentFenceInfoEXT
+        {
+            SType = StructureType.SwapchainPresentFenceInfoKhr,
+            SwapchainCount = 1,
+            PFences = presentationFence
         };
     }
 }

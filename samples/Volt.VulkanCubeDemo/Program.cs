@@ -19,9 +19,12 @@ internal static class Program
 {
     private const string ValidationArgument = "--validation";
     private const string SwapchainExtension = "VK_KHR_swapchain";
-
-    private const ulong FenceTimeoutNanoseconds = 5_000_000_000UL;
-    private const ulong AcquireTimeoutNanoseconds = 100_000_000UL;
+    private const string GetSurfaceCapabilities2Extension =
+        "VK_KHR_get_surface_capabilities2";
+    private const string KhrSurfaceMaintenance1Extension =
+        "VK_KHR_surface_maintenance1";
+    private const string ExtSurfaceMaintenance1Extension =
+        "VK_EXT_surface_maintenance1";
 
     private const int MaxFramesInFlight = 2;
     private const int MinimizedPollMilliseconds = 16;
@@ -61,9 +64,43 @@ internal static class Program
 
         using Window window = new(description);
 
-        string[] extensions =
-            VulkanWindowSupport.GetRequiredInstanceExtensions(
-                window);
+        List<string> extensions =
+        [
+            .. VulkanWindowSupport.GetRequiredInstanceExtensions(
+                window)
+        ];
+
+        if (VulkanInstance.IsExtensionSupported(
+                GetSurfaceCapabilities2Extension))
+        {
+            bool khrSurfaceSupported =
+                VulkanInstance.IsExtensionSupported(
+                    KhrSurfaceMaintenance1Extension);
+
+            bool extSurfaceSupported =
+                VulkanInstance.IsExtensionSupported(
+                    ExtSurfaceMaintenance1Extension);
+
+            if (khrSurfaceSupported || extSurfaceSupported)
+            {
+                if (!extensions.Contains(GetSurfaceCapabilities2Extension))
+                {
+                    extensions.Add(GetSurfaceCapabilities2Extension);
+                }
+
+                if (khrSurfaceSupported &&
+                    !extensions.Contains(KhrSurfaceMaintenance1Extension))
+                {
+                    extensions.Add(KhrSurfaceMaintenance1Extension);
+                }
+
+                if (extSurfaceSupported &&
+                    !extensions.Contains(ExtSurfaceMaintenance1Extension))
+                {
+                    extensions.Add(ExtSurfaceMaintenance1Extension);
+                }
+            }
+        }
 
         VulkanInstanceDescription instanceDescription = new(
             ApplicationName: "VOLT Vulkan Cube",
@@ -138,18 +175,31 @@ internal static class Program
         Console.WriteLine($"GPU: {candidates[selectedIndex].Name}");
         Console.WriteLine($"Validation: {validation}");
 
+        string? maintenanceExtension =
+            VulkanLogicalDevice.GetSupportedSwapchainMaintenance1Extension(
+                instance,
+                selectedPhysicalDevice);
+
+        string[] deviceExtensions = maintenanceExtension is not null
+            ? [SwapchainExtension, maintenanceExtension]
+            : [SwapchainExtension];
+
         using VulkanLogicalDevice device = new(
             instance,
             selectedPhysicalDevice,
             selectedQueueFamily,
-            [SwapchainExtension]);
+            deviceExtensions,
+            enableSwapchainMaintenance1:
+                maintenanceExtension is not null);
+
+        Console.WriteLine(
+            $"Swapchain maintenance: " +
+            $"{maintenanceExtension ?? "unavailable"}");
 
         using VulkanCommandPool commandPool = new(
             instance,
             device);
 
-        // Frame-slot command buffers survive swapchain recreation.
-        // Each new swapchain generation creates its own synchronization.
         using VulkanCommandBuffers commandBuffers = new(
             instance,
             device,
@@ -192,10 +242,8 @@ internal static class Program
         Stopwatch statisticsClock = Stopwatch.StartNew();
 
         WindowSize lastFramebufferSize = default;
-
         bool recreationRequested = true;
 
-        int frameIndex = 0;
         int framesSinceReport = 0;
         long totalFrames = 0;
 
@@ -223,19 +271,17 @@ internal static class Program
 
                 if (!framebufferSize.IsPositive)
                 {
-                    // Do not create a zero-extent swapchain or spin at 100% CPU.
                     recreationRequested = true;
                     Thread.Sleep(MinimizedPollMilliseconds);
                     continue;
                 }
 
-                if (resources is null ||
-                    recreationRequested ||
-                    framebufferSize != lastFramebufferSize)
+                if (resources is null
+                        || recreationRequested
+                        || framebufferSize != lastFramebufferSize)
                 {
                     if (resources is not null)
                     {
-                        // Rebuild only at a generation boundary, never per frame.
                         device.WaitIdle();
                         resources.Dispose();
                         resources = null;
@@ -246,6 +292,7 @@ internal static class Program
                         physicalDevice,
                         device,
                         surface,
+                        commandBuffers,
                         framebufferSize,
                         MaxFramesInFlight,
                         vertexShaderPath,
@@ -253,132 +300,36 @@ internal static class Program
 
                     lastFramebufferSize = framebufferSize;
                     recreationRequested = false;
-                    frameIndex = 0;
 
                     Console.WriteLine(
                         $"Swapchain: {resources.Swapchain.Extent.Width}x" +
                         $"{resources.Swapchain.Extent.Height}, " +
                         $"images: {resources.Swapchain.ImageCount}, " +
                         $"depth: {resources.Renderer.DepthFormat}, " +
-                        $"frames in flight: " +
-                        $"{resources.Synchronization.FramesInFlight}");
+                        $"frames in flight: {resources.Frames.FramesInFlight}");
                 }
 
-                VulkanSwapchain swapchain = resources.Swapchain;
-                VulkanFrameSynchronization synchronization =
-                    resources.Synchronization;
+                CubeSwapchainResources active = resources;
 
-                Fence frameFence =
-                    synchronization.GetInFlightFence(frameIndex);
+                VulkanSwapchainFrameResult frame =
+                    active.Frames.Draw(
+                        (commandBuffer, imageIndex) =>
+                        {
+                            active.Renderer.Record(
+                                commandBuffer,
+                                imageIndex,
+                                (float)clock.Elapsed.TotalSeconds * 0.85f);
+                        });
 
-                VulkanQueueSubmission.WaitForFence(
-                    instance,
-                    device,
-                    frameFence,
-                    FenceTimeoutNanoseconds);
-
-                Silk.NET.Vulkan.Semaphore imageAvailable =
-                    synchronization.GetImageAvailableSemaphore(
-                        frameIndex);
-
-                VulkanImageAcquisitionResult acquisition =
-                    VulkanSwapchainAcquisition.Acquire(
-                        instance,
-                        device,
-                        swapchain,
-                        imageAvailable,
-                        AcquireTimeoutNanoseconds);
-
-                if (!acquisition.HasImage)
-                {
-                    if (acquisition.RequiresRecreation)
-                    {
-                        recreationRequested = true;
-                    }
-
-                    continue;
-                }
-
-                uint imageIndex = acquisition.ImageIndex
-                    ?? throw new InvalidOperationException(
-                        "Acquisition returned no image index.");
-
-                int framebufferIndex = checked((int)imageIndex);
-
-                resources.WaitForImage(
-                    instance,
-                    device,
-                    framebufferIndex,
-                    frameFence,
-                    FenceTimeoutNanoseconds);
-
-                CommandBuffer commandBuffer =
-                    commandBuffers.GetBuffer(frameIndex);
-
-                Result resetResult = instance.Api.ResetCommandBuffer(
-                    commandBuffer,
-                    CommandBufferResetFlags.None);
-
-                if (resetResult != Result.Success)
-                {
-                    throw new InvalidOperationException(
-                        $"Command buffer reset failed: {resetResult}.");
-                }
-
-                VulkanCommandRecording.Begin(
-                    instance,
-                    commandBuffer);
-
-                resources.Renderer.Record(
-                    commandBuffer,
-                    framebufferIndex,
-                    (float)clock.Elapsed.TotalSeconds * 0.85f);
-
-                VulkanCommandRecording.End(
-                    instance,
-                    commandBuffer);
-
-                Silk.NET.Vulkan.Semaphore renderFinished =
-                    synchronization.GetRenderFinishedSemaphore(
-                        framebufferIndex);
-
-                VulkanQueueSubmission.ResetFence(
-                    instance,
-                    device,
-                    frameFence);
-
-                VulkanQueueSubmission.Submit(
-                    instance,
-                    device,
-                    commandBuffer,
-                    imageAvailable,
-                    PipelineStageFlags.AllCommandsBit,
-                    renderFinished,
-                    frameFence);
-
-                resources.MarkImageSubmitted(
-                    framebufferIndex,
-                    frameFence);
-
-                // A suboptimal acquisition still owns an image. Submit
-                // and present it before starting a new swapchain generation.
-                VulkanSwapchainPresentationResult presentation =
-                    VulkanSwapchainPresentation.Present(
-                        instance,
-                        device,
-                        swapchain,
-                        imageIndex,
-                        renderFinished);
-
-                if (!presentation.WasAccepted ||
-                    presentation.RequiresRecreation ||
-                    acquisition.RequiresRecreation)
+                if (frame.RequiresRecreation)
                 {
                     recreationRequested = true;
                 }
 
-                frameIndex =
-                    (frameIndex + 1) % synchronization.FramesInFlight;
+                if (!frame.Submitted)
+                {
+                    continue;
+                }
 
                 totalFrames++;
                 framesSinceReport++;
@@ -397,17 +348,14 @@ internal static class Program
                 }
             }
         }
+
         finally
         {
-            try
-            {
-                // Required before freeing command buffers and render targets.
-                device.WaitIdle();
-            }
-            finally
-            {
-                resources?.Dispose();
-            }
+            // Do not release generation resources if GPU completion
+            // cannot be established. Presentation retirement remains
+            // the frame scheduler's responsibility.
+            device.WaitIdle();
+            resources?.Dispose();
         }
     }
 }

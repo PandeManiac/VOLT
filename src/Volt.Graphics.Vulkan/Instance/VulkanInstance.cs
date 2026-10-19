@@ -14,10 +14,12 @@ namespace Volt.Graphics.Vulkan.Instance;
 public sealed unsafe class VulkanInstance : IDisposable
 {
     private const string ValidationLayerName = "VK_LAYER_KHRONOS_validation";
+
     private const string EngineName = "VOLT";
     private const int MaxEnumerationAttempts = 4;
 
     private readonly Vk _api;
+    private readonly HashSet<string> _enabledExtensions;
 
     private Silk.NET.Vulkan.Instance _handle;
     private bool _disposed;
@@ -58,8 +60,13 @@ public sealed unsafe class VulkanInstance : IDisposable
         IReadOnlyList<string>? requiredExtensions = null)
     {
         description.Validate();
+
         string[] extensions = requiredExtensions?.ToArray() ?? [];
         ValidateExtensions(extensions);
+
+        _enabledExtensions = new HashSet<string>(
+            extensions,
+            StringComparer.Ordinal);
 
         Description = description;
 
@@ -104,6 +111,90 @@ public sealed unsafe class VulkanInstance : IDisposable
             _api.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Checks whether the Vulkan loader advertises an instance extension.
+    /// </summary>
+    /// <remarks>
+    /// This does not enable the extension. It can be called before
+    /// creating a VulkanInstance.
+    /// </remarks>
+    public static bool IsExtensionSupported(string extensionName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(extensionName);
+
+        using Vk api = Vk.GetApi();
+
+        for (int attempt = 0;
+             attempt < MaxEnumerationAttempts;
+             attempt++)
+        {
+            uint count = 0;
+
+            EnsureSuccess(
+                api.EnumerateInstanceExtensionProperties(
+                    (byte*)null,
+                    ref count,
+                    null),
+                "Count Vulkan instance extensions");
+
+            if (count == 0)
+            {
+                return false;
+            }
+
+            ExtensionProperties[] properties =
+                new ExtensionProperties[checked((int)count)];
+
+            fixed (ExtensionProperties* pointer = properties)
+            {
+                Result result =
+                    api.EnumerateInstanceExtensionProperties(
+                        (byte*)null,
+                        ref count,
+                        pointer);
+
+                if (result == Result.Incomplete ||
+                    count > (uint)properties.Length)
+                {
+                    continue;
+                }
+
+                EnsureSuccess(
+                    result,
+                    "Enumerate Vulkan instance extensions");
+
+                for (int index = 0;
+                     index < checked((int)count);
+                     index++)
+                {
+                    string? name = Marshal.PtrToStringUTF8(
+                        (nint)pointer[index].ExtensionName);
+
+                    if (name == extensionName)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        throw new InvalidOperationException(
+            "The Vulkan instance extension list kept changing.");
+    }
+
+    /// <summary>
+    /// Gets whether this instance was created with the specified
+    /// extension explicitly enabled.
+    /// </summary>
+    public bool IsExtensionEnabled(string extensionName)
+    {
+        ThrowIfDisposed();
+        ArgumentException.ThrowIfNullOrWhiteSpace(extensionName);
+        return _enabledExtensions.Contains(extensionName);
     }
 
     /// <summary>

@@ -225,6 +225,50 @@ public sealed class VulkanSwapchainPresentationTests
             CreateDescriptionWithNullSwapchainHandle);
     }
 
+
+    [Fact]
+    public unsafe void PresentFenceDescription_UsesCorrectStructureType()
+    {
+        Fence fence = new(42UL);
+
+        SwapchainPresentFenceInfoEXT description =
+            VulkanSwapchainPresentation.CreatePresentFenceDescription(
+                &fence);
+
+        Assert.Equal(
+            StructureType.SwapchainPresentFenceInfoKhr,
+            description.SType);
+
+        Assert.Equal(1u, description.SwapchainCount);
+        Assert.Equal(42UL, description.PFences[0].Handle);
+        Assert.True(description.PNext == null);
+    }
+
+    [Fact]
+    public void PresentFenceDescription_RejectsNullPointer()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            CreateInvalidPresentFenceDescription(
+                useNullPointer: true));
+    }
+
+    [Fact]
+    public void PresentFenceDescription_RejectsNullHandle()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            CreateInvalidPresentFenceDescription(
+                useNullPointer: false));
+    }
+
+    private static unsafe void CreateInvalidPresentFenceDescription(
+        bool useNullPointer)
+    {
+        Fence fence = default;
+
+        VulkanSwapchainPresentation.CreatePresentFenceDescription(
+            useNullPointer ? null : &fence);
+    }
+
     private static unsafe void CreateDescriptionWithNullSwapchainPointer()
     {
         uint imageIndex = 0;

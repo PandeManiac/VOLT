@@ -1,4 +1,3 @@
-
 using System.Runtime.InteropServices;
 using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Instance;
@@ -28,6 +27,21 @@ namespace Volt.Graphics.Vulkan.Devices;
 public sealed unsafe class VulkanLogicalDevice : IDisposable
 {
     private const int MaxEnumerationAttempts = 4;
+
+    private const string SwapchainMaintenance1Extension =
+        "VK_EXT_swapchain_maintenance1";
+
+    private const string KhrSwapchainMaintenance1Extension =
+        "VK_KHR_swapchain_maintenance1";
+
+    private const string KhrSurfaceMaintenance1Extension =
+        "VK_KHR_surface_maintenance1";
+
+    private const string ExtSurfaceMaintenance1Extension =
+        "VK_EXT_surface_maintenance1";
+
+    private const string GetSurfaceCapabilities2Extension =
+        "VK_KHR_get_surface_capabilities2";
 
     private readonly Vk _api;
     private readonly VulkanInstance _instance;
@@ -82,30 +96,76 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
     }
 
     /// <summary>
-    /// Creates a Vulkan logical device with one graphics queue.
+    /// Indicates that swapchain maintenance features, including
+    /// presentation fences, were explicitly enabled at device creation.
     /// </summary>
+    public bool SwapchainMaintenance1Enabled { get; }
+
     public VulkanLogicalDevice(
         VulkanInstance instance,
         PhysicalDevice physicalDevice,
         uint graphicsQueueFamilyIndex,
-        IReadOnlyList<string>? requiredExtensions = null)
+        IReadOnlyList<string>? requiredExtensions = null,
+        bool enableSwapchainMaintenance1 = false)
     {
         ArgumentNullException.ThrowIfNull(instance);
 
         if (physicalDevice.Handle == 0)
         {
             throw new ArgumentException(
-                "A valid Vulkan physical-device handle is required.",
+                "A valid physical-device handle is required.",
                 nameof(physicalDevice));
         }
 
         string[] extensions = requiredExtensions?.ToArray() ?? [];
         ValidateExtensionNames(extensions);
 
+        if (enableSwapchainMaintenance1)
+        {
+            bool extRequested = extensions.Contains(
+                SwapchainMaintenance1Extension,
+                StringComparer.Ordinal);
+
+            bool khrRequested = extensions.Contains(
+                KhrSwapchainMaintenance1Extension,
+                StringComparer.Ordinal);
+
+            if (extRequested == khrRequested)
+            {
+                throw new ArgumentException(
+                    "Exactly one swapchain maintenance extension " +
+                    "must be requested when enabling the feature.",
+                    nameof(requiredExtensions));
+            }
+
+            if (!instance.IsExtensionEnabled(
+                    GetSurfaceCapabilities2Extension))
+            {
+                throw new ArgumentException(
+                    "Swapchain maintenance requires the " +
+                    "VK_KHR_get_surface_capabilities2 instance extension.",
+                    nameof(requiredExtensions));
+            }
+
+            string requiredSurfaceExtension = khrRequested
+                ? KhrSurfaceMaintenance1Extension
+                : ExtSurfaceMaintenance1Extension;
+
+            if (!instance.IsExtensionEnabled(requiredSurfaceExtension))
+            {
+                throw new ArgumentException(
+                    "The matching surface maintenance instance " +
+                    "extension must be enabled.",
+                    nameof(requiredExtensions));
+            }
+        }
+
         _api = instance.Api;
         _instance = instance;
 
-        VerifyPhysicalDevice(instance, physicalDevice);
+        VerifyPhysicalDevice(
+            instance,
+            physicalDevice);
 
         VerifyGraphicsQueueFamily(
             _api,
@@ -116,6 +176,13 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
             _api,
             physicalDevice,
             extensions);
+
+        if (enableSwapchainMaintenance1)
+        {
+            VerifySwapchainMaintenance1Support(
+                _api,
+                physicalDevice);
+        }
 
         PhysicalDeviceMemoryProperties memoryProperties =
             _api.GetPhysicalDeviceMemoryProperties(
@@ -140,7 +207,8 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
             _api,
             physicalDevice,
             graphicsQueueFamilyIndex,
-            extensions);
+            extensions,
+            enableSwapchainMaintenance1);
 
         try
         {
@@ -160,6 +228,7 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
             _graphicsQueue = graphicsQueue;
 
             GraphicsQueueFamilyIndex = graphicsQueueFamilyIndex;
+            SwapchainMaintenance1Enabled = enableSwapchainMaintenance1;
         }
 
         catch
@@ -168,6 +237,102 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
             throw;
         }
     }
+
+    /// <summary>
+    /// Determines which swapchain maintenance extension is supported
+    /// by the selected physical device and enabled instance extensions.
+    /// </summary>
+    /// <returns>
+    /// The KHR extension name, the EXT extension name, or null.
+    /// </returns>
+    public static string? GetSupportedSwapchainMaintenance1Extension(
+        VulkanInstance instance,
+        PhysicalDevice physicalDevice)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+
+        if (physicalDevice.Handle == 0)
+        {
+            throw new ArgumentException(
+                "A valid physical-device handle is required.",
+                nameof(physicalDevice));
+        }
+
+        VerifyPhysicalDevice(
+            instance,
+            physicalDevice);
+
+        bool khrSurfaceEnabled = instance.IsExtensionEnabled(
+            KhrSurfaceMaintenance1Extension);
+
+        bool extSurfaceEnabled = instance.IsExtensionEnabled(
+            ExtSurfaceMaintenance1Extension);
+
+        bool capabilities2Enabled = instance.IsExtensionEnabled(
+            GetSurfaceCapabilities2Extension);
+
+        if (!capabilities2Enabled
+                || (!khrSurfaceEnabled && !extSurfaceEnabled))
+        {
+            return null;
+        }
+
+        bool khrDeviceSupported =
+            khrSurfaceEnabled &&
+            SupportsDeviceExtension(
+                instance.Api,
+                physicalDevice,
+                KhrSwapchainMaintenance1Extension);
+
+        bool extDeviceSupported =
+            extSurfaceEnabled &&
+            SupportsDeviceExtension(
+                instance.Api,
+                physicalDevice,
+                SwapchainMaintenance1Extension);
+
+        if (!khrDeviceSupported && !extDeviceSupported)
+        {
+            return null;
+        }
+
+        bool featureSupported;
+
+        try
+        {
+            VerifySwapchainMaintenance1Support(
+                instance.Api,
+                physicalDevice);
+
+            featureSupported = true;
+        }
+
+        catch (NotSupportedException)
+        {
+            featureSupported = false;
+        }
+
+        return SelectSwapchainMaintenance1Extension(
+            khrSurfaceEnabled,
+            extSurfaceEnabled,
+            khrDeviceSupported,
+            extDeviceSupported,
+            featureSupported);
+    }
+
+    /// <summary>
+    /// Checks whether the swapchain maintenance feature can be enabled
+    /// through either the KHR or EXT extension.
+    /// </summary>
+    public static bool SupportsSwapchainMaintenance1(
+        VulkanInstance instance,
+        PhysicalDevice physicalDevice)
+    {
+        return GetSupportedSwapchainMaintenance1Extension(
+            instance,
+            physicalDevice) is not null;
+    }
+
 
     /// <summary>
     /// Waits until all submitted work on this device has completed.
@@ -509,11 +674,40 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
         }
     }
 
+    private static void VerifySwapchainMaintenance1Support(
+        Vk api,
+        PhysicalDevice physicalDevice)
+    {
+        PhysicalDeviceSwapchainMaintenance1FeaturesEXT maintenance = new()
+        {
+            SType =
+                StructureType.PhysicalDeviceSwapchainMaintenance1FeaturesKhr
+        };
+
+        PhysicalDeviceFeatures2 features = new()
+        {
+            SType = StructureType.PhysicalDeviceFeatures2,
+            PNext = &maintenance
+        };
+
+        api.GetPhysicalDeviceFeatures2(
+            physicalDevice,
+            &features);
+
+        if (maintenance.SwapchainMaintenance1 != Vk.True)
+        {
+            throw new NotSupportedException(
+                "The physical device does not support the " +
+                "swapchainMaintenance1 feature.");
+        }
+    }
+
     private static Device CreateNativeDevice(
         Vk api,
         PhysicalDevice physicalDevice,
         uint graphicsQueueFamilyIndex,
-        string[] extensions)
+        string[] extensions,
+        bool enableSwapchainMaintenance1)
     {
         List<nint> allocations = [];
 
@@ -540,6 +734,12 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
                 PQueuePriorities = &priority
             };
 
+            PhysicalDeviceSwapchainMaintenance1FeaturesEXT maintenance = new()
+            {
+                SType = StructureType.PhysicalDeviceSwapchainMaintenance1FeaturesKhr,
+                SwapchainMaintenance1 = Vk.True,
+            };
+
             fixed (nint* extensionNames = extensionPointers)
             {
                 DeviceCreateInfo createInfo = new()
@@ -552,7 +752,10 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
                         extensions.Length > 0
                             ? (byte**)extensionNames
                             : null,
-                    PEnabledFeatures = null
+                    PEnabledFeatures = null,
+                    PNext = enableSwapchainMaintenance1
+                        ? &maintenance
+                        : null,
                 };
 
                 Result result = api.CreateDevice(
@@ -580,6 +783,60 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
             {
                 Marshal.FreeCoTaskMem(allocation);
             }
+        }
+    }
+
+
+    /// <summary>
+    /// Selects a compatible swapchain maintenance extension.
+    /// The KHR extension is preferred when both are available.
+    /// </summary>
+    internal static string? SelectSwapchainMaintenance1Extension(
+        bool khrSurfaceEnabled,
+        bool extSurfaceEnabled,
+        bool khrDeviceSupported,
+        bool extDeviceSupported,
+        bool featureSupported)
+    {
+        if (!featureSupported)
+        {
+            return null;
+        }
+
+        if (khrSurfaceEnabled && khrDeviceSupported)
+        {
+            return KhrSwapchainMaintenance1Extension;
+        }
+
+        if (extSurfaceEnabled && extDeviceSupported)
+        {
+            return SwapchainMaintenance1Extension;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Checks whether the physical device advertises a given extension.
+    /// </summary>
+    private static bool SupportsDeviceExtension(
+        Vk api,
+        PhysicalDevice physicalDevice,
+        string extensionName)
+    {
+        try
+        {
+            VerifyDeviceExtensions(
+                api,
+                physicalDevice,
+                [extensionName]);
+
+            return true;
+        }
+
+        catch (NotSupportedException)
+        {
+            return false;
         }
     }
 
