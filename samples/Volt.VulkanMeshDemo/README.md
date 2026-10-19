@@ -26,6 +26,42 @@ binding zero, not shader-based vertex pulling. A single push constant
 supplies the current aspect ratio, so the three shapes stay separated
 and keep their proportions when the window is resized.
 
+## Scenes
+
+`--scene gallery` is the default and renders the three separated meshes
+described above. `--scene depth-occlusion` uploads an overlapping scene
+instead, once per run, through the same mesh buffers:
+
+| Mesh | Geometry | Depth | Index format | Draws |
+| --- | --- | --- | --- | --- |
+| Near | Red triangle | `0.2` | none | 1 `vkCmdDraw` |
+| Far | Blue quad | `0.8` | `uint16` | 2 partial ranges |
+| Reference | Green hexagon | `0.5` | `uint32` | 1 complete mesh |
+
+The draw order is near, far, then reference. The far blue quad is
+recorded after the near red triangle even though it is farther away,
+so ordering alone would make the quad cover the overlap. With depth
+testing and depth writes enabled, the earlier red fragments remain
+visible because `0.8 < 0.2` is false with the `Less` comparison.
+
+Both overlapping meshes use one depth value for every vertex, so the
+result never depends on interpolated depth or floating-point equality.
+The quad extends past the triangle's right edge, leaving blue pixels
+that are visible in both modes.
+
+The vertex shader forwards the authored Z coordinate as clip-space
+depth with `W = 1.0`, so authored values are already Vulkan's 0..1
+depth range. The gallery authors `0.0` for every vertex, which keeps
+its image unchanged.
+
+### Negative control
+
+`--disable-depth-test` is available only with
+`--scene depth-occlusion`. It disables depth testing and depth writes
+for the sample pipeline without changing the draw order, geometry,
+colours, mesh uploads, or depth attachment. The overlap pixel turns
+blue because the later quad is no longer rejected.
+
 ## Depth attachment
 
 The render pass has a color attachment and a depth attachment. Each
@@ -48,10 +84,12 @@ framebuffers before their depth views, then the depth images and their
 memory. The replacement generation builds fresh attachments for the
 new extent. Mesh buffers are not re-uploaded.
 
-The three shapes do not overlap, so adding the depth buffer leaves the
-image visually unchanged. That confirms correct attachment
-configuration but does not demonstrate depth occlusion for overlapping
-geometry.
+The default gallery's three shapes do not overlap, so its image is
+visually unchanged by depth testing. The opt-in depth-occlusion scene
+uses the same render pass, depth attachments, and pipeline with
+overlapping meshes to show that the near red triangle survives the
+later far blue quad. That is the depth-test proof; see
+[Scenes](#scenes).
 
 ## Rendering structure
 
@@ -120,6 +158,38 @@ ten seconds, the bounded run reports the stall and exits instead of
 waiting forever. This covers a minimized window or an unavailable
 presentation surface.
 
+### Headless depth-occlusion verification
+
+The headless harness supports targeted pixel assertions, so the scene
+is verified on the GPU instead of only by pipeline configuration:
+
+```bash
+# Depth testing enabled: the overlap stays red.
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots --expect-clusters 2 \
+  --sample-arg=--scene --sample-arg depth-occlusion \
+  --expect-pixel-class 580,400,red \
+  --expect-pixel-class 720,400,blue
+
+# Negative control: the same overlap becomes blue.
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots --expect-clusters 2 \
+  --sample-arg=--scene --sample-arg depth-occlusion \
+  --sample-arg=--disable-depth-test \
+  --expect-pixel-class 580,400,blue \
+  --expect-pixel-class 720,400,blue
+```
+
+The probes are derived from the geometry and the shader projection for
+the fixed 1280x720 viewport: at row 400 the near triangle spans
+`x = 447..616` and the far quad spans `x = 539..780`. `580,400` is
+inside both meshes, while `720,400` is inside the quad only. Both
+points are more than 30 pixels from every silhouette. The unit tests
+recompute this mapping and fail if geometry changes move either probe
+onto an edge.
+
 ### Resize scenario
 
 An opt-in resize scenario exercises swapchain recreation without user
@@ -169,8 +239,9 @@ dotnet test tests/Volt.VulkanMeshDemo.Tests -c Release
 ```
 
 The focused tests cover mesh counts, index validity, the four-draw
-plan including the quad's two partial index ranges, command-line
-parsing for validation, bounded frames, and the resize scenario
-(paired arguments, bounds, malformed sizes, triggers at or past the
-frame limit, duplicates, and one-time triggering), plus the required
-swapchain maintenance1 negotiation.
+plan including the quad's two partial index ranges, scene selection
+and the depth-negative-control rules, occlusion depths and colours,
+analytic probe placement, command-line parsing for validation, bounded
+frames, and the resize scenario (paired arguments, bounds, malformed
+sizes, triggers at or past the frame limit, duplicates, and one-time
+triggering), plus the required swapchain maintenance1 negotiation.

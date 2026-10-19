@@ -57,7 +57,8 @@ internal sealed class MeshSwapchainResources : IDisposable
 		WindowSize framebufferSize,
 		int maximumFramesInFlight,
 		string vertexShaderPath,
-		string fragmentShaderPath)
+		string fragmentShaderPath,
+		bool depthTestEnabled = true)
 	{
 		ArgumentNullException.ThrowIfNull(instance);
 		ArgumentNullException.ThrowIfNull(device);
@@ -99,14 +100,15 @@ internal sealed class MeshSwapchainResources : IDisposable
 				swapchain);
 
 			renderer = new MeshRenderer(
-				instance,
-				device,
-				physicalDevice,
-				swapchain,
-				imageViews,
-				meshes,
-				vertexShaderPath,
-				fragmentShaderPath);
+					instance,
+					device,
+					physicalDevice,
+					swapchain,
+					imageViews,
+					meshes,
+					vertexShaderPath,
+					fragmentShaderPath,
+					depthTestEnabled);
 
 			frames = new VulkanSwapchainFrameScheduler(
 				instance,

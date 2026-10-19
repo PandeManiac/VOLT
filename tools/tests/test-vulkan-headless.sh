@@ -373,6 +373,7 @@ mode = sys.argv[2]
 width, height = 1280, 720
 background = (16, 16, 20)
 foreground = (220, 90, 60)
+blue = (60, 90, 220)
 runs = ((300, 490), (560, 720), (770, 960))
 
 background_row = bytes(background) * width
@@ -383,6 +384,11 @@ for y in range(200, 481):
 
     for start, end in runs:
         row[start * 3:(end + 1) * 3] = bytes(foreground) * (end - start + 1)
+
+    # A blue patch inside the middle bar keeps the cluster layout
+    # unchanged while giving pixel-class assertions both colours.
+    if 300 <= y <= 340:
+        row[600 * 3:681 * 3] = bytes(blue) * 81
 
     content_rows[y] = bytes(row)
 
@@ -535,6 +541,8 @@ assert_contains "$RUN_DIR/summary.txt" "validation_line=True"
 assert_contains "$RUN_DIR/summary.txt" "validation_diagnostics=0"
 assert_contains "$RUN_DIR/image-analysis.log" "IMAGE_OK"
 assert_contains "$RUN_DIR/image-analysis.log" "IMAGE_CONTENT_PERCENT"
+assert_not_contains "$RUN_DIR/image-analysis.log" "IMAGE_PIXEL="
+assert_contains "$RUN_DIR/summary.txt" "pixel_expectations=0"
 assert_file "$RUN_DIR/app.stdout.log"
 assert_file "$RUN_DIR/app.stderr.log"
 assert_file "$RUN_DIR/weston.log"
@@ -856,6 +864,87 @@ SOCKET_B=$(grep '^SOCKET=' "$CASE_DIR/project-b/socket.log" | tail -n 1)
 [ "$SOCKET_A" != "$SOCKET_B" ] || fail "concurrent runs shared a socket"
 [ -z "$(find "$CONCURRENT_TMP" -maxdepth 1 -name 'volt-headless-runtime.*' -print)" ] ||
     fail "concurrent runs left private runtime directories behind"
+end_case
+
+# --- pixel-class assertions --------------------------------------------------
+
+begin_case "pixel-pass"
+run_default --frames 5 --screenshots \
+    --expect-pixel-class 350,300,red \
+    --expect-pixel-class 640,320,blue \
+    --expect-pixel-class=800,300,red
+assert_rc 0
+assert_run_dir
+assert_contains "$RUN_DIR/image-analysis.log" \
+    "IMAGE_PIXEL=350,300,expected=red,actual=220,90,60,class=red,PASS"
+assert_contains "$RUN_DIR/image-analysis.log" \
+    "IMAGE_PIXEL=640,320,expected=blue,actual=60,90,220,class=blue,PASS"
+assert_contains "$RUN_DIR/image-analysis.log" \
+    "IMAGE_PIXEL=800,300,expected=red,actual=220,90,60,class=red,PASS"
+assert_contains "$RUN_DIR/image-analysis.log" "IMAGE_OK"
+assert_contains "$RUN_DIR/summary.txt" "pixel_expectations=3"
+assert_contains "$RUN_DIR/summary.txt" "IMAGE_PIXEL=350,300"
+assert_contains "$RUN_DIR/invocation.log" "pixel_expectation=350,300,red"
+assert_contains "$RUN_DIR/invocation.log" "pixel_expectation=640,320,blue"
+assert_runtime_clean
+end_case
+
+begin_case "pixel-fail"
+run_default --frames 5 --screenshots --expect-pixel-class 350,300,blue
+assert_rc 10
+assert_run_dir
+assert_contains "$RUN_DIR/image-analysis.log" \
+    "IMAGE_PIXEL=350,300,expected=blue,actual=220,90,60,class=red,FAIL"
+assert_contains "$RUN_DIR/summary.txt" "expected blue, got red (220,90,60)"
+assert_contains "$CASE_DIR/console.err" "expected blue, got red"
+assert_runtime_clean
+end_case
+
+begin_case "pixel-out-of-bounds"
+run_default --frames 5 --screenshots --expect-pixel-class 1280,0,red
+assert_rc 10
+assert_run_dir
+assert_contains "$RUN_DIR/image-analysis.log" \
+    "pixel expectation 1280,0 is outside the 1280x720 image"
+assert_contains "$CASE_DIR/console.err" \
+    "pixel expectation 1280,0 is outside the 1280x720 image"
+assert_runtime_clean
+end_case
+
+begin_case "pixel-unsupported-class"
+run_default --frames 5 --screenshots --expect-pixel-class 350,300,green
+assert_rc 10
+assert_run_dir
+assert_contains "$RUN_DIR/image-analysis.log" \
+    "unsupported pixel class 'green'"
+assert_contains "$CASE_DIR/console.err" "unsupported pixel class 'green'"
+assert_runtime_clean
+end_case
+
+begin_case "pixel-malformed"
+run_default --frames 5 --screenshots --expect-pixel-class nonsense
+assert_rc 10
+assert_run_dir
+assert_contains "$RUN_DIR/image-analysis.log" \
+    "malformed pixel expectation 'nonsense'"
+assert_contains "$CASE_DIR/console.err" \
+    "malformed pixel expectation 'nonsense'"
+assert_runtime_clean
+end_case
+
+begin_case "pixel-no-screenshots"
+run_default --frames 3 --expect-pixel-class 350,300,red
+assert_rc 2
+assert_contains "$CASE_DIR/console.err" \
+    "--expect-pixel-class requires --screenshots"
+end_case
+
+begin_case "pixel-missing-value"
+run_harness --project "$CASE_DIR/sample" --output-dir "$CASE_DIR/out" \
+    --expect-pixel-class
+assert_rc 2
+assert_contains "$CASE_DIR/console.err" \
+    "option --expect-pixel-class requires a value"
 end_case
 
 # --- compositor shell and sample argument forwarding -------------------------

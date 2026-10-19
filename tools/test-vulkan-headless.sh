@@ -36,6 +36,7 @@ FRAMES=600
 VALIDATION=0
 SCREENSHOTS=0
 EXPECT_CLUSTERS=""
+PIXEL_EXPECTATIONS=()
 WESTON_SHELL=kiosk
 SAMPLE_ARGS=()
 OUTPUT_DIR="$REPO_ROOT/artifacts/headless"
@@ -83,6 +84,11 @@ Options:
   --screenshots           Capture and verify a screenshot while it runs.
   --expect-clusters N     Require N horizontal content clusters in the
                           screenshot (use 3 for Volt.VulkanMeshDemo).
+  --expect-pixel-class X,Y,CLASS
+                          Require the pixel at X,Y to be dominated by
+                          CLASS: red or blue. Repeatable; needs
+                          --screenshots. The actual RGB value and class
+                          are recorded in image-analysis.log.
   --weston-shell NAME     Shell for the private headless Weston: kiosk
                           (default) or desktop. The desktop shell runs
                           without its panel so the sample window covers
@@ -319,6 +325,7 @@ write_summary() {
         printf 'application_status=%s\n' "${APP_STATUS:-}"
         printf 'screenshot=%s\n' "${SCREENSHOT_PATH:-}"
         printf 'screenshot_summary=%s\n' "${SCREENSHOT_SUMMARY:-}"
+        printf 'pixel_expectations=%s\n' "${#PIXEL_EXPECTATIONS[@]}"
         printf 'gpu=%s\n' "${GPU_LINE:-}"
         printf 'timeout_seconds=%s\n' "$TIMEOUT_SECONDS"
         printf 'compositor=weston-headless-%sx%s\n' "$WIDTH" "$HEIGHT"
@@ -443,6 +450,21 @@ while [ $# -gt 0 ]; do
             EXPECT_CLUSTERS=$2
             shift 2
             ;;
+        --expect-pixel-class)
+            require_value "$1" "$#" "${2-}"
+            PIXEL_EXPECTATIONS+=("$2")
+            shift 2
+            ;;
+        --expect-pixel-class=*)
+            pixel_expectation=${1#*=}
+
+            if [ -z "$pixel_expectation" ]; then
+                usage_error "--expect-pixel-class requires a value"
+            fi
+
+            PIXEL_EXPECTATIONS+=("$pixel_expectation")
+            shift
+            ;;
         --weston-shell)
             require_value "$1" "$#" "${2-}"
 
@@ -504,6 +526,10 @@ fi
 
 if [ "$SCREENSHOTS" -eq 0 ] && [ -n "$EXPECT_CLUSTERS" ]; then
     usage_error "--expect-clusters requires --screenshots"
+fi
+
+if [ "${#PIXEL_EXPECTATIONS[@]}" -gt 0 ] && [ "$SCREENSHOTS" -eq 0 ]; then
+    usage_error "--expect-pixel-class requires --screenshots"
 fi
 
 if [ ! -d "$PROJECT_DIR" ]; then
@@ -621,6 +647,7 @@ DEADLINE=$(( $(now) + TIMEOUT_SECONDS ))
     printf 'validation=%s\n' "$VALIDATION"
     printf 'screenshots=%s\n' "$SCREENSHOTS"
     printf 'expect_clusters=%s\n' "${EXPECT_CLUSTERS:-}"
+    printf 'pixel_expectations=%s\n' "${#PIXEL_EXPECTATIONS[@]}"
     printf 'weston_shell=%s\n' "$WESTON_SHELL"
     printf 'weston_config=%s\n' "$WESTON_CONFIG"
     printf 'output_dir=%s\n' "$OUTPUT_DIR"
@@ -634,6 +661,10 @@ DEADLINE=$(( $(now) + TIMEOUT_SECONDS ))
 
     for argument in "${SAMPLE_ARGS[@]}"; do
         printf 'sample_arg=%s\n' "$argument"
+    done
+
+    for expectation in "${PIXEL_EXPECTATIONS[@]}"; do
+        printf 'pixel_expectation=%s\n' "$expectation"
     done
 } >"$RUN_DIR/invocation.log"
 
@@ -916,8 +947,14 @@ fi
 if [ -n "$SCREENSHOT_PATH" ]; then
     IMAGE_STATUS=0
 
-    IMAGE_OUTPUT=$(python3 - "$SCREENSHOT_PATH" "$WIDTH" "$HEIGHT" \
-            "${EXPECT_CLUSTERS:-}" <<'PY' 2>&1
+    IMAGE_ARGS=("$SCREENSHOT_PATH" "$WIDTH" "$HEIGHT" \
+        "${EXPECT_CLUSTERS:-}")
+
+    if [ "${#PIXEL_EXPECTATIONS[@]}" -gt 0 ]; then
+        IMAGE_ARGS+=("${PIXEL_EXPECTATIONS[@]}")
+    fi
+
+    IMAGE_OUTPUT=$(python3 - "${IMAGE_ARGS[@]}" <<'PY' 2>&1
 import struct
 import sys
 import zlib
@@ -927,6 +964,17 @@ path, expected_width, expected_height, expected_clusters = sys.argv[1:5]
 expected_width = int(expected_width)
 expected_height = int(expected_height)
 expected_clusters = int(expected_clusters) if expected_clusters else None
+
+pixel_expectations = []
+
+for raw in sys.argv[5:]:
+    parts = raw.split(",")
+
+    if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit():
+        print(f"IMAGE_ERROR=malformed pixel expectation '{raw}'; use X,Y,CLASS")
+        sys.exit(1)
+
+    pixel_expectations.append((int(parts[0]), int(parts[1]), parts[2]))
 
 
 def fail(message):
@@ -987,6 +1035,19 @@ if chunks[-1][0] != b"IEND" or chunks[-1][1] != b"":
 
 (width, height, depth, color_type, compression, filter_method,
     interlace) = struct.unpack(">IIBBBBB", chunks[0][1])
+
+supported_pixel_classes = ("red", "blue")
+
+for pixel_x, pixel_y, expected_class in pixel_expectations:
+    if expected_class not in supported_pixel_classes:
+        fail(
+            f"unsupported pixel class '{expected_class}'; "
+            "supported classes: red, blue")
+
+    if pixel_x >= width or pixel_y >= height:
+        fail(
+            f"pixel expectation {pixel_x},{pixel_y} is outside "
+            f"the {width}x{height} image")
 
 if compression != 0 or filter_method != 0:
     fail("unsupported PNG compression or filter method")
@@ -1105,6 +1166,36 @@ def pixel(row, x):
     return (row[index], row[index + 1], row[index + 2])
 
 
+def classify_pixel(red, green, blue):
+    # Dominance checks tolerate sRGB conversion and rasterization
+    # differences while rejecting blended or background pixels.
+    if red > 100 and red - green >= 40 and red - blue >= 40:
+        return "red"
+
+    if blue > 100 and blue - red >= 40 and blue - green >= 40:
+        return "blue"
+
+    return "other"
+
+
+pixel_failures = []
+
+for pixel_x, pixel_y, expected_class in pixel_expectations:
+    red, green, blue = pixel(rows[pixel_y], pixel_x)
+    actual_class = classify_pixel(red, green, blue)
+    passed = actual_class == expected_class
+
+    print(
+        f"IMAGE_PIXEL={pixel_x},{pixel_y},"
+        f"expected={expected_class},actual={red},{green},{blue},"
+        f"class={actual_class},{'PASS' if passed else 'FAIL'}")
+
+    if not passed:
+        pixel_failures.append(
+            f"pixel {pixel_x},{pixel_y} expected {expected_class}, "
+            f"got {actual_class} ({red},{green},{blue})")
+
+
 sample = Counter()
 
 for y in range(0, height, 4):
@@ -1158,6 +1249,9 @@ if percent < 0.5:
 if expected_clusters is not None and len(runs) != expected_clusters:
     fail(f"expected {expected_clusters} content clusters, found {len(runs)}")
 
+if pixel_failures:
+    fail("; ".join(pixel_failures))
+
 print("IMAGE_OK")
 PY
 ) || IMAGE_STATUS=$?
@@ -1170,7 +1264,7 @@ PY
             "screenshot verification failed: ${IMAGE_ERROR:-unknown error}"
     else
         SCREENSHOT_SUMMARY=$(printf '%s\n' "$IMAGE_OUTPUT" |
-            grep -E '^IMAGE_(SIZE|CONTENT_PERCENT|CLUSTERS)=' |
+            grep -E '^IMAGE_(SIZE|CONTENT_PERCENT|CLUSTERS|PIXEL)=' |
             tr '\n' ' ' | sed 's/[[:space:]]*$//')
 
         log "image verified: $SCREENSHOT_SUMMARY"

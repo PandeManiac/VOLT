@@ -34,6 +34,22 @@ internal enum MeshIndexFormat
 }
 
 /// <summary>
+/// Selects the mesh set and draw scene for one sample run.
+/// </summary>
+internal enum DemoScene
+{
+	/// <summary>
+	/// The original three separated meshes.
+	/// </summary>
+	Gallery,
+
+	/// <summary>
+	/// Overlapping near and far meshes that prove depth testing.
+	/// </summary>
+	DepthOcclusion
+}
+
+/// <summary>
 /// Describes one mesh uploaded once at startup.
 /// </summary>
 internal sealed class MeshGeometry
@@ -63,12 +79,14 @@ internal sealed class MeshGeometry
 	public uint[] Indices32 { get; }
 
 	/// <summary>
-	/// Creates the three meshes drawn by the sample.
+	/// Creates the three meshes drawn by the default gallery scene.
 	/// </summary>
 	/// <remarks>
 	/// The geometries are laid out side by side in normalized device
 	/// coordinates. The shader applies aspect correction, so the
 	/// left, center, and right meshes remain separated on screen.
+	/// Every vertex uses depth 0.0, so enabling depth testing leaves
+	/// the gallery image unchanged.
 	/// </remarks>
 	public static MeshGeometry[] CreateDemoMeshes()
 	{
@@ -78,6 +96,123 @@ internal sealed class MeshGeometry
 			CreateQuadWithUInt16Indices(),
 			CreateHexagonWithUInt32Indices()
 		];
+	}
+
+	/// <summary>
+	/// Creates the three meshes drawn by the depth-occlusion scene.
+	/// </summary>
+	/// <remarks>
+	/// The array order is the draw order: the near red triangle is
+	/// recorded first, the far blue quad second, and the separate
+	/// reference hexagon last. The quad is drawn after the triangle
+	/// even though it is farther away, so only the depth test can
+	/// keep the red overlap visible.
+	///
+	/// Depths are authored as clip-space Z values in the valid
+	/// Vulkan 0..1 range with W = 1.0. Both overlapping meshes use
+	/// one depth for every vertex, so the comparison never depends
+	/// on interpolated depth differences.
+	/// </remarks>
+	public static MeshGeometry[] CreateDepthOcclusionMeshes()
+	{
+		return
+		[
+			CreateNearTriangle(),
+			CreateFarQuadWithUInt16Indices(),
+			CreateReferenceHexagonWithUInt32Indices()
+		];
+	}
+
+	private static MeshGeometry CreateNearTriangle()
+	{
+		const float depth = 0.2f;
+
+		Vector3 color = new(0.95f, 0.10f, 0.12f);
+
+		MeshVertex[] vertices =
+		[
+			new(new Vector3(-0.30f, 0.24f, depth), color),
+			new(new Vector3(-0.62f, -0.24f, depth), color),
+			new(new Vector3(0.02f, -0.24f, depth), color)
+		];
+
+		return new MeshGeometry(
+			"Near: red triangle (depth 0.2, vkCmdDraw)",
+			MeshIndexFormat.None,
+			vertices,
+			[],
+			[]);
+	}
+
+	private static MeshGeometry CreateFarQuadWithUInt16Indices()
+	{
+		const float depth = 0.8f;
+
+		Vector3 color = new(0.08f, 0.25f, 0.95f);
+
+		MeshVertex[] vertices =
+		[
+			new(new Vector3(-0.28f, 0.08f, depth), color),
+			new(new Vector3(0.39f, 0.08f, depth), color),
+			new(new Vector3(0.39f, -0.25f, depth), color),
+			new(new Vector3(-0.28f, -0.25f, depth), color)
+		];
+
+		ushort[] indices = [0, 1, 2, 0, 2, 3];
+
+		return new MeshGeometry(
+			"Far: blue quad (depth 0.8, uint16 indices)",
+			MeshIndexFormat.UInt16,
+			vertices,
+			indices,
+			[]);
+	}
+
+	private static MeshGeometry CreateReferenceHexagonWithUInt32Indices()
+	{
+		const int ringVertexCount = 6;
+		const float centerX = -0.85f;
+		const float radius = 0.14f;
+		const float depth = 0.5f;
+
+		Vector3 color = new(0.10f, 0.85f, 0.25f);
+
+		MeshVertex[] vertices = new MeshVertex[ringVertexCount + 1];
+
+		vertices[0] = new MeshVertex(
+			new Vector3(centerX, 0.0f, depth),
+			color);
+
+		for (int index = 0; index < ringVertexCount; index++)
+		{
+			float angle =
+				MathF.Tau * index / ringVertexCount;
+
+			float x = centerX + (radius * MathF.Cos(angle));
+			float y = radius * MathF.Sin(angle);
+
+			vertices[index + 1] = new MeshVertex(
+				new Vector3(x, y, depth),
+				color);
+		}
+
+		uint[] indices = new uint[ringVertexCount * 3];
+
+		for (int index = 0; index < ringVertexCount; index++)
+		{
+			int offset = index * 3;
+
+			indices[offset] = 0;
+			indices[offset + 1] = checked((uint)(index + 1));
+			indices[offset + 2] = checked((uint)(((index + 1) % ringVertexCount) + 1));
+		}
+
+		return new MeshGeometry(
+			"Reference: green hexagon (depth 0.5, uint32 indices)",
+			MeshIndexFormat.UInt32,
+			vertices,
+			[],
+			indices);
 	}
 
 	private static MeshGeometry CreateTriangle()

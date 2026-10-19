@@ -19,6 +19,8 @@ public sealed class ProgramOptionsTests
 		Assert.Null(options.FrameLimit);
 		Assert.Null(options.ResizeAtFrame);
 		Assert.Null(options.ResizeTo);
+		Assert.Equal(DemoScene.Gallery, options.Scene);
+		Assert.False(options.DepthTestDisabled);
 	}
 
 	[Fact]
@@ -106,6 +108,166 @@ public sealed class ProgramOptionsTests
 				out string error));
 
 		Assert.Contains("Unknown argument", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DefaultSceneIsGallery()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--frames", "120"],
+				out SampleOptions options,
+				out _));
+
+		Assert.Equal(DemoScene.Gallery, options.Scene);
+		Assert.False(options.DepthTestDisabled);
+	}
+
+	[Fact]
+	public void TryParseOptions_ParsesExplicitGallery()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--scene", "gallery"],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.Equal(DemoScene.Gallery, options.Scene);
+		Assert.False(options.DepthTestDisabled);
+	}
+
+	[Fact]
+	public void TryParseOptions_ParsesDepthOcclusion()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--scene", "depth-occlusion"],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.Equal(DemoScene.DepthOcclusion, options.Scene);
+		Assert.False(options.DepthTestDisabled);
+	}
+
+	[Fact]
+	public void TryParseOptions_MissingSceneValue_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--scene"],
+				out _,
+				out string error));
+
+		Assert.Contains("requires a value", error);
+	}
+
+	[Theory]
+	[InlineData("depth")]
+	[InlineData("Gallery")]
+	[InlineData("depth-occlusion-extra")]
+	[InlineData("")]
+	public void TryParseOptions_UnknownScene_Fails(string scene)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--scene", scene],
+				out _,
+				out string error));
+
+		Assert.Contains("gallery or depth-occlusion", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DuplicateScene_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--scene", "gallery", "--scene", "depth-occlusion"],
+				out _,
+				out string error));
+
+		Assert.Contains("supplied twice", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_ParsesDisabledDepthTest()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--scene", "depth-occlusion",
+					"--disable-depth-test"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.Equal(DemoScene.DepthOcclusion, options.Scene);
+		Assert.True(options.DepthTestDisabled);
+	}
+
+	[Fact]
+	public void TryParseOptions_DisableDepthTestWithoutScene_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--disable-depth-test"],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene depth-occlusion", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DisableDepthTestInGallery_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--scene", "gallery", "--disable-depth-test"],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene depth-occlusion", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DuplicateDisableDepthTest_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "depth-occlusion",
+					"--disable-depth-test",
+					"--disable-depth-test"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("supplied twice", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_CombinedSceneResizeAndNegativeControl_Parses()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--scene", "depth-occlusion",
+					"--disable-depth-test",
+					"--resize-at-frame", "200",
+					"--resize-to", "960x540"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.Equal(DemoScene.DepthOcclusion, options.Scene);
+		Assert.True(options.DepthTestDisabled);
+		Assert.Equal(200, options.ResizeAtFrame);
+		Assert.Equal(new WindowSize(960, 540), options.ResizeTo);
 	}
 
 	[Fact]
@@ -342,6 +504,8 @@ public sealed class ProgramOptionsTests
 
 		Assert.Null(options.ResizeAtFrame);
 		Assert.Null(options.ResizeTo);
+		Assert.Equal(DemoScene.Gallery, options.Scene);
+		Assert.False(options.DepthTestDisabled);
 	}
 
 	[Fact]
@@ -351,7 +515,9 @@ public sealed class ProgramOptionsTests
 			Validation: false,
 			FrameLimit: 600,
 			ResizeAtFrame: null,
-			ResizeTo: null);
+			ResizeTo: null,
+			Scene: DemoScene.Gallery,
+			DepthTestDisabled: false);
 
 		Assert.False(Program.ShouldRequestResize(0, options, false));
 		Assert.False(Program.ShouldRequestResize(600, options, false));
@@ -401,7 +567,9 @@ public sealed class ProgramOptionsTests
 			Validation: false,
 			FrameLimit: 600,
 			ResizeAtFrame: frame,
-			ResizeTo: new WindowSize(960, 540));
+			ResizeTo: new WindowSize(960, 540),
+			Scene: DemoScene.Gallery,
+			DepthTestDisabled: false);
 	}
 
 	[Fact]

@@ -45,6 +45,7 @@ shell, with the application arguments forwarded unchanged:
 | `--validation` | off | Passes `--validation` to the sample |
 | `--screenshots` | off | Captures and verifies a screenshot |
 | `--expect-clusters N` | off | Requires `N` horizontal content clusters; needs `--screenshots` |
+| `--expect-pixel-class X,Y,CLASS` | off | Requires the pixel at `X,Y` to be dominated by `red` or `blue`; repeatable, needs `--screenshots` |
 | `--weston-shell kiosk\|desktop` | `kiosk` | Shell for the private compositor |
 | `--sample-arg VALUE` | none | Extra sample argument forwarded unchanged; repeatable, `--sample-arg=VALUE` also accepted |
 | `--output-dir PATH` | `<repo>/artifacts/headless` | Root for run artifacts |
@@ -77,8 +78,27 @@ Samples used with this harness must:
   use a few hundred frames for screenshot runs.
 
 An optional `--expect-clusters N` compares the screenshot against a known
-scene. Use `3` for `Volt.VulkanMeshDemo`, which draws three separated
-meshes. Other samples should omit it until their expected layout is known.
+scene. Use `3` for the `Volt.VulkanMeshDemo` gallery, which draws three
+separated meshes, and `2` for its depth-occlusion scene. Other samples
+should omit it until their expected layout is known.
+
+### Pixel-class assertions
+
+`--expect-pixel-class X,Y,CLASS` checks one screenshot pixel. `CLASS` is
+`red` or `blue`; the check requires the named channel to be above 100
+and at least 40 higher than each other channel, so sRGB conversion and
+minor rasterization differences cannot flip the result. Repeat the
+option to assert several pixels in one run; `--expect-pixel-class=X,Y,CLASS`
+is also accepted.
+
+Coordinates must be non-negative integers inside the captured image;
+the image size is checked after decoding, and out-of-bounds or
+malformed values fail with the screenshot-verification exit code. Every
+assertion is recorded in `image-analysis.log` and in the summary as
+`IMAGE_PIXEL=X,Y,expected=CLASS,actual=R,G,B,class=CLASS,PASS|FAIL`, so a
+failure shows both the expected class and the observed pixel. Pixel
+assertions require `--screenshots` and are inactive when no expectation
+is supplied.
 
 ### Compositor shells
 
@@ -168,7 +188,7 @@ Every run creates `<output-dir>/run-<UTC timestamp>-<pid>-<random>/`:
 | `weston.log`, `weston.stdout.log` | Compositor diagnostics |
 | `weston-desktop.ini` | Private desktop-shell configuration, when selected |
 | `screenshooter.log` | Screenshot tool output |
-| `image-analysis.log` | PNG verification results |
+| `image-analysis.log` | PNG verification, cluster, and pixel-class results |
 | `*.png` | Captured screenshot, when requested |
 
 Artifacts from failed runs are preserved for diagnosis. Only the private
@@ -237,7 +257,9 @@ Coverage includes argument validation, missing dependencies, successful
 runs, application failure, timeout, validation diagnostics (including
 missing confirmation), surviving sample descendants, frame-count
 mismatch, screenshot failures (including CRC-corrupted and incomplete
-PNGs), compositor failures, termination cleanup, controlled cleanup
+PNGs), pixel-class assertions (passing, failing, out of bounds,
+unsupported class, malformed, and missing `--screenshots`), compositor
+failures, termination cleanup, controlled cleanup
 failures and their summary records, preservation of unrelated files, and
 consecutive/concurrent isolation. Shell coverage includes the default
 kiosk invocation, the opt-in desktop shell and its private configuration,

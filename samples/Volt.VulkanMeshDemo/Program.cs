@@ -23,6 +23,10 @@ internal static class Program
 	private const string FramesArgument = "--frames";
 	private const string ResizeAtFrameArgument = "--resize-at-frame";
 	private const string ResizeToArgument = "--resize-to";
+	private const string SceneArgument = "--scene";
+	private const string DisableDepthTestArgument = "--disable-depth-test";
+	private const string GallerySceneName = "gallery";
+	private const string DepthOcclusionSceneName = "depth-occlusion";
 
 	/// <summary>
 	/// Upper bound for a requested resize dimension. It keeps the
@@ -63,6 +67,8 @@ internal static class Program
 			Console.Error.WriteLine(error);
 			Console.Error.WriteLine(
 				"Usage: Volt.VulkanMeshDemo [--validation] [--frames N] " +
+				"[--scene gallery|depth-occlusion] " +
+				"[--disable-depth-test] " +
 				"[--resize-at-frame N --resize-to WIDTHxHEIGHT]");
 
 			return 2;
@@ -229,7 +235,8 @@ internal static class Program
 		using DemoMeshes meshes = DemoMeshes.Create(
 			instance,
 			device,
-			selectedPhysicalDevice);
+			selectedPhysicalDevice,
+			options.Scene);
 
 		string shaderDirectory = Path.Combine(
 			AppContext.BaseDirectory,
@@ -241,6 +248,10 @@ internal static class Program
 		Console.WriteLine($"Validation: {options.Validation}");
 		Console.WriteLine(
 			$"Swapchain maintenance: {maintenanceExtension}");
+		Console.WriteLine($"Scene: {SceneName(options.Scene)}");
+		Console.WriteLine(
+			$"Depth test: " +
+			$"{(options.DepthTestDisabled ? "disabled" : "enabled")}");
 
 		foreach (MeshGeometry geometry in meshes.Geometries)
 		{
@@ -388,7 +399,8 @@ internal static class Program
 						framebufferSize,
 						MaxFramesInFlight,
 						vertexShaderPath,
-						fragmentShaderPath);
+						fragmentShaderPath,
+						depthTestEnabled: !options.DepthTestDisabled);
 
 					swapchainGeneration++;
 
@@ -621,6 +633,8 @@ internal static class Program
 		int? frameLimit = null;
 		int? resizeAtFrame = null;
 		WindowSize? resizeTo = null;
+		DemoScene? scene = null;
+		bool depthTestDisabled = false;
 
 		for (int index = 0; index < args.Length; index++)
 		{
@@ -743,6 +757,50 @@ internal static class Program
 					resizeTo = parsedResizeTarget;
 					break;
 
+				case SceneArgument:
+					if (scene.HasValue)
+					{
+						options = default;
+						error =
+							"The --scene argument was supplied twice.";
+						return false;
+					}
+
+					if (index + 1 >= args.Length)
+					{
+						options = default;
+						error = "The --scene argument requires a value.";
+						return false;
+					}
+
+					index++;
+
+					if (!TryParseScene(args[index], out DemoScene parsedScene))
+					{
+						options = default;
+						error =
+							"The --scene value must be " +
+							$"{GallerySceneName} or " +
+							$"{DepthOcclusionSceneName}.";
+						return false;
+					}
+
+					scene = parsedScene;
+					break;
+
+				case DisableDepthTestArgument:
+					if (depthTestDisabled)
+					{
+						options = default;
+						error =
+							"The --disable-depth-test argument was " +
+							"supplied twice.";
+						return false;
+					}
+
+					depthTestDisabled = true;
+					break;
+
 				default:
 					options = default;
 					error = $"Unknown argument: {argument}";
@@ -770,14 +828,58 @@ internal static class Program
 			return false;
 		}
 
+		DemoScene selectedScene = scene ?? DemoScene.Gallery;
+
+		if (depthTestDisabled && selectedScene != DemoScene.DepthOcclusion)
+		{
+			options = default;
+			error =
+				"The --disable-depth-test argument requires " +
+				$"--scene {DepthOcclusionSceneName}.";
+			return false;
+		}
+
 		options = new SampleOptions(
 			validation,
 			frameLimit,
 			resizeAtFrame,
-			resizeTo);
+			resizeTo,
+			selectedScene,
+			depthTestDisabled);
 
 		error = string.Empty;
 		return true;
+	}
+
+	/// <summary>
+	/// Parses a scene name.
+	/// </summary>
+	internal static bool TryParseScene(string value, out DemoScene scene)
+	{
+		switch (value)
+		{
+			case GallerySceneName:
+				scene = DemoScene.Gallery;
+				return true;
+
+			case DepthOcclusionSceneName:
+				scene = DemoScene.DepthOcclusion;
+				return true;
+
+			default:
+				scene = default;
+				return false;
+		}
+	}
+
+	private static string SceneName(DemoScene scene)
+	{
+		return scene switch
+		{
+			DemoScene.Gallery => GallerySceneName,
+			DemoScene.DepthOcclusion => DepthOcclusionSceneName,
+			_ => "unknown"
+		};
 	}
 
 	/// <summary>
@@ -873,4 +975,6 @@ internal readonly record struct SampleOptions(
 	bool Validation,
 	int? FrameLimit,
 	int? ResizeAtFrame,
-	WindowSize? ResizeTo);
+	WindowSize? ResizeTo,
+	DemoScene Scene,
+	bool DepthTestDisabled);

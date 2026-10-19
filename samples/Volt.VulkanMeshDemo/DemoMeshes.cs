@@ -38,12 +38,20 @@ internal sealed class DemoMeshes : IDisposable
 	}
 
 	/// <summary>
-	/// Creates and uploads the three meshes used by the sample.
+	/// Creates and uploads the three meshes used by the selected
+	/// sample scene.
 	/// </summary>
+	/// <remarks>
+	/// The gallery scene remains the default. Both scenes provide a
+	/// non-indexed mesh, a 16-bit indexed mesh, and a 32-bit indexed
+	/// mesh in the same order, so the upload and draw-plan paths are
+	/// shared.
+	/// </remarks>
 	public static DemoMeshes Create(
 		VulkanInstance instance,
 		VulkanLogicalDevice device,
-		PhysicalDevice physicalDevice)
+		PhysicalDevice physicalDevice,
+		DemoScene scene = DemoScene.Gallery)
 	{
 		ArgumentNullException.ThrowIfNull(instance);
 		ArgumentNullException.ThrowIfNull(device);
@@ -55,7 +63,17 @@ internal sealed class DemoMeshes : IDisposable
 				nameof(physicalDevice));
 		}
 
-		MeshGeometry[] geometries = MeshGeometry.CreateDemoMeshes();
+		MeshGeometry[] geometries = scene switch
+		{
+			DemoScene.Gallery => MeshGeometry.CreateDemoMeshes(),
+			DemoScene.DepthOcclusion =>
+				MeshGeometry.CreateDepthOcclusionMeshes(),
+			_ => throw new ArgumentOutOfRangeException(
+				nameof(scene),
+				scene,
+				"Unsupported demo scene.")
+		};
+
 		VulkanMeshBuffers[] buffers =
 			new VulkanMeshBuffers[geometries.Length];
 

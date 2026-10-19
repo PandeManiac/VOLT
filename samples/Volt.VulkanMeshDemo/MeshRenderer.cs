@@ -59,6 +59,10 @@ internal readonly record struct MeshDraw(
 /// generation. Depth testing uses a clear value of 1.0 and the
 /// conventional less-than comparison.
 ///
+/// The sample-only negative control can disable depth testing and
+/// depth writes for this pipeline. The depth attachment, render
+/// pass, draw plan, and geometry are unchanged in that mode.
+///
 /// The swapchain, image views, logical device, and instance must
 /// outlive this renderer. The caller must establish GPU completion
 /// before disposing it, because the meshes and depth attachments
@@ -102,7 +106,8 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		VulkanSwapchainImageViews imageViews,
 		DemoMeshes meshes,
 		string vertexShaderPath,
-		string fragmentShaderPath)
+		string fragmentShaderPath,
+		bool depthTestEnabled = true)
 	{
 		ArgumentNullException.ThrowIfNull(instance);
 		ArgumentNullException.ThrowIfNull(device);
@@ -181,7 +186,8 @@ internal sealed unsafe class MeshRenderer : IDisposable
 				pipelineLayout,
 				swapchain.Extent,
 				vertexShaderPath,
-				fragmentShaderPath);
+				fragmentShaderPath,
+				depthTestEnabled);
 
 			for (int index = 0; index < framebuffers.Length; index++)
 			{
@@ -610,7 +616,8 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		PipelineLayout layout,
 		Extent2D extent,
 		string vertexShaderPath,
-		string fragmentShaderPath)
+		string fragmentShaderPath,
+		bool depthTestEnabled)
 	{
 		ShaderModule vertexShader = default;
 		ShaderModule fragmentShader = default;
@@ -745,11 +752,13 @@ internal sealed unsafe class MeshRenderer : IDisposable
 				SampleShadingEnable = Vk.False
 			};
 
+			// Vulkan requires depth writes off when depth testing is
+			// disabled. The depth attachment stays bound and cleared.
 			PipelineDepthStencilStateCreateInfo depthState = new()
 			{
 				SType = StructureType.PipelineDepthStencilStateCreateInfo,
-				DepthTestEnable = Vk.True,
-				DepthWriteEnable = Vk.True,
+				DepthTestEnable = depthTestEnabled ? Vk.True : Vk.False,
+				DepthWriteEnable = depthTestEnabled ? Vk.True : Vk.False,
 				DepthCompareOp = CompareOp.Less,
 				DepthBoundsTestEnable = Vk.False,
 				StencilTestEnable = Vk.False

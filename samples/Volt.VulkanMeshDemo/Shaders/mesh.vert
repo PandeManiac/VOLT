@@ -19,10 +19,14 @@ void main()
 
     // Vulkan's viewport Y axis points down, so negate the authored
     // Y coordinate to keep the meshes upright.
+    //
+    // W is 1.0, so the authored Z is used directly as clip-space
+    // depth in Vulkan's valid 0..1 range. The gallery authors 0.0,
+    // which leaves its position and appearance unchanged.
     gl_Position = vec4(
         inPosition.x * horizontalScale,
         -inPosition.y * verticalScale,
-        0.0,
+        inPosition.z,
         1.0);
 
     fragmentColor = inColor;

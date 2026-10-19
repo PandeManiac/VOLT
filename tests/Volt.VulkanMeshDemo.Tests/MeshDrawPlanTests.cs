@@ -81,6 +81,74 @@ public sealed class MeshDrawPlanTests
 	}
 
 	[Fact]
+	public void CreateDrawPlan_OcclusionSceneDrawsNearBeforeFar()
+	{
+		MeshDraw[] plan = MeshRenderer.CreateDrawPlan(
+			MeshGeometry.CreateDepthOcclusionMeshes());
+
+		Assert.Equal(4, plan.Length);
+
+		// The near red triangle is recorded first. The farther blue
+		// quad follows it, split into two ranges of one uploaded mesh,
+		// and the separate reference hexagon is recorded last.
+		Assert.Equal(
+			new MeshDraw(MeshDrawKind.CompleteMesh, 0, 0, 3),
+			plan[0]);
+
+		Assert.Equal(
+			new MeshDraw(MeshDrawKind.ElementRange, 1, 0, 3),
+			plan[1]);
+
+		Assert.Equal(
+			new MeshDraw(MeshDrawKind.ElementRange, 1, 3, 3),
+			plan[2]);
+
+		Assert.Equal(
+			new MeshDraw(MeshDrawKind.CompleteMesh, 2, 0, 18),
+			plan[3]);
+	}
+
+	[Fact]
+	public void CreateDrawPlan_OcclusionQuadRangesCoverBothTriangles()
+	{
+		MeshGeometry[] geometries =
+			MeshGeometry.CreateDepthOcclusionMeshes();
+
+		MeshDraw[] plan = MeshRenderer.CreateDrawPlan(geometries);
+
+		ushort[] indices = geometries[1].Indices16;
+
+		Assert.Equal(0u, plan[1].FirstElement);
+		Assert.Equal(
+			plan[1].FirstElement + plan[1].ElementCount,
+			plan[2].FirstElement);
+
+		Assert.Equal(
+			checked((uint)indices.Length),
+			plan[2].FirstElement + plan[2].ElementCount);
+
+		Assert.Equal([0, 1, 2], indices[..3]);
+		Assert.Equal([0, 2, 3], indices[3..]);
+	}
+
+	[Fact]
+	public void CreateDrawPlan_GallerySceneKeepsFourDraws()
+	{
+		MeshDraw[] plan = CreatePlan();
+
+		Assert.Equal(4, plan.Length);
+		Assert.Equal(3, plan.Select(draw => draw.MeshIndex).Distinct().Count());
+
+		Assert.Equal(
+			new MeshDraw(MeshDrawKind.CompleteMesh, 0, 0, 3),
+			plan[0]);
+
+		Assert.Equal(
+			new MeshDraw(MeshDrawKind.CompleteMesh, 2, 0, 18),
+			plan[3]);
+	}
+
+	[Fact]
 	public void CreateDrawPlan_RejectsUnexpectedMeshOrder()
 	{
 		MeshGeometry[] geometries = MeshGeometry.CreateDemoMeshes();
