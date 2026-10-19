@@ -8,13 +8,49 @@ using Volt.Graphics.Vulkan.Swapchain;
 namespace Volt.VulkanMeshDemo;
 
 /// <summary>
+/// Identifies how one planned mesh draw is recorded.
+/// </summary>
+internal enum MeshDrawKind
+{
+	/// <summary>
+	/// The complete mesh is recorded through the whole-mesh
+	/// overload.
+	/// </summary>
+	CompleteMesh,
+
+	/// <summary>
+	/// A selected element range is recorded through the range
+	/// overload.
+	/// </summary>
+	ElementRange
+}
+
+/// <summary>
+/// Describes one draw the sample records each frame.
+/// </summary>
+/// <remarks>
+/// MeshIndex selects the uploaded mesh. FirstElement is a first
+/// vertex for a non-indexed mesh and a first index for an indexed
+/// mesh.
+/// </remarks>
+internal readonly record struct MeshDraw(
+	MeshDrawKind Kind,
+	int MeshIndex,
+	uint FirstElement,
+	uint ElementCount);
+
+/// <summary>
 /// Owns the graphics pipeline and framebuffers for one swapchain
 /// generation.
 /// </summary>
 /// <remarks>
 /// Mesh buffers are owned by the application and uploaded once.
-/// Each frame records one render pass containing one draw per mesh
-/// through <see cref="VulkanMeshDrawCommands"/>.
+/// Each frame records one render pass containing four draw calls
+/// across the three meshes through <see cref="VulkanMeshDrawCommands"/>:
+/// the complete non-indexed triangle, the two constituent triangles
+/// of the 16-bit indexed quad as two partial index ranges, and the
+/// complete 32-bit indexed hexagon. Every draw shares one graphics
+/// pipeline and the uploaded mesh buffers.
 ///
 /// The swapchain, image views, logical device, and instance must
 /// outlive this renderer. The caller must establish GPU completion
@@ -28,6 +64,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 	private readonly Vk _api;
 	private readonly Framebuffer[] _framebuffers;
 	private readonly DemoMeshes _meshes;
+	private readonly MeshDraw[] _drawPlan;
 
 	private PipelineLayout _pipelineLayout;
 	private RenderPass _renderPass;
@@ -66,6 +103,8 @@ internal sealed unsafe class MeshRenderer : IDisposable
 			throw new NotSupportedException(
 				"The swapchain must support color attachments.");
 		}
+
+		MeshDraw[] drawPlan = CreateDrawPlan(meshes.Geometries);
 
 		Vk api = instance.Api;
 		Device deviceHandle = device.Handle;
@@ -124,6 +163,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		_api = api;
 		_framebuffers = framebuffers;
 		_meshes = meshes;
+		_drawPlan = drawPlan;
 
 		_renderPass = renderPass;
 		_pipelineLayout = pipelineLayout;
@@ -133,8 +173,82 @@ internal sealed unsafe class MeshRenderer : IDisposable
 	}
 
 	/// <summary>
-	/// Records one render pass that clears the image and draws every
-	/// mesh using its prepared draw path.
+	/// Builds the ordered draw plan recorded every frame.
+	/// </summary>
+	/// <remarks>
+	/// The plan is derived from the uploaded mesh geometries, so the
+	/// sample's draw sequence can be inspected and tested without a
+	/// Vulkan device. The complete non-indexed triangle and the
+	/// complete 32-bit indexed hexagon use the whole-mesh overload.
+	/// The 16-bit indexed quad is drawn as its two constituent
+	/// triangles: two partial index ranges of the same uploaded mesh.
+	/// </remarks>
+	internal static MeshDraw[] CreateDrawPlan(
+		IReadOnlyList<MeshGeometry> geometries)
+	{
+		ArgumentNullException.ThrowIfNull(geometries);
+
+		if (geometries.Count != 3 ||
+			geometries[0].IndexFormat != MeshIndexFormat.None ||
+			geometries[1].IndexFormat != MeshIndexFormat.UInt16 ||
+			geometries[2].IndexFormat != MeshIndexFormat.UInt32)
+		{
+			throw new ArgumentException(
+				"The sample requires a non-indexed, a 16-bit indexed, " +
+				"and a 32-bit indexed mesh, in that order.",
+				nameof(geometries));
+		}
+
+		uint triangleVertexCount =
+			checked((uint)geometries[0].Vertices.Length);
+
+		uint quadIndexCount =
+			checked((uint)geometries[1].Indices16.Length);
+
+		uint quadTriangleIndexCount = quadIndexCount / 2;
+
+		if (quadTriangleIndexCount == 0 ||
+			quadTriangleIndexCount * 2 != quadIndexCount ||
+			quadTriangleIndexCount % 3 != 0)
+		{
+			throw new ArgumentException(
+				"The quad must split into two equal halves that are " +
+				"whole triangles.",
+				nameof(geometries));
+		}
+
+		uint hexagonIndexCount =
+			checked((uint)geometries[2].Indices32.Length);
+
+		return
+		[
+			new(
+				MeshDrawKind.CompleteMesh,
+				MeshIndex: 0,
+				FirstElement: 0,
+				triangleVertexCount),
+			new(
+				MeshDrawKind.ElementRange,
+				MeshIndex: 1,
+				FirstElement: 0,
+				quadTriangleIndexCount),
+			new(
+				MeshDrawKind.ElementRange,
+				MeshIndex: 1,
+				FirstElement: quadTriangleIndexCount,
+				quadIndexCount - quadTriangleIndexCount),
+			new(
+				MeshDrawKind.CompleteMesh,
+				MeshIndex: 2,
+				FirstElement: 0,
+				hexagonIndexCount)
+		];
+	}
+
+	/// <summary>
+	/// Records one render pass that clears the image and draws the
+	/// planned mesh ranges: the complete triangle, the two triangles
+	/// of the indexed quad, and the complete hexagon.
 	/// </summary>
 	public void Record(
 		CommandBuffer commandBuffer,
@@ -207,12 +321,30 @@ internal sealed unsafe class MeshRenderer : IDisposable
 			(uint)sizeof(float),
 			&aspectValue);
 
-		for (int index = 0; index < _meshes.Buffers.Count; index++)
+		for (int index = 0; index < _drawPlan.Length; index++)
 		{
-			VulkanMeshDrawCommands.Record(
-				_instance,
-				commandBuffer,
-				_meshes.Buffers[index]);
+			MeshDraw draw = _drawPlan[index];
+
+			VulkanMeshBuffers mesh =
+				_meshes.Buffers[draw.MeshIndex];
+
+			if (draw.Kind == MeshDrawKind.CompleteMesh)
+			{
+				VulkanMeshDrawCommands.Record(
+					_instance,
+					commandBuffer,
+					mesh);
+			}
+
+			else
+			{
+				VulkanMeshDrawCommands.RecordRange(
+					_instance,
+					commandBuffer,
+					mesh,
+					draw.FirstElement,
+					draw.ElementCount);
+			}
 		}
 
 		_api.CmdEndRenderPass(commandBuffer);

@@ -3,28 +3,40 @@
 This sample renders three distinct meshes side by side in one Vulkan
 frame using VOLT's uploaded mesh buffers and mesh draw-command helper.
 
-The three meshes intentionally cover every draw path provided by
-`VulkanMeshDrawCommands`:
+All three meshes are uploaded once and drawn from one graphics
+pipeline in one render pass, with four draw calls in total:
 
-| Mesh | Geometry | Draw path |
-| --- | --- | --- |
-| Left | Triangle | Non-indexed `vkCmdDraw` |
-| Center | Quad | Indexed `vkCmdDrawIndexed` with 16-bit indices |
-| Right | Hexagon | Indexed `vkCmdDrawIndexed` with 32-bit indices |
+| Mesh | Geometry | Draw path | Draw calls |
+| --- | --- | --- | --- |
+| Left | Triangle | Non-indexed `vkCmdDraw` for the complete mesh | 1 |
+| Center | Quad | Indexed `vkCmdDrawIndexed` over 16-bit indices, split into two index ranges | 2 |
+| Right | Hexagon | Indexed `vkCmdDrawIndexed` for the complete mesh over 32-bit indices | 1 |
 
-All meshes share one graphics pipeline. The pipeline uses conventional
-position and color vertex input at binding zero, not shader-based vertex
-pulling. A single push constant supplies the current aspect ratio, so
-the three shapes stay separated and keep their proportions when the
-window is resized.
+The center quad is the range-drawing demonstration. Its two
+constituent triangles come from one uploaded 16-bit indexed mesh;
+`VulkanMeshDrawCommands.RecordRange` records them as two partial
+ranges of the same shared index buffer (indices `0..2` and then
+`3..5`). No additional mesh and no per-frame buffer upload is created
+for the split. The complete triangle and hexagon keep using the
+whole-mesh `VulkanMeshDrawCommands.Record` path, so the sample covers
+both complete-mesh and range draws of the same helper.
+
+The pipeline uses conventional position and color vertex input at
+binding zero, not shader-based vertex pulling. A single push constant
+supplies the current aspect ratio, so the three shapes stay separated
+and keep their proportions when the window is resized.
 
 ## Rendering structure
 
 - `DemoMeshes` uploads the three meshes once for the lifetime of the
   logical device. Swapchain recreation does not re-upload them.
 - `MeshRenderer` owns the render pass, pipeline, and one framebuffer
-  per swapchain image. It records one render pass containing three
-  calls to `VulkanMeshDrawCommands.Record`.
+  per swapchain image. It records one render pass containing the draw
+  plan: three meshes and four draw calls. Complete meshes use
+  `VulkanMeshDrawCommands.Record`; the quad's two triangles use
+  `VulkanMeshDrawCommands.RecordRange`. `MeshRenderer.CreateDrawPlan`
+  derives that sequence from the mesh geometries, so the plan can be
+  inspected and tested without a Vulkan device.
 - `MeshSwapchainResources` owns one swapchain generation, including
   image views and the frame scheduler. It is recreated after resize or
   presentation-driven swapchain changes.
@@ -86,6 +98,7 @@ presentation surface.
 dotnet test tests/Volt.VulkanMeshDemo.Tests -c Release
 ```
 
-The focused tests cover mesh counts, index validity, and the three draw
-paths, plus command-line parsing for validation and bounded frames and
-the required swapchain maintenance1 negotiation.
+The focused tests cover mesh counts, index validity, the four-draw
+plan including the quad's two partial index ranges, and command-line
+parsing for validation and bounded frames and the required swapchain
+maintenance1 negotiation.
