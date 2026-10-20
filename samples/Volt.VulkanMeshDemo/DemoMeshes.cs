@@ -49,8 +49,10 @@ internal sealed class DemoMeshes : IDisposable
 	/// The gallery scene remains the default. Every scene provides a
 	/// non-indexed mesh, a 16-bit indexed mesh, and a 32-bit indexed
 	/// mesh in the same order, so the upload and draw-plan paths are
-	/// shared. The camera scene reuses one uploaded triangle mesh for
-	/// both of its triangle draw instances.
+	/// shared. The camera and ECS scenes reuse one uploaded triangle
+	/// mesh for both of their triangle instances; the ECS scene
+	/// resolves those uploads through generational mesh handles
+	/// instead of a static draw plan.
 	/// </remarks>
 	public static DemoMeshes Create(
 		VulkanInstance instance,
@@ -74,6 +76,8 @@ internal sealed class DemoMeshes : IDisposable
 			DemoScene.DepthOcclusion =>
 				MeshGeometry.CreateDepthOcclusionMeshes(),
 			DemoScene.CameraTransforms =>
+				MeshGeometry.CreateCameraTransformMeshes(),
+			DemoScene.EcsScene =>
 				MeshGeometry.CreateCameraTransformMeshes(),
 			_ => throw new ArgumentOutOfRangeException(
 				nameof(scene),

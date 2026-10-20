@@ -52,7 +52,16 @@ internal enum DemoScene
 	/// Local-space meshes drawn through model, view, and projection
 	/// matrices from a fixed perspective camera.
 	/// </summary>
-	CameraTransforms
+	CameraTransforms,
+
+	/// <summary>
+	/// The perspective scene populated from ECS entities.
+	/// </summary>
+	/// <remarks>
+	/// Draw instances, model matrices, and the camera pose are read
+	/// from an ECS world through the reusable render extractor.
+	/// </remarks>
+	EcsScene
 }
 
 /// <summary>

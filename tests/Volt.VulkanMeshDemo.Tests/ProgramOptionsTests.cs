@@ -762,6 +762,190 @@ public sealed class ProgramOptionsTests
 			Program.IsResizeObserved(true, true, original, resized));
 	}
 
+	[Fact]
+	public void TryParseOptions_ParsesEcsScene()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--scene", "ecs-scene"],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.Equal(DemoScene.EcsScene, options.Scene);
+		Assert.False(options.EcsScript);
+	}
+
+	[Fact]
+	public void TryParseOptions_ParsesEcsScript()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--scene", "ecs-scene",
+					"--ecs-script"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.Equal(DemoScene.EcsScene, options.Scene);
+		Assert.True(options.EcsScript);
+		Assert.Equal(600, options.FrameLimit);
+	}
+
+	[Fact]
+	public void TryParseOptions_EcsScriptWithResize_Parses()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--scene", "ecs-scene",
+					"--ecs-script",
+					"--resize-at-frame", "200",
+					"--resize-to", "960x540"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.True(options.EcsScript);
+		Assert.Equal(200, options.ResizeAtFrame);
+		Assert.Equal(new WindowSize(960, 540), options.ResizeTo);
+	}
+
+	[Theory]
+	[InlineData("gallery")]
+	[InlineData("depth-occlusion")]
+	[InlineData("camera-transforms")]
+	public void TryParseOptions_EcsScriptOutsideEcsScene_Fails(
+		string scene)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--scene", scene,
+					"--ecs-script"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene ecs-scene", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_EcsScriptWithoutScene_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--frames", "600", "--ecs-script"],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene ecs-scene", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_EcsScriptWithoutFrameLimit_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--scene", "ecs-scene", "--ecs-script"],
+				out _,
+				out string error));
+
+		Assert.Contains("bounded --frames", error);
+	}
+
+	[Theory]
+	[InlineData("1")]
+	[InlineData("209")]
+	public void TryParseOptions_EcsScriptTooShort_Fails(string frames)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", frames,
+					"--scene", "ecs-scene",
+					"--ecs-script"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains(
+			$"at least {EcsScript.MinimumFrameLimit}",
+			error);
+	}
+
+	[Fact]
+	public void TryParseOptions_EcsScriptAtMinimumFrames_Parses()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--frames",
+					EcsScript.MinimumFrameLimit.ToString(
+						System.Globalization.CultureInfo.InvariantCulture),
+					"--scene", "ecs-scene",
+					"--ecs-script"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.True(options.EcsScript);
+		Assert.Equal(EcsScript.MinimumFrameLimit, options.FrameLimit);
+	}
+
+	[Fact]
+	public void TryParseOptions_DuplicateEcsScript_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--scene", "ecs-scene",
+					"--ecs-script",
+					"--ecs-script"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("twice", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_CameraScriptWithEcsScene_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--scene", "ecs-scene",
+					"--camera-script"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene camera-transforms", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DefaultRunHasNoEcsScript()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--frames", "120"],
+				out SampleOptions options,
+				out _));
+
+		Assert.False(options.EcsScript);
+		Assert.Equal(DemoScene.Gallery, options.Scene);
+	}
+
 	private static SampleOptions ResizeOptions(int frame)
 	{
 		return new SampleOptions(

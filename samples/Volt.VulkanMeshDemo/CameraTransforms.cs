@@ -34,6 +34,32 @@ namespace Volt.VulkanMeshDemo;
 /// convention of the sample's shader, not of the shared math.
 /// </para>
 /// </remarks>
+/// <summary>
+/// Describes one scene instance's local transform as ECS spatial
+/// components.
+/// </summary>
+/// <remarks>
+/// The legacy draw plan and the ECS scene both build their model
+/// matrices from these components, so the two scenes cannot drift
+/// apart.
+/// </remarks>
+internal readonly record struct SceneTransform(
+	PositionComponent Position,
+	RotationComponent Rotation,
+	ScaleComponent Scale)
+{
+	/// <summary>
+	/// Builds this instance's model matrix.
+	/// </summary>
+	public Matrix4x4 CreateModelMatrix()
+	{
+		return TransformMatrices.CreateModelMatrix(
+			Position,
+			Rotation,
+			Scale);
+	}
+}
+
 internal static class CameraTransforms
 {
 	/// <summary>
@@ -87,7 +113,13 @@ internal static class CameraTransforms
 	/// camera view. It is drawn first.
 	/// </remarks>
 	public static Matrix4x4 TriangleAModel =>
-		TransformMatrices.CreateModelMatrix(
+		TriangleATransform.CreateModelMatrix();
+
+	/// <summary>
+	/// Gets the first triangle instance's spatial components.
+	/// </summary>
+	public static SceneTransform TriangleATransform { get; } =
+		new(
 			new PositionComponent(new Vector3(-0.75f, 0.35f, 0.0f)),
 			RotationComponent.Identity,
 			new ScaleComponent(new Vector3(0.45f)));
@@ -103,9 +135,15 @@ internal static class CameraTransforms
 	/// is exercised instead of one constant depth.
 	/// </remarks>
 	public static Matrix4x4 TriangleBModel =>
-		TransformMatrices.CreateModelMatrix(
+		TriangleBTransform.CreateModelMatrix();
+
+	/// <summary>
+	/// Gets the second triangle instance's spatial components.
+	/// </summary>
+	public static SceneTransform TriangleBTransform { get; } =
+		new(
 			new PositionComponent(new Vector3(1.05f, 0.50f, -0.35f)),
-			new RotationComponent(TriangleRotation),
+			new RotationComponent(TriangleBRotation),
 			new ScaleComponent(new Vector3(0.40f)));
 
 	/// <summary>
@@ -113,7 +151,13 @@ internal static class CameraTransforms
 	/// behind both triangles and acts as a depth-tested background.
 	/// </summary>
 	public static Matrix4x4 QuadModel =>
-		TransformMatrices.CreateModelMatrix(
+		QuadTransform.CreateModelMatrix();
+
+	/// <summary>
+	/// Gets the quad's spatial components.
+	/// </summary>
+	public static SceneTransform QuadTransform { get; } =
+		new(
 			new PositionComponent(new Vector3(0.0f, 0.0f, -1.1f)),
 			RotationComponent.Identity,
 			new ScaleComponent(new Vector3(1.35f, 0.75f, 1.0f)));
@@ -123,7 +167,13 @@ internal static class CameraTransforms
 	/// placed below and left of the other objects.
 	/// </summary>
 	public static Matrix4x4 HexagonModel =>
-		TransformMatrices.CreateModelMatrix(
+		HexagonTransform.CreateModelMatrix();
+
+	/// <summary>
+	/// Gets the hexagon's spatial components.
+	/// </summary>
+	public static SceneTransform HexagonTransform { get; } =
+		new(
 			new PositionComponent(new Vector3(-1.60f, -0.85f, -0.30f)),
 			RotationComponent.Identity,
 			new ScaleComponent(new Vector3(0.30f)));
@@ -141,6 +191,8 @@ internal static class CameraTransforms
 	/// </remarks>
 	public static Matrix4x4 CreateView(DemoScene scene)
 	{
+		ThrowIfEcsScene(scene);
+
 		return scene == DemoScene.CameraTransforms
 			? Matrix4x4.CreateLookAt(
 				CameraPosition,
@@ -163,6 +215,8 @@ internal static class CameraTransforms
 		DemoScene scene,
 		CameraController? camera)
 	{
+		ThrowIfEcsScene(scene);
+
 		if (scene != DemoScene.CameraTransforms)
 		{
 			return Matrix4x4.Identity;
@@ -194,6 +248,8 @@ internal static class CameraTransforms
 	/// </remarks>
 	public static Matrix4x4 CreateProjection(DemoScene scene, float aspect)
 	{
+		ThrowIfEcsScene(scene);
+
 		if (!float.IsFinite(aspect) || aspect <= 0.0f)
 		{
 			throw new ArgumentOutOfRangeException(
@@ -230,6 +286,8 @@ internal static class CameraTransforms
 		Matrix4x4 model,
 		float aspect)
 	{
+		ThrowIfEcsScene(scene);
+
 		return TransformMatrices.CreateModelViewProjection(
 			model,
 			CreateView(scene),
@@ -249,7 +307,7 @@ internal static class CameraTransforms
 	/// unit quaternions is normalized to satisfy the
 	/// <see cref="RotationComponent"/> contract.
 	/// </remarks>
-	private static Quaternion TriangleRotation
+	public static Quaternion TriangleBRotation
 	{
 		get
 		{
@@ -262,6 +320,18 @@ internal static class CameraTransforms
 				Radians(25.0f));
 
 			return Quaternion.Normalize(yRotation * zRotation);
+		}
+	}
+
+	private static void ThrowIfEcsScene(DemoScene scene)
+	{
+		if (scene == DemoScene.EcsScene)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(scene),
+				scene,
+				"The ECS scene builds its view, projection, and model " +
+				"matrices from extracted entities.");
 		}
 	}
 

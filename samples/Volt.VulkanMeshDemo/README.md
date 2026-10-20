@@ -31,8 +31,10 @@ camera scene. The shader transforms local-space positions with
 ## Scenes
 
 `--scene gallery` is the default and renders the three separated meshes
-described above. `--scene depth-occlusion` uploads an overlapping scene
-instead, once per run, through the same mesh buffers:
+described above. `--scene ecs-scene` is the opt-in ECS-driven scene
+described in [ECS scene](#ecs-scene). `--scene depth-occlusion` uploads
+an overlapping scene instead, once per run, through the same mesh
+buffers:
 
 | Mesh | Geometry | Depth | Index format | Draws |
 | --- | --- | --- | --- | --- |
@@ -214,6 +216,177 @@ every frame, so a recreated swapchain cannot reuse a stale aspect
 ratio. The uploaded meshes are not re-uploaded when the window is
 resized.
 
+## ECS scene
+
+`--scene ecs-scene` is the opt-in ECS-driven scene. Instead of a static
+draw plan it builds a real `Volt.Ecs.World` whose entities describe the
+same perspective arrangement as the fixed camera scene, and derives
+every draw from extracted render records:
+
+| Entity | Components | Mesh handle | Draws |
+| --- | --- | --- | --- |
+| Triangle A | position, rotation, scale, mesh renderer | `(0, 1)`, shared | 1 `vkCmdDraw` |
+| Triangle B | position, rotation, scale, mesh renderer | `(0, 1)`, shared | 1 `vkCmdDraw` |
+| Quad | position, rotation, scale, mesh renderer | `(1, 1)` | 2 partial index ranges |
+| Hexagon | position, rotation, scale, mesh renderer | `(2, 1)` | 1 complete mesh |
+| Camera | camera, position, rotation | none | view and projection |
+
+Both triangle entities carry the same complete `MeshHandle`, so one
+triangle buffer is uploaded and drawn twice. Four renderable entities
+still produce five draw commands, because the 16-bit indexed quad keeps
+its two partial index ranges. `RenderInstance` records contain only the
+source `Entity`, the mesh and material handles, and a world-space model
+matrix; they never contain Vulkan objects.
+
+### Extraction
+
+`EcsRenderExtractor` caches one `ComponentQuery` for position, rotation,
+scale, and mesh renderer, then walks the matching archetype chunks
+through `WorldQuery`. For each row it reads the chunk's entity span and
+the parallel component spans directly, builds the model matrix with
+`TransformMatrices.CreateModelMatrix`, and writes one record. Entities
+missing any of the four components never appear. The world is not
+modified by extraction, and extraction performs no heap allocation in
+steady state.
+
+The caller owns the output storage. `Extract(Span<RenderInstance>)`
+returns a `RenderExtractionResult` with the written and required
+counts; when the span is too small it writes nothing at all and reports
+the capacity a complete extraction needs, and
+`CountRequiredInstances()` is the preflight form. The scene treats a
+short count as a defect and throws rather than rendering a truncated
+frame. Extraction is single-threaded: a structural change invalidates
+the active query enumeration, so the sample performs its scripted
+component writes only after a frame was accepted, when no extraction or
+command recording is in progress.
+
+The output order is the world's chunk and row order, which is an ECS
+implementation detail rather than a public contract. The scene never
+assumes it: tests look records up by `Entity`, and the four-object scene
+needs no sorting because depth testing decides visibility. A
+production renderer would still want explicit keys before relying on
+submission order.
+
+### Handles and materials
+
+The records preserve complete generational handles. The extractor omits
+an entity whose mesh or material handle has a zero generation, and
+leaves the entity itself untouched; it never treats an index alone as
+proof the resource exists, and it never resolves or allocates GPU
+resources. Resolution happens in `EcsMeshResolver`, a sample-local
+table that matches the whole handle (index and generation) to one
+uploaded buffer and its geometry. An unknown index or a stale
+generation fails at record time instead of drawing an unbound mesh.
+`EcsMaterialPalette` does the same for the single `MaterialHandle
+(0, 1)` used by every entity.
+
+The shader still colours vertices directly, so the material handle only
+proves that a complete handle survives extraction and validation. It
+does not select a pipeline, shader, or texture, and no material or GPU
+resource registry was added.
+
+### Camera entity
+
+The camera entity carries a `CameraComponent` with a 60° vertical field
+of view, near plane `0.1`, and far plane `100` - the sample's far plane,
+not `CameraComponent.Default`'s `1000` - plus `PositionComponent
+(0, 0, 3)` and an identity `RotationComponent`. It deliberately has no
+`ScaleComponent`, because camera scale is not part of a view matrix.
+
+`CameraEntityMatrices.CreateMatrices` reads those components on every
+recorded frame and produces the same view and projection the fixed
+camera scene uses, with `ViewportYOrientation.YDown`. The projection
+takes the current extent's aspect ratio, so a recreated swapchain
+updates it without touching the ECS world, and a changed position or
+rotation is visible on the next frame with no GPU resource recreated.
+
+### Scripted ECS verification
+
+`--ecs-script` mutates the world deterministically and is accepted only
+with `--scene ecs-scene` and a bounded `--frames` run of at least 210
+frames:
+
+```bash
+dotnet run \
+  --project samples/Volt.VulkanMeshDemo \
+  -c Release -- \
+  --validation \
+  --frames 600 \
+  --scene ecs-scene \
+  --ecs-script
+```
+
+The script advances once per accepted presented frame, so presentation
+retries and swapchain recreation cannot mutate the world extra times.
+It holds the initial scene for 200 accepted frames, then moves triangle
+A from `x = -0.75` to `x = 0.15` and the camera entity from `x = 0` to
+`x = 0.3` in place, and holds that state for the rest of the run. The
+mutation happens only after the frame was accepted, never while
+commands are being recorded, and it never adds or removes entities.
+Repeating the mutation sets the same values, so the script stays
+deterministic.
+
+```
+Ecs initial state: camera=(0.000, 0.000, 3.000) triangleA=(-0.750, 0.350, 0.000) at accepted frame 1.
+Ecs change applied: camera=(0.300, 0.000, 3.000) triangleA=(0.150, 0.350, 0.000) at accepted frame 200.
+Ecs changed state reached: camera=(0.300, 0.000, 3.000) triangleA=(0.150, 0.350, 0.000) at accepted frame 210; holding.
+Ecs changed state held for 391 accepted frames.
+```
+
+Every mesh entity keeps its identity and handles across the mutation, so
+no buffer is uploaded again; only the extracted model matrices change.
+Unrelated entities keep their own component values.
+
+### Headless ECS verification
+
+The static scene is verified on the GPU with analytically derived
+probes:
+
+```bash
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots \
+  --sample-arg=--scene --sample-arg ecs-scene \
+  --expect-pixel-class 484,296,red \
+  --expect-pixel-class 640,360,blue \
+  --expect-pixel-class 835,267,red
+```
+
+At 1280x720 the ECS camera reproduces the fixed scene's image: triangle
+A spans `x = 432..536, y = 236..328`, the quad `x = 435..845, y =
+246..474`, triangle B `x = 820..864, y = 228..312`, and the hexagon is
+centred near `(338, 520)`. The red probes prove both triangle entities
+draw the one shared mesh, and the blue probe proves the quad is behind
+them.
+
+The scripted scene waits for the changed-state checkpoint, then checks
+that the moved triangle and the moved camera affected the right pixels:
+
+```bash
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots \
+  --sample-arg=--scene --sample-arg ecs-scene \
+  --sample-arg=--ecs-script \
+  --screenshot-after-line "Ecs changed state reached" \
+  --expect-pixel-class 609,287,red \
+  --expect-pixel-class 500,310,blue \
+  --expect-pixel-class 420,360,blue
+```
+
+Triangle A's centre moves from `(484, 287)` to `(609, 287)`, so
+`609,287` becomes red while `500,310`, which triangle A used to cover,
+turns blue. The camera component change moves every other object `0.3`
+world units left: the quad's left edge moves from `x = 435` to
+`x = 389` and its right edge from `x = 845` to `x = 800`, so `420,360`
+turns from background to blue, and triangle B's previous right-hand
+area becomes background again. `640,360` and `594,360` are both inside
+the quad's centre region before and after, which is why `420,360` is
+the sharper camera probe. Comparing the two screenshots leaves about
+45,000 differing pixels, and the red content moves from
+`x = 430..866` to `x = 554..814`: triangle A moved right, triangle B
+moved left.
+
 ## Depth attachment
 
 The render pass has a color attachment and a depth attachment. Each
@@ -255,7 +428,23 @@ later far blue quad. That is the depth-test proof; see
   the quad's two triangles use `VulkanMeshDrawCommands.RecordRange`.
   `MeshRenderer.CreateDrawPlan` derives that sequence, including each
   draw instance's model matrix, so the plan can be inspected and
-  tested without a Vulkan device.
+  tested without a Vulkan device. For the ECS scene there is no static
+  plan: the renderer resolves each extracted record, pushes its
+  `model * view * projection`, and splits the quad into the same two
+  ranges, so four entities still produce five draws.
+- `EcsDemoScene` owns the ECS world, the camera entity, the extractor,
+  and a fixed-capacity `RenderInstance` buffer reused for every frame.
+  It outlives swapchain generations, so a resize never rebuilds the
+  world or resets a component value. `EcsScript` drives the opt-in
+  deterministic mutation. `EcsMeshResolver` and `EcsMaterialPalette`
+  are small sample-local tables that validate complete generational
+  handles before any GPU buffer is used.
+- The reusable extraction lives in `Volt.Rendering.Extraction`:
+  `RenderInstance` is a backend-independent snapshot record and
+  `EcsRenderExtractor` reads chunk component spans without modifying
+  the world. `Volt.Rendering.Cameras.CameraEntityMatrices` turns a
+  camera entity into view and projection matrices for any aspect ratio
+  and viewport orientation. Neither type references Vulkan or SDL.
 - `Volt.Rendering.Cameras.CameraController` is the shared engine
   camera: it holds position, yaw, pitch, speed, sprint multiplier,
   and mouse sensitivity, and produces the view matrix and
@@ -486,6 +675,31 @@ the final pose is still rendered at `960x540`:
 The two probes are the same local points as the 1280x720 run scaled by
 `0.75`; both resize extents share the 16:9 aspect ratio.
 
+The ECS scene uses the same scenario. The world, the entity identities,
+and the camera component values survive recreation, and the projection
+is rebuilt from the new extent, so the changed state is still rendered
+at `960x540`:
+
+```bash
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots \
+  --weston-shell desktop \
+  --sample-arg=--scene --sample-arg ecs-scene \
+  --sample-arg=--ecs-script \
+  --sample-arg=--resize-at-frame --sample-arg 200 \
+  --sample-arg=--resize-to --sample-arg 960x540 \
+  --screenshot-after-line "Ecs state stable after recreation" \
+  --expect-pixel-class 457,215,red \
+  --expect-pixel-class 446,270,blue
+```
+
+Triangle A's changed centre projects to `(456.6, 215.3)` and the quad's
+centre to `(445.8, 270.0)` at the new extent. The run also reports
+`Ecs state stable after recreation: camera=(0.300, 0.000, 3.000)
+triangleA=(0.150, 0.350, 0.000) after 30 accepted frames in generation
+2.`, which proves the world was not rebuilt.
+
 ## Tests
 
 ```bash
@@ -506,7 +720,14 @@ time independence, clamping, non-finite handling, look signs, pitch
 clamping, continuous yaw, and cancellation), the deterministic script
 (phase boundaries, final-pose hold, path length, determinism, and timing
 independence), command-line parsing for validation, bounded frames, the
-camera script, and the resize scenario (paired arguments, bounds,
-malformed sizes, triggers at or past the frame limit, duplicates, and
-one-time triggering), plus the required swapchain maintenance1
-negotiation.
+camera script, the ECS script, the ECS scene, and the resize scenario
+(paired arguments, bounds, malformed sizes, triggers at or past the
+frame limit, duplicates, and one-time triggering), plus the required
+swapchain maintenance1 negotiation. The ECS scene tests check the four
+renderable entities, the shared triangle handle, the five draw
+commands, the camera entity's pose and far plane, the scripted
+mutation's isolation, and the projected pixel positions of the
+scripted probes. `EcsMeshResolverTests` covers valid, invalid, stale,
+and unknown mesh and material handles plus an unexpected upload order.
+`EcsScriptTests` covers the initial hold, the change frame, the settled
+checkpoint, the held changed state, and determinism.

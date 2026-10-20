@@ -55,6 +55,7 @@ internal sealed class MeshSwapchainResources : IDisposable
 		VulkanSurface surface,
 		DemoMeshes meshes,
 		CameraController? camera,
+		EcsDemoScene? ecsScene,
 		VulkanCommandBuffers commandBuffers,
 		WindowSize framebufferSize,
 		int maximumFramesInFlight,
@@ -109,6 +110,7 @@ internal sealed class MeshSwapchainResources : IDisposable
 					imageViews,
 					meshes,
 					camera,
+					ecsScene,
 					vertexShaderPath,
 					fragmentShaderPath,
 					depthTestEnabled);

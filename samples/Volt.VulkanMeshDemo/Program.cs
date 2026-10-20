@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using SDL3;
 using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Commands;
@@ -27,9 +28,11 @@ internal static class Program
 	private const string SceneArgument = "--scene";
 	private const string DisableDepthTestArgument = "--disable-depth-test";
 	private const string CameraScriptArgument = "--camera-script";
+	private const string EcsScriptArgument = "--ecs-script";
 	private const string GallerySceneName = "gallery";
 	private const string DepthOcclusionSceneName = "depth-occlusion";
 	private const string CameraTransformsSceneName = "camera-transforms";
+	private const string EcsSceneName = "ecs-scene";
 
 	/// <summary>
 	/// Upper bound for a requested resize dimension. It keeps the
@@ -76,8 +79,9 @@ internal static class Program
 			Console.Error.WriteLine(error);
 			Console.Error.WriteLine(
 				"Usage: Volt.VulkanMeshDemo [--validation] [--frames N] " +
-				"[--scene gallery|depth-occlusion|camera-transforms] " +
-				"[--camera-script] [--disable-depth-test] " +
+				"[--scene gallery|depth-occlusion|camera-transforms|" +
+				"ecs-scene] [--camera-script] [--ecs-script] " +
+				"[--disable-depth-test] " +
 				"[--resize-at-frame N --resize-to WIDTHxHEIGHT]");
 
 			return 2;
@@ -116,6 +120,10 @@ internal static class Program
 
 		CameraScript? cameraScript = options.CameraScript
 			? new CameraScript()
+			: null;
+
+		EcsScript? ecsScript = options.EcsScript
+			? new EcsScript()
 			: null;
 
 		List<string> extensions =
@@ -259,6 +267,14 @@ internal static class Program
 			selectedPhysicalDevice,
 			options.Scene);
 
+		// The ECS world and its entities outlive swapchain
+		// generations, so a resize never resets component values.
+		using EcsDemoScene? ecsScene =
+			options.Scene == DemoScene.EcsScene
+				? new EcsDemoScene(
+					EcsMeshResolver.CreateDefault(meshes.Geometries))
+				: null;
+
 		string shaderDirectory = Path.Combine(
 			AppContext.BaseDirectory,
 			"Shaders");
@@ -274,6 +290,15 @@ internal static class Program
 			$"Depth test: " +
 			$"{(options.DepthTestDisabled ? "disabled" : "enabled")}");
 
+		if (ecsScene is not null)
+		{
+			Console.WriteLine(
+				$"ECS: {ecsScene.Extract().Length} renderable " +
+				$"entities from {ecsScene.World.Count} world " +
+				$"entities, camera entity {ecsScene.CameraEntity}, " +
+				$"{ecsScene.CountDrawCommands()} draw commands per frame.");
+		}
+
 		if (options.Scene == DemoScene.CameraTransforms)
 		{
 			Console.WriteLine(
@@ -281,6 +306,15 @@ internal static class Program
 					? "Camera: interactive (wasd, space/ctrl, mouse " +
 						"after click, escape releases, shift sprints)."
 					: "Camera: scripted deterministic flight.");
+		}
+
+		if (options.Scene == DemoScene.EcsScene)
+		{
+			Console.WriteLine(
+				ecsScript is null
+					? "ECS: static entity-driven scene."
+					: "ECS: scripted deterministic entity and " +
+						"camera mutation.");
 		}
 
 		foreach (MeshGeometry geometry in meshes.Geometries)
@@ -315,6 +349,8 @@ internal static class Program
 			camera,
 			cameraInput,
 			cameraScript,
+			ecsScene,
+			ecsScript,
 			options,
 			Path.Combine(shaderDirectory, "mesh.vert.spv"),
 			Path.Combine(shaderDirectory, "mesh.frag.spv"));
@@ -333,6 +369,8 @@ internal static class Program
 		CameraController camera,
 		CameraInput cameraInput,
 		CameraScript? cameraScript,
+		EcsDemoScene? ecsScene,
+		EcsScript? ecsScript,
 		SampleOptions options,
 		string vertexShaderPath,
 		string fragmentShaderPath)
@@ -449,6 +487,7 @@ internal static class Program
 						surface,
 						meshes,
 						camera,
+						ecsScene,
 						commandBuffers,
 						framebufferSize,
 						MaxFramesInFlight,
@@ -531,6 +570,16 @@ internal static class Program
 						presentedFrames);
 				}
 
+				if (ecsScript is not null && ecsScene is not null)
+				{
+					// The mutation happens only after this frame was
+					// accepted, never during command recording.
+					LogEcsCheckpoint(
+						ecsScript.Advance(ecsScene),
+						ecsScene,
+						presentedFrames);
+				}
+
 				if (ShouldRequestResize(
 						presentedFrames,
 						options,
@@ -570,6 +619,23 @@ internal static class Program
 					Console.WriteLine(
 						$"Camera final pose stable after recreation: " +
 						$"{FormatCameraPose(camera)} after " +
+						$"{presentedFrames - resizeRecreationFrame} " +
+						$"accepted frames in generation " +
+						$"{swapchainGeneration}.");
+				}
+
+				if (ecsScript is not null &&
+					ecsScene is not null &&
+					resizeObserved &&
+					!postRecreationCheckpointLogged &&
+					presentedFrames - resizeRecreationFrame >=
+						PostRecreationCheckpointFrames)
+				{
+					postRecreationCheckpointLogged = true;
+
+					Console.WriteLine(
+						$"Ecs state stable after recreation: " +
+						$"{FormatEcsState(ecsScene)} after " +
 						$"{presentedFrames - resizeRecreationFrame} " +
 						$"accepted frames in generation " +
 						$"{swapchainGeneration}.");
@@ -637,6 +703,22 @@ internal static class Program
 				Console.WriteLine(
 					$"Camera final pose held for " +
 					$"{cameraScript.FramesHoldingFinalPose} accepted frames.");
+			}
+
+			if (ecsScript is not null)
+			{
+				if (!ecsScript.HasReachedChangedState)
+				{
+					throw new InvalidOperationException(
+						$"The ECS script did not reach its changed state " +
+						$"before the run ended at {presentedFrames} " +
+						$"accepted frames.");
+				}
+
+				Console.WriteLine(
+					$"Ecs changed state held for " +
+					$"{ecsScript.FramesHoldingChangedState} " +
+					$"accepted frames.");
 			}
 
 			Console.WriteLine(
@@ -741,6 +823,60 @@ internal static class Program
 	}
 
 	/// <summary>
+	/// Writes the checkpoint produced by one accepted scripted ECS
+	/// frame.
+	/// </summary>
+	/// <remarks>
+	/// Checkpoints are only logged from the accepted-presentation
+	/// path, so a line always describes state that has reached the
+	/// swapchain. The mutation itself is applied here, after the
+	/// frame was recorded and presented.
+	/// </remarks>
+	private static void LogEcsCheckpoint(
+		EcsScriptCheckpoint checkpoint,
+		EcsDemoScene scene,
+		int presentedFrames)
+	{
+		switch (checkpoint)
+		{
+			case EcsScriptCheckpoint.InitialState:
+				Console.WriteLine(
+					$"Ecs initial state: {FormatEcsState(scene)} " +
+					$"at accepted frame {presentedFrames}.");
+				break;
+
+			case EcsScriptCheckpoint.ChangeApplied:
+				Console.WriteLine(
+					$"Ecs change applied: {FormatEcsState(scene)} " +
+					$"at accepted frame {presentedFrames}.");
+				break;
+
+			case EcsScriptCheckpoint.ChangedStateReached:
+				Console.WriteLine(
+					$"Ecs changed state reached: " +
+					$"{FormatEcsState(scene)} at accepted frame " +
+					$"{presentedFrames}; holding.");
+				break;
+		}
+	}
+
+	/// <summary>
+	/// Formats the ECS scene's scripted component state with
+	/// invariant numbers.
+	/// </summary>
+	private static string FormatEcsState(EcsDemoScene scene)
+	{
+		Vector3 camera = scene.CameraPosition;
+		Vector3 triangle = scene.TriangleAPosition;
+
+		return string.Create(
+			CultureInfo.InvariantCulture,
+			$"camera=({camera.X:F3}, {camera.Y:F3}, " +
+			$"{camera.Z:F3}) triangleA=({triangle.X:F3}, " +
+			$"{triangle.Y:F3}, {triangle.Z:F3})");
+	}
+
+	/// <summary>
 	/// Requires a supported swapchain maintenance1 extension with
 	/// presentation fences.
 	/// </summary>
@@ -781,6 +917,7 @@ internal static class Program
 		DemoScene? scene = null;
 		bool depthTestDisabled = false;
 		bool cameraScript = false;
+		bool ecsScript = false;
 
 		for (int index = 0; index < args.Length; index++)
 		{
@@ -927,12 +1064,25 @@ internal static class Program
 						error =
 							"The --scene value must be " +
 							$"{GallerySceneName}, " +
-							$"{DepthOcclusionSceneName}, or " +
-							$"{CameraTransformsSceneName}.";
+							$"{DepthOcclusionSceneName}, " +
+							$"{CameraTransformsSceneName}, or " +
+							$"{EcsSceneName}.";
 						return false;
 					}
 
 					scene = parsedScene;
+					break;
+
+				case EcsScriptArgument:
+					if (ecsScript)
+					{
+						options = default;
+						error =
+							"The --ecs-script argument was supplied twice.";
+						return false;
+					}
+
+					ecsScript = true;
 					break;
 
 				case CameraScriptArgument:
@@ -1028,6 +1178,35 @@ internal static class Program
 			return false;
 		}
 
+		if (ecsScript && selectedScene != DemoScene.EcsScene)
+		{
+			options = default;
+			error =
+				"The --ecs-script argument requires " +
+				$"--scene {EcsSceneName}.";
+			return false;
+		}
+
+		if (ecsScript && !frameLimit.HasValue)
+		{
+			options = default;
+			error =
+				"The --ecs-script argument requires a bounded " +
+				"--frames run.";
+			return false;
+		}
+
+		if (ecsScript &&
+			frameLimit is int ecsFrames &&
+			ecsFrames < EcsScript.MinimumFrameLimit)
+		{
+			options = default;
+			error =
+				"The --ecs-script run requires --frames of at " +
+				$"least {EcsScript.MinimumFrameLimit}.";
+			return false;
+		}
+
 		options = new SampleOptions(
 			validation,
 			frameLimit,
@@ -1035,7 +1214,8 @@ internal static class Program
 			resizeTo,
 			selectedScene,
 			depthTestDisabled,
-			cameraScript);
+			cameraScript,
+			ecsScript);
 
 		error = string.Empty;
 		return true;
@@ -1060,6 +1240,10 @@ internal static class Program
 				scene = DemoScene.CameraTransforms;
 				return true;
 
+			case EcsSceneName:
+				scene = DemoScene.EcsScene;
+				return true;
+
 			default:
 				scene = default;
 				return false;
@@ -1073,6 +1257,7 @@ internal static class Program
 			DemoScene.Gallery => GallerySceneName,
 			DemoScene.DepthOcclusion => DepthOcclusionSceneName,
 			DemoScene.CameraTransforms => CameraTransformsSceneName,
+			DemoScene.EcsScene => EcsSceneName,
 			_ => "unknown"
 		};
 	}
@@ -1173,4 +1358,5 @@ internal readonly record struct SampleOptions(
 	WindowSize? ResizeTo,
 	DemoScene Scene,
 	bool DepthTestDisabled,
-	bool CameraScript = false);
+	bool CameraScript = false,
+	bool EcsScript = false);

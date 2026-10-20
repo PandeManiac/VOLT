@@ -6,6 +6,7 @@ using Volt.Graphics.Vulkan.Instance;
 using Volt.Graphics.Vulkan.Rendering;
 using Volt.Graphics.Vulkan.Swapchain;
 using Volt.Rendering.Cameras;
+using Volt.Rendering.Extraction;
 using Volt.Rendering.Transforms;
 
 namespace Volt.VulkanMeshDemo;
@@ -112,6 +113,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 	private readonly VulkanDepthAttachment[] _depthAttachments;
 	private readonly DemoScene _scene;
 	private readonly CameraController? _camera;
+	private readonly EcsDemoScene? _ecsScene;
 
 	private PipelineLayout _pipelineLayout;
 	private RenderPass _renderPass;
@@ -140,6 +142,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		VulkanSwapchainImageViews imageViews,
 		DemoMeshes meshes,
 		CameraController? camera,
+		EcsDemoScene? ecsScene,
 		string vertexShaderPath,
 		string fragmentShaderPath,
 		bool depthTestEnabled = true)
@@ -172,7 +175,19 @@ internal sealed unsafe class MeshRenderer : IDisposable
 				"The swapchain must support color attachments.");
 		}
 
-		MeshDraw[] drawPlan = CreateDrawPlan(meshes.Scene, meshes.Geometries);
+		if ((meshes.Scene == DemoScene.EcsScene) != (ecsScene is not null))
+		{
+			throw new ArgumentException(
+				"The ECS scene must be supplied exactly when the demo " +
+				"scene is EcsScene.",
+				nameof(ecsScene));
+		}
+
+		// The ECS scene derives its draw instances from the world on
+		// every recorded frame, so it has no static plan.
+		MeshDraw[] drawPlan = meshes.Scene == DemoScene.EcsScene
+			? []
+			: CreateDrawPlan(meshes.Scene, meshes.Geometries);
 
 		Vk api = instance.Api;
 		Device deviceHandle = device.Handle;
@@ -262,6 +277,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		_depthAttachments = depthAttachments;
 		_scene = meshes.Scene;
 		_camera = camera;
+		_ecsScene = ecsScene;
 
 		_renderPass = renderPass;
 		_pipelineLayout = pipelineLayout;
@@ -435,10 +451,30 @@ internal sealed unsafe class MeshRenderer : IDisposable
 
 		float aspect = Extent.Width / (float)Extent.Height;
 
-		Matrix4x4 view = CameraTransforms.CreateView(_scene, _camera);
+		Matrix4x4 view;
+		Matrix4x4 projection;
 
-		Matrix4x4 projection =
-			CameraTransforms.CreateProjection(_scene, aspect);
+		if (_ecsScene is not null)
+		{
+			// The camera entity is the authority for the ECS scene,
+			// so a component update is visible on the next frame
+			// without touching swapchain resources.
+			CameraEntityMatrices.CreateMatrices(
+				_ecsScene.World,
+				_ecsScene.CameraEntity,
+				aspect,
+				ViewportYOrientation.YDown,
+				out view,
+				out projection);
+		}
+
+		else
+		{
+			view = CameraTransforms.CreateView(_scene, _camera);
+
+			projection =
+				CameraTransforms.CreateProjection(_scene, aspect);
+		}
 
 		ClearValue* clearValues = stackalloc ClearValue[2];
 
@@ -486,24 +522,37 @@ internal sealed unsafe class MeshRenderer : IDisposable
 			PipelineBindPoint.Graphics,
 			_pipeline);
 
+		if (_ecsScene is not null)
+		{
+			RecordEcsInstances(commandBuffer, view, projection);
+		}
+
+		else
+		{
+			RecordDrawPlan(commandBuffer, view, projection);
+		}
+
+		_api.CmdEndRenderPass(commandBuffer);
+	}
+
+	/// <summary>
+	/// Records the legacy scenes' static draw plan.
+	/// </summary>
+	private void RecordDrawPlan(
+		CommandBuffer commandBuffer,
+		Matrix4x4 view,
+		Matrix4x4 projection)
+	{
 		for (int index = 0; index < _drawPlan.Length; index++)
 		{
 			MeshDraw draw = _drawPlan[index];
 
-			Matrix4x4 mvp = TransformMatrices.CreateModelViewProjection(
-				draw.Model,
-				view,
-				projection);
-
-			MeshPushConstants constants = new(mvp);
-
-			_api.CmdPushConstants(
+			PushMvp(
 				commandBuffer,
-				_pipelineLayout,
-				ShaderStageFlags.VertexBit,
-				0,
-				(uint)sizeof(MeshPushConstants),
-				&constants);
+				TransformMatrices.CreateModelViewProjection(
+					draw.Model,
+					view,
+					projection));
 
 			VulkanMeshBuffers mesh =
 				_meshes.Buffers[draw.MeshIndex];
@@ -526,8 +575,126 @@ internal sealed unsafe class MeshRenderer : IDisposable
 					draw.ElementCount);
 			}
 		}
+	}
 
-		_api.CmdEndRenderPass(commandBuffer);
+	/// <summary>
+	/// Records one frame's extracted ECS instances.
+	/// </summary>
+	/// <remarks>
+	/// Each render record becomes one Vulkan draw, except the sample's
+	/// 16-bit indexed quad, which keeps its two partial index ranges.
+	/// Four mesh entities therefore still produce five draw commands.
+	/// The complete generational handles are verified before any GPU
+	/// buffer is used.
+	/// </remarks>
+	private void RecordEcsInstances(
+		CommandBuffer commandBuffer,
+		Matrix4x4 view,
+		Matrix4x4 projection)
+	{
+		EcsDemoScene scene = _ecsScene!;
+
+		ReadOnlySpan<RenderInstance> instances = scene.Extract();
+
+		for (int index = 0; index < instances.Length; index++)
+		{
+			RenderInstance instance = instances[index];
+
+			if (!scene.Meshes.TryResolve(
+				instance.Mesh,
+				out EcsMeshBinding binding))
+			{
+				throw new InvalidOperationException(
+					$"The ECS scene references an unbound mesh " +
+					$"handle {instance.Mesh}.");
+			}
+
+			if (!scene.Materials.Contains(instance.Material))
+			{
+				throw new InvalidOperationException(
+					$"The ECS scene references an unknown material " +
+					$"handle {instance.Material}.");
+			}
+
+			PushMvp(
+				commandBuffer,
+				TransformMatrices.CreateModelViewProjection(
+					instance.Model,
+					view,
+					projection));
+
+			VulkanMeshBuffers mesh =
+				_meshes.Buffers[binding.BufferIndex];
+
+			if (binding.Geometry.IndexFormat == MeshIndexFormat.UInt16)
+			{
+				RecordSplitQuad(
+					commandBuffer,
+					mesh,
+					binding.Geometry);
+			}
+
+			else
+			{
+				VulkanMeshDrawCommands.Record(
+					_instance,
+					commandBuffer,
+					mesh);
+			}
+		}
+	}
+
+	/// <summary>
+	/// Records the quad as its two constituent index ranges.
+	/// </summary>
+	private void RecordSplitQuad(
+		CommandBuffer commandBuffer,
+		VulkanMeshBuffers mesh,
+		MeshGeometry geometry)
+	{
+		uint indexCount = checked((uint)geometry.Indices16.Length);
+		uint triangleIndexCount = indexCount / 2;
+
+		if (triangleIndexCount == 0 ||
+			triangleIndexCount * 2 != indexCount ||
+			triangleIndexCount % 3 != 0)
+		{
+			throw new InvalidOperationException(
+				"The 16-bit indexed ECS mesh must split into two " +
+				"whole triangles.");
+		}
+
+		VulkanMeshDrawCommands.RecordRange(
+			_instance,
+			commandBuffer,
+			mesh,
+			0,
+			triangleIndexCount);
+
+		VulkanMeshDrawCommands.RecordRange(
+			_instance,
+			commandBuffer,
+			mesh,
+			triangleIndexCount,
+			indexCount - triangleIndexCount);
+	}
+
+	/// <summary>
+	/// Pushes one draw's MVP push constant.
+	/// </summary>
+	private void PushMvp(
+		CommandBuffer commandBuffer,
+		Matrix4x4 mvp)
+	{
+		MeshPushConstants constants = new(mvp);
+
+		_api.CmdPushConstants(
+			commandBuffer,
+			_pipelineLayout,
+			ShaderStageFlags.VertexBit,
+			0,
+			(uint)sizeof(MeshPushConstants),
+			&constants);
 	}
 
 	/// <summary>
