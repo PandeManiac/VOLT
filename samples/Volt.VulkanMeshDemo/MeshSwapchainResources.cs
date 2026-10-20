@@ -6,6 +6,7 @@ using Volt.Graphics.Vulkan.Surface;
 using Volt.Graphics.Vulkan.Swapchain;
 using Volt.Graphics.Vulkan.Synchronization;
 using Volt.Platform.Windows;
+using Volt.Rendering.Cameras;
 
 namespace Volt.VulkanMeshDemo;
 

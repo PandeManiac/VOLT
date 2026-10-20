@@ -1,3 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <ItemGroup>
+    <ProjectReference Include="../Volt.Ecs/Volt.Ecs.csproj" />
+  </ItemGroup>
+
 </Project>

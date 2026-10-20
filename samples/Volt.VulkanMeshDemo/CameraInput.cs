@@ -1,5 +1,6 @@
 using SDL3;
 using Volt.Platform.Windows;
+using Volt.Rendering.Cameras;
 
 namespace Volt.VulkanMeshDemo;
 

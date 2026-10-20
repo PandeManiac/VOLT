@@ -1,5 +1,9 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
+using Volt.Ecs.Components.Rendering;
+using Volt.Ecs.Components.Spatial;
+using Volt.Rendering.Cameras;
+using Volt.Rendering.Transforms;
 using Volt.VulkanMeshDemo;
 
 namespace Volt.VulkanMeshDemo.Tests;
@@ -50,7 +54,7 @@ public sealed class CameraTransformsTests
 	[Fact]
 	public void CreateView_UsesTheSuppliedCameraForThePerspectiveScene()
 	{
-		CameraController camera = new();
+		CameraController camera = new(CameraTransforms.CameraPosition);
 
 		camera.ApplyLook(-300.0f, 40.0f);
 
@@ -70,7 +74,7 @@ public sealed class CameraTransformsTests
 	[Fact]
 	public void CreateView_IgnoresTheCameraForClipSpaceScenes()
 	{
-		CameraController camera = new();
+		CameraController camera = new(CameraTransforms.CameraPosition);
 
 		camera.ApplyLook(-300.0f, 40.0f);
 
@@ -272,6 +276,110 @@ public sealed class CameraTransformsTests
 	}
 
 	[Fact]
+	public void PerspectiveCamera_KeepsTheSamplesFarPlane()
+	{
+		CameraComponent camera = CameraTransforms.PerspectiveCamera;
+
+		Assert.Equal(
+			CameraTransforms.FieldOfViewRadians,
+			camera.VerticalFieldOfView);
+
+		Assert.Equal(CameraTransforms.NearPlane, camera.NearPlane);
+		Assert.Equal(100.0f, camera.FarPlane);
+
+		// The ECS default uses a far plane of 1000. The sample's
+		// scene is defined with 100 and must not inherit it.
+		Assert.NotEqual(CameraComponent.Default.FarPlane, camera.FarPlane);
+	}
+
+	[Fact]
+	public void CreateProjection_PerspectiveUsesTheSharedAdapter()
+	{
+		Matrix4x4 expected = CameraProjection.CreatePerspective(
+			CameraTransforms.PerspectiveCamera,
+			WideAspect,
+			ViewportYOrientation.YDown);
+
+		Matrix4x4 actual = CameraTransforms.CreateProjection(
+			DemoScene.CameraTransforms,
+			WideAspect);
+
+		Assert.Equal(expected, actual);
+
+		// The Y orientation is explicit: without it the image is
+		// vertically mirrored.
+		Assert.NotEqual(
+			expected,
+			CameraTransforms.PerspectiveCamera
+				.CreateProjectionMatrix(WideAspect));
+	}
+
+	[Fact]
+	public void TriangleAModel_MatchesTheSharedTransformComposition()
+	{
+		Matrix4x4 expected = TransformMatrices.CreateModelMatrix(
+			new PositionComponent(new Vector3(-0.75f, 0.35f, 0.0f)),
+			RotationComponent.Identity,
+			new ScaleComponent(new Vector3(0.45f)));
+
+		Assert.Equal(expected, CameraTransforms.TriangleAModel);
+		Assert.Equal(0.45f, CameraTransforms.TriangleAModel.M11);
+		Assert.Equal(
+			-0.75f,
+			CameraTransforms.TriangleAModel.M41);
+	}
+
+	[Fact]
+	public void TriangleBModel_MatchesThePreviousCompoundRotation()
+	{
+		Matrix4x4 previous =
+			Matrix4x4.CreateScale(0.40f) *
+			Matrix4x4.CreateRotationZ(25.0f * (MathF.PI / 180.0f)) *
+			Matrix4x4.CreateRotationY(35.0f * (MathF.PI / 180.0f)) *
+			Matrix4x4.CreateTranslation(1.05f, 0.50f, -0.35f);
+
+		Matrix4x4 actual = CameraTransforms.TriangleBModel;
+
+		// The quaternion conversion reorders the factors, so only
+		// floating-point rounding may differ from the previous
+		// matrix product.
+		AssertMatrixNear(previous, actual, 0.000001f);
+
+		Matrix4x4 wrongOrder =
+			Matrix4x4.CreateScale(0.40f) *
+			Matrix4x4.CreateRotationY(35.0f * (MathF.PI / 180.0f)) *
+			Matrix4x4.CreateRotationZ(25.0f * (MathF.PI / 180.0f)) *
+			Matrix4x4.CreateTranslation(1.05f, 0.50f, -0.35f);
+
+		Assert.True(
+			MaxDifference(previous, wrongOrder) > 0.01f,
+			"Swapping the rotation order must change the transform.");
+	}
+
+	[Fact]
+	public void QuadModel_UsesNonuniformScale()
+	{
+		Vector3 world = Vector3.Transform(
+			Vector3.One,
+			CameraTransforms.QuadModel);
+
+		AssertVectorNear(
+			new Vector3(1.35f, 0.75f, -0.1f),
+			world);
+	}
+
+	[Fact]
+	public void HexagonModel_MatchesTheDocumentedScaleAndOffset()
+	{
+		Vector3 world = Vector3.Transform(
+			Vector3.Zero,
+			CameraTransforms.HexagonModel);
+
+		Assert.Equal(new Vector3(-1.60f, -0.85f, -0.30f), world);
+		Assert.Equal(0.30f, CameraTransforms.HexagonModel.M22, 5);
+	}
+
+	[Fact]
 	public void MeshPushConstants_AreOneSequentialMatrix()
 	{
 		Assert.Equal(64, Marshal.SizeOf<MeshPushConstants>());
@@ -282,6 +390,44 @@ public sealed class CameraTransformsTests
 		Assert.Equal(
 			CameraTransforms.TriangleAModel,
 			constants.Mvp);
+	}
+
+	private static void AssertMatrixNear(
+		Matrix4x4 expected,
+		Matrix4x4 actual,
+		float tolerance)
+	{
+		Assert.True(
+			MaxDifference(expected, actual) <= tolerance,
+			$"Matrices differ by {MaxDifference(expected, actual)}.");
+	}
+
+	private static float MaxDifference(
+		Matrix4x4 left,
+		Matrix4x4 right)
+	{
+		float difference = 0.0f;
+
+		for (int row = 0; row < 4; row++)
+		{
+			for (int column = 0; column < 4; column++)
+			{
+				difference = MathF.Max(
+					difference,
+					MathF.Abs(left[row, column] - right[row, column]));
+			}
+		}
+
+		return difference;
+	}
+
+	private static void AssertVectorNear(
+		Vector3 expected,
+		Vector3 actual)
+	{
+		Assert.True(
+			Vector3.Distance(expected, actual) <= 0.00001f,
+			$"Expected {expected}, actual {actual}.");
 	}
 
 	/// <summary>

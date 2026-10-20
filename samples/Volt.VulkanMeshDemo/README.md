@@ -85,6 +85,14 @@ quad's two index ranges share one model matrix, so the split draw still
 covers a single transformed quad. No vertices are pre-transformed and
 no vertex buffer is uploaded per frame.
 
+The model matrices are built by the engine's
+`TransformMatrices.CreateModelMatrix` from ordinary
+`PositionComponent`, `RotationComponent`, and `ScaleComponent` values,
+in `scale * rotation * translation` order. The compound Z/Y rotation of
+the second triangle is expressed as one normalized quaternion; it is
+equivalent to the previous `CreateRotationZ * CreateRotationY` product
+up to floating-point rounding.
+
 The camera starts at `(0, 0, 3)` looking at the world origin with up
 vector `(0, 1, 0)`, which is the pose the scene had before it became
 movable. The projection uses a 60° vertical field of view, the current
@@ -133,10 +141,14 @@ so it never captures the mouse.
 
 The camera controller has application lifetime. `MeshRenderer` queries
 it for the view matrix on every recorded frame and composes
-`model * view * projection`, so movement is visible without recreating
-the renderer, and a swapchain recreation leaves position, yaw, and pitch
-untouched. The projection still comes from the current extent, so the
-new aspect ratio applies immediately after a resize.
+`model * view * projection` through the shared transform utility, so
+movement is visible without recreating the renderer, and a swapchain
+recreation leaves position, yaw, and pitch untouched. The view matrix
+is produced from the controller's position and quaternion through
+`CameraComponent.CreateViewMatrix`, so the free camera and an ECS
+camera with the same pose agree. The projection still comes from the
+current extent, so the new aspect ratio applies immediately after a
+resize.
 
 ### Scripted camera verification
 
@@ -244,18 +256,30 @@ later far blue quad. That is the depth-test proof; see
   `MeshRenderer.CreateDrawPlan` derives that sequence, including each
   draw instance's model matrix, so the plan can be inspected and
   tested without a Vulkan device.
-- `CameraController` holds position, yaw, pitch, speed, sprint
-  multiplier, and mouse sensitivity, and produces the view matrix and
-  allocation-free movement/look updates. `CameraScript` drives it
-  deterministically for headless runs. `CameraInput` samples SDL
-  keyboard and mouse state and owns relative mouse capture; it is
-  created and disposed by `Program`. `CameraCaptureController` holds
-  the click and release state machine behind a small injectable seam,
-  so capture, release, failed native transitions, and shutdown are
-  tested without a desktop.
-- `CameraTransforms` builds the legacy and perspective projections,
-  the default look-at view matrix, and the camera scene's model
-  transforms. It documents the row-vector/column-major convention.
+- `Volt.Rendering.Cameras.CameraController` is the shared engine
+  camera: it holds position, yaw, pitch, speed, sprint multiplier,
+  and mouse sensitivity, and produces the view matrix and
+  allocation-free movement/look updates. Its initial position is
+  supplied by the sample. `CameraScript` drives it deterministically
+  for headless runs. `CameraInput` samples SDL keyboard and mouse
+  state and owns relative mouse capture; it is created and disposed
+  by `Program`. `CameraCaptureController` holds the click and release
+  state machine behind a small injectable seam, so capture, release,
+  failed native transitions, and shutdown are tested without a
+  desktop. The controller has no SDL, window, or Vulkan dependency.
+- `CameraTransforms` is sample-local: it selects the legacy
+  clip-space projection, keeps the camera scene's documented initial
+  pose and model transforms, and documents the
+  row-vector/column-major upload convention. The model matrices come
+  from `Volt.Rendering.Transforms.TransformMatrices`, the projection
+  from `Volt.Rendering.Cameras.CameraProjection` with an explicit
+  downward viewport orientation, and the view from the controller.
+- The reusable engine math lives in `Volt.Rendering`, which depends
+  on `Volt.Ecs`. `TransformMatrices` composes model matrices from
+  `PositionComponent`, `RotationComponent`, and `ScaleComponent` and
+  composes `model * view * projection`. `CameraProjection` reuses
+  `CameraComponent.CreateProjectionMatrix` and adds the viewport Y
+  choice. `Volt.Ecs` has no rendering, SDL, or Vulkan dependency.
 - `MeshSwapchainResources` owns one swapchain generation, including
   image views and the frame scheduler. It is recreated after resize or
   presentation-driven swapchain changes. Each creation is reported with

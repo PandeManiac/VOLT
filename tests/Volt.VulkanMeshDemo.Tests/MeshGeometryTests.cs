@@ -1,4 +1,5 @@
 using System.Numerics;
+using Volt.Rendering.Cameras;
 using Volt.VulkanMeshDemo;
 
 namespace Volt.VulkanMeshDemo.Tests;
@@ -602,7 +603,7 @@ public sealed class MeshGeometryTests
 	/// </summary>
 	private static CameraController ScriptedCamera()
 	{
-		CameraController camera = new();
+		CameraController camera = new(CameraTransforms.CameraPosition);
 		CameraScript script = new();
 
 		while (!script.HasReachedFinalPose)

@@ -1,4 +1,5 @@
 using System.Numerics;
+using Volt.Rendering.Cameras;
 using Volt.VulkanMeshDemo;
 
 namespace Volt.VulkanMeshDemo.Tests;
@@ -22,7 +23,7 @@ public sealed class CameraScriptTests
 	[Fact]
 	public void Advance_HoldsTheInitialPoseForTheHoldFrames()
 	{
-		CameraController camera = new();
+		CameraController camera = new(CameraTransforms.CameraPosition);
 		CameraScript script = new();
 
 		Vector3 initialPosition = camera.Position;
@@ -49,7 +50,7 @@ public sealed class CameraScriptTests
 	[Fact]
 	public void Advance_StartsMovingAfterTheHoldPhase()
 	{
-		CameraController camera = new();
+		CameraController camera = new(CameraTransforms.CameraPosition);
 		CameraScript script = new();
 
 		for (int frame = 0; frame < CameraScript.InitialHoldFrames; frame++)
@@ -67,7 +68,7 @@ public sealed class CameraScriptTests
 	[Fact]
 	public void Advance_ReachesTheFinalPoseAfterTheSettleFrames()
 	{
-		CameraController camera = new();
+		CameraController camera = new(CameraTransforms.CameraPosition);
 		CameraScript script = new();
 
 		for (int frame = 1; frame < CameraScript.MinimumFrameLimit; frame++)
@@ -88,7 +89,7 @@ public sealed class CameraScriptTests
 	[Fact]
 	public void Advance_HoldsTheFinalPoseForTheRestOfTheRun()
 	{
-		CameraController camera = new();
+		CameraController camera = new(CameraTransforms.CameraPosition);
 		CameraScript script = new();
 
 		for (int frame = 0; frame < CameraScript.MinimumFrameLimit; frame++)
@@ -119,7 +120,7 @@ public sealed class CameraScriptTests
 	[Fact]
 	public void Advance_AppliesTheDocumentedYawAndTravel()
 	{
-		CameraController camera = new();
+		CameraController camera = new(CameraTransforms.CameraPosition);
 		CameraScript script = new();
 
 		Vector3 previous = camera.Position;
@@ -167,10 +168,10 @@ public sealed class CameraScriptTests
 	[Fact]
 	public void Advance_IsDeterministic()
 	{
-		CameraController firstCamera = new();
+		CameraController firstCamera = new(CameraTransforms.CameraPosition);
 		CameraScript firstScript = new();
 
-		CameraController secondCamera = new();
+		CameraController secondCamera = new(CameraTransforms.CameraPosition);
 		CameraScript secondScript = new();
 
 		for (int frame = 0; frame < 600; frame++)
@@ -188,10 +189,10 @@ public sealed class CameraScriptTests
 	[Fact]
 	public void Advance_IsIndependentOfObservedRenderingSpeed()
 	{
-		CameraController fastCamera = new();
+		CameraController fastCamera = new(CameraTransforms.CameraPosition);
 		CameraScript fastScript = new();
 
-		CameraController slowCamera = new();
+		CameraController slowCamera = new(CameraTransforms.CameraPosition);
 		CameraScript slowScript = new();
 
 		for (int frame = 0; frame < 600; frame++)
@@ -214,7 +215,7 @@ public sealed class CameraScriptTests
 	[Fact]
 	public void Advance_DoesNotCountUnacceptedFrames()
 	{
-		CameraController camera = new();
+		CameraController camera = new(CameraTransforms.CameraPosition);
 		CameraScript script = new();
 
 		// Attempted frames that never reached the script (for example

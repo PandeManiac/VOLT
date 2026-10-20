@@ -5,6 +5,8 @@ using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
 using Volt.Graphics.Vulkan.Rendering;
 using Volt.Graphics.Vulkan.Swapchain;
+using Volt.Rendering.Cameras;
+using Volt.Rendering.Transforms;
 
 namespace Volt.VulkanMeshDemo;
 
@@ -488,7 +490,10 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		{
 			MeshDraw draw = _drawPlan[index];
 
-			Matrix4x4 mvp = draw.Model * view * projection;
+			Matrix4x4 mvp = TransformMatrices.CreateModelViewProjection(
+				draw.Model,
+				view,
+				projection);
 
 			MeshPushConstants constants = new(mvp);
 

@@ -10,6 +10,7 @@ using Volt.Graphics.Vulkan.Swapchain;
 using Volt.Graphics.Vulkan.Synchronization;
 using Volt.Platform.Events;
 using Volt.Platform.Windows;
+using Volt.Rendering.Cameras;
 
 namespace Volt.VulkanMeshDemo;
 
@@ -107,8 +108,9 @@ internal static class Program
 
 		// The camera and its input sampler live for the whole
 		// application, not for one swapchain generation, so a resize
-		// never resets the pose.
-		CameraController camera = new();
+		// never resets the pose. The sample supplies its documented
+		// initial pose; the shared controller has no default.
+		CameraController camera = new(CameraTransforms.CameraPosition);
 
 		using CameraInput cameraInput = new(window);
 

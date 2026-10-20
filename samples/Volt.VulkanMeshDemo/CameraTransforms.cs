@@ -1,4 +1,8 @@
 using System.Numerics;
+using Volt.Ecs.Components.Rendering;
+using Volt.Ecs.Components.Spatial;
+using Volt.Rendering.Cameras;
+using Volt.Rendering.Transforms;
 
 namespace Volt.VulkanMeshDemo;
 
@@ -6,6 +10,15 @@ namespace Volt.VulkanMeshDemo;
 /// Builds the sample's model, view, and projection matrices.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Model transforms, view composition, and the perspective
+/// projection come from <see cref="TransformMatrices"/>,
+/// <see cref="CameraComponent"/>, and <see cref="CameraProjection"/>.
+/// What remains sample-local is the scene selection: the legacy
+/// gallery and depth-occlusion scenes author clip-space geometry and
+/// keep their own projection and identity view, and the camera scene
+/// keeps its documented initial pose and model transforms.
+/// </para>
 /// <para>
 /// <see cref="System.Numerics.Matrix4x4"/> uses row-vector
 /// transforms: a position is multiplied on the left of a matrix, so
@@ -17,7 +30,8 @@ namespace Volt.VulkanMeshDemo;
 /// their natural memory order and read by GLSL as a column-major
 /// <c>mat4</c>. That reinterpretation transposes the matrix
 /// implicitly, so the shader multiplies <c>mvp * vec4(position, 1.0)</c>
-/// and the CPU must not transpose again.
+/// and the CPU must not transpose again. This is an upload
+/// convention of the sample's shader, not of the shared math.
 /// </para>
 /// </remarks>
 internal static class CameraTransforms
@@ -29,6 +43,15 @@ internal static class CameraTransforms
 
 	public const float NearPlane = 0.1f;
 
+	/// <summary>
+	/// Far clip distance for the camera scene.
+	/// </summary>
+	/// <remarks>
+	/// The sample keeps its own far plane instead of using
+	/// <see cref="CameraComponent.Default"/>, whose far plane is
+	/// 1000. Changing it would change the depth distribution of the
+	/// established scene.
+	/// </remarks>
 	public const float FarPlane = 100.0f;
 
 	/// <summary>
@@ -47,6 +70,16 @@ internal static class CameraTransforms
 	public static Vector3 CameraUp { get; } = Vector3.UnitY;
 
 	/// <summary>
+	/// Gets the camera scene's projection settings.
+	/// </summary>
+	/// <remarks>
+	/// The far plane remains the sample's 100 units; the ECS default
+	/// of 1000 is deliberately not used.
+	/// </remarks>
+	public static CameraComponent PerspectiveCamera { get; } =
+		new(FieldOfViewRadians, NearPlane, FarPlane);
+
+	/// <summary>
 	/// Gets the model transform for the first triangle instance.
 	/// </summary>
 	/// <remarks>
@@ -54,8 +87,10 @@ internal static class CameraTransforms
 	/// camera view. It is drawn first.
 	/// </remarks>
 	public static Matrix4x4 TriangleAModel =>
-		Matrix4x4.CreateScale(0.45f) *
-		Matrix4x4.CreateTranslation(-0.75f, 0.35f, 0.0f);
+		TransformMatrices.CreateModelMatrix(
+			new PositionComponent(new Vector3(-0.75f, 0.35f, 0.0f)),
+			RotationComponent.Identity,
+			new ScaleComponent(new Vector3(0.45f)));
 
 	/// <summary>
 	/// Gets the model transform for the second triangle instance.
@@ -68,26 +103,30 @@ internal static class CameraTransforms
 	/// is exercised instead of one constant depth.
 	/// </remarks>
 	public static Matrix4x4 TriangleBModel =>
-		Matrix4x4.CreateScale(0.40f) *
-		Matrix4x4.CreateRotationZ(Radians(25.0f)) *
-		Matrix4x4.CreateRotationY(Radians(35.0f)) *
-		Matrix4x4.CreateTranslation(1.05f, 0.50f, -0.35f);
+		TransformMatrices.CreateModelMatrix(
+			new PositionComponent(new Vector3(1.05f, 0.50f, -0.35f)),
+			new RotationComponent(TriangleRotation),
+			new ScaleComponent(new Vector3(0.40f)));
 
 	/// <summary>
 	/// Gets the model transform for the indexed quad. The quad is
 	/// behind both triangles and acts as a depth-tested background.
 	/// </summary>
 	public static Matrix4x4 QuadModel =>
-		Matrix4x4.CreateScale(1.35f, 0.75f, 1.0f) *
-		Matrix4x4.CreateTranslation(0.0f, 0.0f, -1.1f);
+		TransformMatrices.CreateModelMatrix(
+			new PositionComponent(new Vector3(0.0f, 0.0f, -1.1f)),
+			RotationComponent.Identity,
+			new ScaleComponent(new Vector3(1.35f, 0.75f, 1.0f)));
 
 	/// <summary>
 	/// Gets the model transform for the 32-bit indexed hexagon,
 	/// placed below and left of the other objects.
 	/// </summary>
 	public static Matrix4x4 HexagonModel =>
-		Matrix4x4.CreateScale(0.30f) *
-		Matrix4x4.CreateTranslation(-1.60f, -0.85f, -0.30f);
+		TransformMatrices.CreateModelMatrix(
+			new PositionComponent(new Vector3(-1.60f, -0.85f, -0.30f)),
+			RotationComponent.Identity,
+			new ScaleComponent(new Vector3(0.30f)));
 
 	/// <summary>
 	/// Creates the default view matrix for a scene.
@@ -144,12 +183,14 @@ internal static class CameraTransforms
 	/// Vulkan's downward viewport requires. Authored Z passes through
 	/// as clip-space depth with <c>W = 1</c>.
 	///
-	/// The camera scene uses a right-handed perspective projection.
+	/// The camera scene uses <see cref="CameraProjection"/> with the
+	/// sample's <see cref="PerspectiveCamera"/> settings.
 	/// <see cref="Matrix4x4.CreatePerspectiveFieldOfView"/> already
 	/// maps the near plane to depth 0 and the far plane to depth 1,
-	/// which matches Vulkan's 0..1 clip-space depth range. Its Y row
-	/// is negated so world-space +Y appears upwards in Vulkan's
-	/// downward viewport.
+	/// which matches Vulkan's 0..1 clip-space depth range. Only the
+	/// viewport orientation is sample-specific: Vulkan's framebuffer
+	/// Y axis points down, so the projection is requested with
+	/// <see cref="ViewportYOrientation.YDown"/>.
 	/// </remarks>
 	public static Matrix4x4 CreateProjection(DemoScene scene, float aspect)
 	{
@@ -171,18 +212,10 @@ internal static class CameraTransforms
 				1.0f);
 		}
 
-		Matrix4x4 projection = Matrix4x4.CreatePerspectiveFieldOfView(
-			FieldOfViewRadians,
+		return CameraProjection.CreatePerspective(
+			PerspectiveCamera,
 			aspect,
-			NearPlane,
-			FarPlane);
-
-		// Vulkan's framebuffer Y axis points down. Negating the
-		// projected Y coordinate keeps world-space +Y at the top of
-		// the image instead of mirroring the scene vertically.
-		projection.M22 = -projection.M22;
-
-		return projection;
+			ViewportYOrientation.YDown);
 	}
 
 	/// <summary>
@@ -197,9 +230,39 @@ internal static class CameraTransforms
 		Matrix4x4 model,
 		float aspect)
 	{
-		return model *
-			CreateView(scene) *
-			CreateProjection(scene, aspect);
+		return TransformMatrices.CreateModelViewProjection(
+			model,
+			CreateView(scene),
+			CreateProjection(scene, aspect));
+	}
+
+	/// <summary>
+	/// Gets the combined rotation applied to the second triangle.
+	/// </summary>
+	/// <remarks>
+	/// The scene rotates 25 degrees around Z and then 35 degrees
+	/// around Y. <see cref="Matrix4x4"/> multiplication reverses the
+	/// order of <see cref="Quaternion"/> multiplication, so
+	/// <c>M(a * b) == M(b) * M(a)</c>. Writing the Y rotation first
+	/// therefore produces the same matrix as
+	/// <c>CreateRotationZ * CreateRotationY</c>. The product of two
+	/// unit quaternions is normalized to satisfy the
+	/// <see cref="RotationComponent"/> contract.
+	/// </remarks>
+	private static Quaternion TriangleRotation
+	{
+		get
+		{
+			Quaternion yRotation = Quaternion.CreateFromAxisAngle(
+				Vector3.UnitY,
+				Radians(35.0f));
+
+			Quaternion zRotation = Quaternion.CreateFromAxisAngle(
+				Vector3.UnitZ,
+				Radians(25.0f));
+
+			return Quaternion.Normalize(yRotation * zRotation);
+		}
 	}
 
 	private static float Radians(float degrees)

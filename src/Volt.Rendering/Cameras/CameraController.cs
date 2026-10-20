@@ -1,81 +1,42 @@
 using System.Numerics;
+using Volt.Ecs.Components.Rendering;
+using Volt.Ecs.Components.Spatial;
 
-namespace Volt.VulkanMeshDemo;
-
-/// <summary>
-/// Describes the movement axes requested for one camera update.
-/// </summary>
-/// <remarks>
-/// Sampling input and applying it are deliberately separate: this
-/// struct carries only requested directions, so the movement
-/// mathematics can be tested without SDL.
-/// </remarks>
-internal readonly record struct CameraMovementInput(
-	bool Forward,
-	bool Backward,
-	bool StrafeLeft,
-	bool StrafeRight,
-	bool Up,
-	bool Down,
-	bool Sprint)
-{
-	/// <summary>
-	/// Gets an input with no movement requested.
-	/// </summary>
-	public static CameraMovementInput None => default;
-
-	/// <summary>
-	/// Gets an input that moves forward only.
-	/// </summary>
-	public static CameraMovementInput ForwardOnly =>
-		new(
-			Forward: true,
-			Backward: false,
-			StrafeLeft: false,
-			StrafeRight: false,
-			Up: false,
-			Down: false,
-			Sprint: false);
-
-	/// <summary>
-	/// Gets whether any movement axis is requested.
-	/// </summary>
-	public bool HasMovement =>
-		Forward ||
-		Backward ||
-		StrafeLeft ||
-		StrafeRight ||
-		Up ||
-		Down;
-}
+namespace Volt.Rendering.Cameras;
 
 /// <summary>
-/// Holds the sample's movable first-person camera state.
+/// Holds a movable first-person camera's state and mathematics.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The camera uses a right-handed convention that matches the
-/// sample's perspective projection: at yaw and pitch zero it looks
-/// down the negative Z axis, so the default pose is the fixed pose
-/// previously built by <see cref="CameraTransforms.CreateView"/>.
-/// Forward includes pitch, which makes movement free-fly rather than
+/// The camera uses VOLT's right-handed convention: at yaw and pitch
+/// zero it looks down the negative Z axis with +Y up. Forward
+/// includes pitch, which makes movement free-fly rather than
 /// ground-plane walking; up and down move along world +Y and -Y.
 /// </para>
 /// <para>
 /// Yaw and pitch are stored as radians. Yaw is continuous and is not
 /// wrapped, so multiple turns preserve their accumulated value.
 /// Pitch is clamped just short of straight up and straight down,
-/// which keeps the view basis well defined for
-/// <see cref="Matrix4x4.CreateLookAt"/> and avoids orientation
-/// instability at the poles.
+/// which keeps the view basis well defined and avoids orientation
+/// instability at the poles. Positive yaw turns left, and positive
+/// pitch looks up.
 /// </para>
 /// <para>
-/// Every update is allocation-free. <see cref="CreateView"/> returns
-/// a <see cref="Matrix4x4"/> by value, so the camera can be queried
-/// once per frame without heap traffic.
+/// The controller is an application-level object: it owns no ECS
+/// components, and position and rotation can be copied into
+/// <see cref="PositionComponent"/> and <see cref="RotationComponent"/>
+/// when an entity representation is needed. See
+/// <see cref="CreateRotation"/> for that conversion.
+/// </para>
+/// <para>
+/// The controller contains no input sampling and has no dependency
+/// on SDL, a window, or a graphics backend. Every update and every
+/// matrix query is allocation-free and returns value types, so it can
+/// be queried once per frame without heap traffic.
 /// </para>
 /// </remarks>
-internal sealed class CameraController
+public sealed class CameraController
 {
 	/// <summary>
 	/// Default movement speed in world units per second.
@@ -107,13 +68,23 @@ internal sealed class CameraController
 	/// <summary>
 	/// Largest permitted absolute pitch, in radians.
 	/// </summary>
-	public const float MaxPitchRadians = (MathF.PI / 2.0f) - 0.01f;
+	public const float MaxPitchRadians =
+		(MathF.PI / 2.0f) - 0.01f;
 
 	/// <summary>
-	/// Gets or sets the world-space camera position.
+	/// Initializes a camera at a caller-supplied world position,
+	/// looking down -Z.
 	/// </summary>
-	public Vector3 Position { get; private set; } =
-		CameraTransforms.CameraPosition;
+	/// <param name="position">The initial world-space position.</param>
+	public CameraController(Vector3 position)
+	{
+		Position = position;
+	}
+
+	/// <summary>
+	/// Gets the world-space camera position.
+	/// </summary>
+	public Vector3 Position { get; private set; }
 
 	/// <summary>
 	/// Gets the accumulated yaw in radians. Positive yaw turns left.
@@ -133,12 +104,14 @@ internal sealed class CameraController
 	/// <summary>
 	/// Gets or sets the multiplier applied while sprinting.
 	/// </summary>
-	public float SprintMultiplier { get; set; } = DefaultSprintMultiplier;
+	public float SprintMultiplier { get; set; } =
+		DefaultSprintMultiplier;
 
 	/// <summary>
 	/// Gets or sets the look sensitivity in radians per pixel.
 	/// </summary>
-	public float MouseSensitivity { get; set; } = DefaultMouseSensitivity;
+	public float MouseSensitivity { get; set; } =
+		DefaultMouseSensitivity;
 
 	/// <summary>
 	/// Gets the yaw in degrees.
@@ -177,20 +150,61 @@ internal sealed class CameraController
 		new(MathF.Cos(Yaw), 0.0f, -MathF.Sin(Yaw));
 
 	/// <summary>
+	/// Gets the current orientation as a normalized quaternion.
+	/// </summary>
+	/// <remarks>
+	/// <para>
+	/// Zero yaw and pitch produce <see cref="Quaternion.Identity"/>.
+	/// The result follows the same conventions as the yaw and pitch
+	/// properties: positive yaw turns left about +Y, and positive
+	/// pitch looks up about +X.
+	/// </para>
+	/// <para>
+	/// <see cref="Matrix4x4"/> composes rotations from left to right,
+	/// but <see cref="Quaternion"/> multiplication reverses that
+	/// order: <c>M(a * b)</c> equals <c>M(b) * M(a)</c>. The yaw is
+	/// therefore written as the first factor so that the resulting
+	/// matrix applies pitch and then yaw in world space, which keeps
+	/// the horizon level and matches <see cref="Forward"/>.
+	/// </para>
+	/// <para>
+	/// The quaternion is normalized because
+	/// <see cref="RotationComponent"/> documents that expectation.
+	/// The controller keeps yaw and pitch as the single mutable
+	/// source of truth and derives this value on demand.
+	/// </para>
+	/// </remarks>
+	public Quaternion CreateRotation()
+	{
+		Quaternion yawRotation = Quaternion.CreateFromAxisAngle(
+			Vector3.UnitY,
+			Yaw);
+
+		Quaternion pitchRotation = Quaternion.CreateFromAxisAngle(
+			Vector3.UnitX,
+			Pitch);
+
+		return Quaternion.Normalize(yawRotation * pitchRotation);
+	}
+
+	/// <summary>
 	/// Creates the camera's current view matrix.
 	/// </summary>
 	/// <remarks>
-	/// At the initial pose this is numerically identical to
-	/// <see cref="CameraTransforms.CreateView"/> for the camera scene:
-	/// both call <see cref="Matrix4x4.CreateLookAt"/> with a position
-	/// three units in front of the origin along +Z and world up.
+	/// The view is built from the ECS components through
+	/// <see cref="CameraComponent.CreateViewMatrix"/>, so a free
+	/// camera and an ECS camera with the same position and rotation
+	/// produce the same view. Camera scale is not part of a view
+	/// matrix.
 	/// </remarks>
 	public Matrix4x4 CreateView()
 	{
-		return Matrix4x4.CreateLookAt(
-			Position,
-			Position + Forward,
-			Vector3.UnitY);
+		PositionComponent position = new(Position);
+		RotationComponent rotation = new(CreateRotation());
+
+		return CameraComponent.CreateViewMatrix(
+			in position,
+			in rotation);
 	}
 
 	/// <summary>
@@ -244,7 +258,9 @@ internal sealed class CameraController
 			return;
 		}
 
-		float step = MathF.Min(deltaSeconds, MaxIntegrationStepSeconds);
+		float step = MathF.Min(
+			deltaSeconds,
+			MaxIntegrationStepSeconds);
 
 		Vector3 direction = Vector3.Zero;
 		Vector3 forward = Forward;
