@@ -85,13 +85,99 @@ quad's two index ranges share one model matrix, so the split draw still
 covers a single transformed quad. No vertices are pre-transformed and
 no vertex buffer is uploaded per frame.
 
-The camera is fixed at `(0, 0, 3)` looking at the world origin with up
-vector `(0, 1, 0)`. The projection uses a 60° vertical field of view,
-the current framebuffer aspect ratio, and near/far planes `0.1` and
-`100`. The near plane maps to depth `0` and the far plane to depth `1`,
-which matches Vulkan's 0..1 clip-space depth range. The projected Y
-row is negated so world-space +Y appears upwards in Vulkan's downward
-viewport.
+The camera starts at `(0, 0, 3)` looking at the world origin with up
+vector `(0, 1, 0)`, which is the pose the scene had before it became
+movable. The projection uses a 60° vertical field of view, the current
+framebuffer aspect ratio, and near/far planes `0.1` and `100`. The near
+plane maps to depth `0` and the far plane to depth `1`, which matches
+Vulkan's 0..1 clip-space depth range. The projected Y row is negated so
+world-space +Y appears upwards in Vulkan's downward viewport.
+
+### Interactive camera
+
+`--scene camera-transforms` without `--camera-script` is an interactive
+free-fly camera. Movement follows the view direction, so forward
+includes pitch; strafing stays horizontal, and Space/Left Ctrl move
+along world +Y and -Y.
+
+| Input | Action |
+| --- | --- |
+| `W` / `S` | Forward / backward |
+| `A` / `D` | Strafe left / right |
+| `Space` / `Left Ctrl` | Move up / down |
+| `Left Shift` | Sprint (3x speed) |
+| Mouse X / Y | Yaw / pitch |
+| Left click | Enable relative mouse mode |
+| `Escape` | Release relative mouse mode |
+
+Diagonal movement is normalized, so it is never faster than a single
+axis. Movement integrates elapsed `Stopwatch` time and clamps a single
+step to `0.1` seconds, so returning from a long pause cannot teleport
+the camera. Pitch is clamped just short of vertical; yaw is continuous
+and not wrapped.
+
+Relative mouse mode is never enabled at startup: a left click in the
+focused window enables it once SDL also reports that window as owning
+the pointer, and the first delta after capture is discarded. A click
+SDL cannot attribute to the sample window never captures; a null
+mouse focus (no window owns the pointer) is treated that way too.
+Escape, focus loss, another window taking the pointer, or shutdown
+disables it again. A release is only recorded after SDL confirms the
+native state: if `SDL_SetWindowRelativeMouseMode` fails, the camera
+stops looking, the release stays pending, and it is retried on the next
+update and at shutdown instead of silently reporting success. Input is
+sampled on the main thread through SDL's state queries, so the existing
+event pump, resize handling, and close handling are unchanged and no
+global hooks or synthetic events are used. A headless run never clicks,
+so it never captures the mouse.
+
+The camera controller has application lifetime. `MeshRenderer` queries
+it for the view matrix on every recorded frame and composes
+`model * view * projection`, so movement is visible without recreating
+the renderer, and a swapchain recreation leaves position, yaw, and pitch
+untouched. The projection still comes from the current extent, so the
+new aspect ratio applies immediately after a resize.
+
+### Scripted camera verification
+
+`--camera-script` replaces interactive input with a deterministic flight
+and is accepted only with `--scene camera-transforms` and a bounded
+`--frames` run of at least 122 frames:
+
+```bash
+dotnet run \
+  --project samples/Volt.VulkanMeshDemo \
+  -c Release -- \
+  --validation \
+  --frames 600 \
+  --scene camera-transforms \
+  --camera-script
+```
+
+The script advances exactly once per accepted presented frame, using a
+fixed `1/60` second step and the same controller update methods as
+interactive input. It holds the initial pose for 100 accepted frames,
+flies forward 0.5 world units while turning 8° right over 12 frames,
+then holds the final pose for the rest of the run. Because the camera
+state is simulated, the result is identical at any rendering speed, and
+presentation retries or swapchain recreation cannot add extra movement.
+It never enables mouse capture or injects events.
+
+Checkpoints are written only from the accepted-presentation path, with
+invariant numbers:
+
+```
+Camera initial pose: position=(0.000, 0.000, 3.000) yaw=0.00deg pitch=0.00deg at accepted frame 1.
+Camera script started: position=(0.000, 0.000, 2.958) yaw=-0.67deg pitch=0.00deg at accepted frame 101.
+Camera final pose reached: position=(0.038, 0.000, 2.502) yaw=-8.00deg pitch=0.00deg at accepted frame 122; holding.
+Camera final pose held for 479 accepted frames.
+```
+
+The final-pose checkpoint is emitted after the pose has already been
+presented for 10 frames. A resize run also reports
+`Camera final pose stable after recreation: ... after 30 accepted frames
+in generation 2.`, which lets a screenshot wait for a stable post-resize
+frame.
 
 ### Matrix convention
 
@@ -158,8 +244,17 @@ later far blue quad. That is the depth-test proof; see
   `MeshRenderer.CreateDrawPlan` derives that sequence, including each
   draw instance's model matrix, so the plan can be inspected and
   tested without a Vulkan device.
+- `CameraController` holds position, yaw, pitch, speed, sprint
+  multiplier, and mouse sensitivity, and produces the view matrix and
+  allocation-free movement/look updates. `CameraScript` drives it
+  deterministically for headless runs. `CameraInput` samples SDL
+  keyboard and mouse state and owns relative mouse capture; it is
+  created and disposed by `Program`. `CameraCaptureController` holds
+  the click and release state machine behind a small injectable seam,
+  so capture, release, failed native transitions, and shutdown are
+  tested without a desktop.
 - `CameraTransforms` builds the legacy and perspective projections,
-  the fixed look-at view matrix, and the camera scene's model
+  the default look-at view matrix, and the camera scene's model
   transforms. It documents the row-vector/column-major convention.
 - `MeshSwapchainResources` owns one swapchain generation, including
   image views and the frame scheduler. It is recreated after resize or
@@ -272,6 +367,37 @@ triangles are drawn before the quad, so the red probe proves depth
 testing still decides the overlap. Unit tests project the meshes with
 the same matrices and fail if either probe moves onto a silhouette.
 
+### Headless scripted-camera verification
+
+`--screenshot-after-line` makes the harness wait for the final-pose
+checkpoint before capturing, so the screenshot shows the moved camera
+and not the initial frame:
+
+```bash
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots --expect-clusters 2 \
+  --sample-arg=--scene --sample-arg camera-transforms \
+  --sample-arg=--camera-script \
+  --screenshot-after-line "Camera final pose reached" \
+  --expect-pixel-class 343,280,red \
+  --expect-pixel-class 546,360,blue
+```
+
+Both probes are computed from the final pose rather than picked from a
+screenshot. The red probe is the projection of triangle A's local point
+`(0, -0.1, 0)`, which lies inside triangle A and inside the farther
+quad, so it still proves depth testing decides the overlap. The blue
+probe is the projection of the quad's local origin, which is outside
+every other silhouette. At 1280x720 they project to `(342.9, 279.7)` and
+`(545.7, 360.0)`. The unit tests recompute both from the same camera
+state and require at least 25 pixels of clearance from every edge.
+
+Moving the camera changes the rendered viewpoint, so the scripted
+screenshot differs from the fixed-camera baseline by far more than
+antialiasing noise. The comparison is made between the two captured
+frames, not by requiring byte equality with a driver-specific reference.
+
 ### Resize scenario
 
 An opt-in resize scenario exercises swapchain recreation without user
@@ -314,6 +440,28 @@ Fullscreen compositor shells ignore client resize requests. The
 committed headless harness therefore offers an opt-in desktop shell for
 this scenario; see `tools/README.md`.
 
+The scripted camera and the resize can be combined. The camera state
+survives recreation, and the sample reports a second, stable checkpoint
+30 accepted frames into the new generation, so a screenshot can prove
+the final pose is still rendered at `960x540`:
+
+```bash
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots --expect-clusters 2 \
+  --weston-shell desktop \
+  --sample-arg=--scene --sample-arg camera-transforms \
+  --sample-arg=--camera-script \
+  --sample-arg=--resize-at-frame --sample-arg 200 \
+  --sample-arg=--resize-to --sample-arg 960x540 \
+  --screenshot-after-line "Camera final pose stable after recreation" \
+  --expect-pixel-class 257,210,red \
+  --expect-pixel-class 409,270,blue
+```
+
+The two probes are the same local points as the 1280x720 run scaled by
+`0.75`; both resize extents share the 16:9 aspect ratio.
+
 ## Tests
 
 ```bash
@@ -324,11 +472,17 @@ The focused tests cover mesh counts, index validity, the draw plans
 including the quad's two partial index ranges and the camera scene's
 two triangle instances sharing one uploaded mesh, scene selection and
 the depth-negative-control rules, occlusion depths and colours,
-local-space camera geometry, analytic probe placement for both scenes,
-matrix convention and packing, legacy projection equivalence,
-perspective near/far depth mapping, Y orientation, aspect-dependent
-projection for both resize extents, command-line parsing for
-validation, bounded frames, and the resize scenario (paired arguments,
-bounds, malformed sizes, triggers at or past the frame limit,
-duplicates, and one-time triggering), plus the required swapchain
-maintenance1 negotiation.
+local-space camera geometry, analytic probe placement for the initial
+and scripted final poses, matrix convention and packing, legacy
+projection equivalence, perspective near/far depth mapping, Y
+orientation, aspect-dependent projection for both resize extents, the
+camera controller (initial pose, view equivalence, basis, translation,
+strafing, vertical movement, diagonal normalization, sprint, elapsed
+time independence, clamping, non-finite handling, look signs, pitch
+clamping, continuous yaw, and cancellation), the deterministic script
+(phase boundaries, final-pose hold, path length, determinism, and timing
+independence), command-line parsing for validation, bounded frames, the
+camera script, and the resize scenario (paired arguments, bounds,
+malformed sizes, triggers at or past the frame limit, duplicates, and
+one-time triggering), plus the required swapchain maintenance1
+negotiation.

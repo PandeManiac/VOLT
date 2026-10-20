@@ -46,6 +46,7 @@ shell, with the application arguments forwarded unchanged:
 | `--screenshots` | off | Captures and verifies a screenshot |
 | `--expect-clusters N` | off | Requires `N` horizontal content clusters; needs `--screenshots` |
 | `--expect-pixel-class X,Y,CLASS` | off | Requires the pixel at `X,Y` to be dominated by `red` or `blue`; repeatable, needs `--screenshots` |
+| `--screenshot-after-line TEXT` | off | Waits for `TEXT` to appear in the sample log before capturing; needs `--screenshots` |
 | `--weston-shell kiosk\|desktop` | `kiosk` | Shell for the private compositor |
 | `--sample-arg VALUE` | none | Extra sample argument forwarded unchanged; repeatable, `--sample-arg=VALUE` also accepted |
 | `--output-dir PATH` | `<repo>/artifacts/headless` | Root for run artifacts |
@@ -99,6 +100,20 @@ assertion is recorded in `image-analysis.log` and in the summary as
 failure shows both the expected class and the observed pixel. Pixel
 assertions require `--screenshots` and are inactive when no expectation
 is supplied.
+
+### Deferred screenshots
+
+By default the harness captures as soon as the sample reports a
+presented frame. `--screenshot-after-line TEXT` defers capture until a
+later checkpoint appears in the sample's stdout, which is useful for
+scenes that move after startup. `TEXT` is matched literally with
+`grep -F` against the sample log; it is never evaluated as code, so
+arguments such as `--sample-arg` remain data. The whole run's timeout
+still applies. If the sample exits or the timeout expires before the
+checkpoint appears, the run fails with the screenshot exit code and the
+summary records `screenshot_checkpoint=not-reached`. When the
+checkpoint is reached the summary records `screenshot_checkpoint=reached`
+and the requested text as `screenshot_after_line=`.
 
 ### Compositor shells
 
@@ -197,8 +212,9 @@ runtime directory is removed.
 ### Screenshot verification
 
 When `--screenshots` is used, the harness waits for the sample to report a
-presented frame, runs `weston-screenshooter` against the private
-compositor, and then verifies the newest PNG:
+presented frame (and, with `--screenshot-after-line`, for the requested
+checkpoint), runs `weston-screenshooter` against the private compositor,
+and then verifies the newest PNG:
 
 - Valid PNG signature, exact chunk boundaries, and no truncated chunks.
 - A matching CRC for every chunk and a complete, empty `IEND` chunk with
@@ -257,8 +273,10 @@ Coverage includes argument validation, missing dependencies, successful
 runs, application failure, timeout, validation diagnostics (including
 missing confirmation), surviving sample descendants, frame-count
 mismatch, screenshot failures (including CRC-corrupted and incomplete
-PNGs), pixel-class assertions (passing, failing, out of bounds,
-unsupported class, malformed, and missing `--screenshots`), compositor
+PNGs), deferred screenshot checkpoints (reached, never reached, literal
+matching, and the option-validation cases), pixel-class assertions
+(passing, failing, out of bounds, unsupported class, malformed, and
+missing `--screenshots`), compositor
 failures, termination cleanup, controlled cleanup
 failures and their summary records, preservation of unrelated files, and
 consecutive/concurrent isolation. Shell coverage includes the default

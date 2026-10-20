@@ -90,13 +90,15 @@ internal static class CameraTransforms
 		Matrix4x4.CreateTranslation(-1.60f, -0.85f, -0.30f);
 
 	/// <summary>
-	/// Creates the view matrix for a scene.
+	/// Creates the default view matrix for a scene.
 	/// </summary>
 	/// <remarks>
 	/// The legacy gallery and depth-occlusion scenes keep their
 	/// original clip-space positions, so their view is the identity.
 	/// The camera-transforms scene uses a right-handed look-at matrix
-	/// from <see cref="CameraPosition"/> to the origin.
+	/// from <see cref="CameraPosition"/> to the origin. This is the
+	/// pose a <see cref="CameraController"/> starts in before any
+	/// movement or look input.
 	/// </remarks>
 	public static Matrix4x4 CreateView(DemoScene scene)
 	{
@@ -106,6 +108,30 @@ internal static class CameraTransforms
 				CameraTarget,
 				CameraUp)
 			: Matrix4x4.Identity;
+	}
+
+	/// <summary>
+	/// Creates the view matrix for a scene, using a movable camera for
+	/// the perspective scene when one is supplied.
+	/// </summary>
+	/// <remarks>
+	/// The legacy scenes remain clip-space, so they always receive the
+	/// identity view. The camera is queried every frame instead of
+	/// being cached, which lets movement reach the GPU without
+	/// recreating any renderer resource.
+	/// </remarks>
+	public static Matrix4x4 CreateView(
+		DemoScene scene,
+		CameraController? camera)
+	{
+		if (scene != DemoScene.CameraTransforms)
+		{
+			return Matrix4x4.Identity;
+		}
+
+		return camera is null
+			? CreateView(scene)
+			: camera.CreateView();
 	}
 
 	/// <summary>

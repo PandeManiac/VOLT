@@ -53,6 +53,7 @@ internal sealed class MeshSwapchainResources : IDisposable
 		VulkanLogicalDevice device,
 		VulkanSurface surface,
 		DemoMeshes meshes,
+		CameraController? camera,
 		VulkanCommandBuffers commandBuffers,
 		WindowSize framebufferSize,
 		int maximumFramesInFlight,
@@ -106,6 +107,7 @@ internal sealed class MeshSwapchainResources : IDisposable
 					swapchain,
 					imageViews,
 					meshes,
+					camera,
 					vertexShaderPath,
 					fragmentShaderPath,
 					depthTestEnabled);
@@ -169,7 +171,9 @@ internal sealed class MeshSwapchainResources : IDisposable
 	/// <remarks>
 	/// The renderer derives its projection from its own swapchain
 	/// extent every frame, so this generation's resize is reflected
-	/// without any cached aspect ratio.
+	/// without any cached aspect ratio. It reads the application's
+	/// camera controller on that same frame, so the camera survives
+	/// recreation and keeps its position and orientation.
 	/// </remarks>
 	private void RecordFrameCore(
 		CommandBuffer commandBuffer,

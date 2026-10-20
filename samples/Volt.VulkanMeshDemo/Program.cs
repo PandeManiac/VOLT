@@ -25,6 +25,7 @@ internal static class Program
 	private const string ResizeToArgument = "--resize-to";
 	private const string SceneArgument = "--scene";
 	private const string DisableDepthTestArgument = "--disable-depth-test";
+	private const string CameraScriptArgument = "--camera-script";
 	private const string GallerySceneName = "gallery";
 	private const string DepthOcclusionSceneName = "depth-occlusion";
 	private const string CameraTransformsSceneName = "camera-transforms";
@@ -53,6 +54,12 @@ internal static class Program
 	private const int MinimizedPollMilliseconds = 16;
 
 	/// <summary>
+	/// Accepted frames presented in a recreated swapchain generation
+	/// before the post-recreation camera checkpoint is reported.
+	/// </summary>
+	private const int PostRecreationCheckpointFrames = 30;
+
+	/// <summary>
 	/// Fails a bounded run when no frame can be presented for this long.
 	/// This prevents a minimized or otherwise unavailable window from
 	/// hanging an automated run forever.
@@ -69,7 +76,7 @@ internal static class Program
 			Console.Error.WriteLine(
 				"Usage: Volt.VulkanMeshDemo [--validation] [--frames N] " +
 				"[--scene gallery|depth-occlusion|camera-transforms] " +
-				"[--disable-depth-test] " +
+				"[--camera-script] [--disable-depth-test] " +
 				"[--resize-at-frame N --resize-to WIDTHxHEIGHT]");
 
 			return 2;
@@ -97,6 +104,17 @@ internal static class Program
 			VulkanCompatible: true);
 
 		using Window window = new(description);
+
+		// The camera and its input sampler live for the whole
+		// application, not for one swapchain generation, so a resize
+		// never resets the pose.
+		CameraController camera = new();
+
+		using CameraInput cameraInput = new(window);
+
+		CameraScript? cameraScript = options.CameraScript
+			? new CameraScript()
+			: null;
 
 		List<string> extensions =
 		[
@@ -254,6 +272,15 @@ internal static class Program
 			$"Depth test: " +
 			$"{(options.DepthTestDisabled ? "disabled" : "enabled")}");
 
+		if (options.Scene == DemoScene.CameraTransforms)
+		{
+			Console.WriteLine(
+				cameraScript is null
+					? "Camera: interactive (wasd, space/ctrl, mouse " +
+						"after click, escape releases, shift sprints)."
+					: "Camera: scripted deterministic flight.");
+		}
+
 		foreach (MeshGeometry geometry in meshes.Geometries)
 		{
 			string indexDescription = geometry.IndexFormat switch
@@ -283,6 +310,9 @@ internal static class Program
 			surface,
 			commandBuffers,
 			meshes,
+			camera,
+			cameraInput,
+			cameraScript,
 			options,
 			Path.Combine(shaderDirectory, "mesh.vert.spv"),
 			Path.Combine(shaderDirectory, "mesh.frag.spv"));
@@ -298,6 +328,9 @@ internal static class Program
 		VulkanSurface surface,
 		VulkanCommandBuffers commandBuffers,
 		DemoMeshes meshes,
+		CameraController camera,
+		CameraInput cameraInput,
+		CameraScript? cameraScript,
 		SampleOptions options,
 		string vertexShaderPath,
 		string fragmentShaderPath)
@@ -306,6 +339,13 @@ internal static class Program
 
 		Stopwatch statisticsClock = Stopwatch.StartNew();
 		Stopwatch stallClock = Stopwatch.StartNew();
+		Stopwatch frameClock = Stopwatch.StartNew();
+
+		bool interactiveCamera =
+			options.Scene == DemoScene.CameraTransforms &&
+			cameraScript is null;
+
+		bool postRecreationCheckpointLogged = false;
 
 		WindowSize lastFramebufferSize = default;
 		bool recreationRequested = true;
@@ -333,6 +373,16 @@ internal static class Program
 					{
 						recreationRequested = true;
 					}
+				}
+
+				float deltaSeconds =
+					(float)frameClock.Elapsed.TotalSeconds;
+
+				frameClock.Restart();
+
+				if (interactiveCamera)
+				{
+					cameraInput.Update(camera, deltaSeconds);
 				}
 
 				if (window.ShouldClose)
@@ -396,6 +446,7 @@ internal static class Program
 						device,
 						surface,
 						meshes,
+						camera,
 						commandBuffers,
 						framebufferSize,
 						MaxFramesInFlight,
@@ -470,6 +521,14 @@ internal static class Program
 				framesSinceReport++;
 				stallClock.Restart();
 
+				if (cameraScript is not null)
+				{
+					LogCameraCheckpoint(
+						cameraScript.Advance(camera),
+						camera,
+						presentedFrames);
+				}
+
 				if (ShouldRequestResize(
 						presentedFrames,
 						options,
@@ -496,6 +555,22 @@ internal static class Program
 							$"SDL rejected the resize request: " +
 							$"{SDL.GetError()}");
 					}
+				}
+
+				if (cameraScript is not null &&
+					resizeObserved &&
+					!postRecreationCheckpointLogged &&
+					presentedFrames - resizeRecreationFrame >=
+						PostRecreationCheckpointFrames)
+				{
+					postRecreationCheckpointLogged = true;
+
+					Console.WriteLine(
+						$"Camera final pose stable after recreation: " +
+						$"{FormatCameraPose(camera)} after " +
+						$"{presentedFrames - resizeRecreationFrame} " +
+						$"accepted frames in generation " +
+						$"{swapchainGeneration}.");
 				}
 
 				if (statisticsClock.Elapsed.TotalSeconds >= 1.0)
@@ -545,6 +620,21 @@ internal static class Program
 				Console.WriteLine(
 					$"Frames presented after recreation: " +
 					$"{presentedFrames - resizeRecreationFrame}.");
+			}
+
+			if (cameraScript is not null)
+			{
+				if (!cameraScript.HasReachedFinalPose)
+				{
+					throw new InvalidOperationException(
+						$"The camera script did not reach its final pose " +
+						$"before the run ended at {presentedFrames} " +
+						$"accepted frames.");
+				}
+
+				Console.WriteLine(
+					$"Camera final pose held for " +
+					$"{cameraScript.FramesHoldingFinalPose} accepted frames.");
 			}
 
 			Console.WriteLine(
@@ -597,6 +687,58 @@ internal static class Program
 	}
 
 	/// <summary>
+	/// Writes the checkpoint produced by one accepted scripted frame.
+	/// </summary>
+	/// <remarks>
+	/// Checkpoints are only logged from the accepted-presentation
+	/// path, so a line always describes a pose that has reached the
+	/// swapchain. Numbers use invariant formatting for reproducible
+	/// logs.
+	/// </remarks>
+	private static void LogCameraCheckpoint(
+		CameraScriptCheckpoint checkpoint,
+		CameraController camera,
+		int presentedFrames)
+	{
+		switch (checkpoint)
+		{
+			case CameraScriptCheckpoint.InitialPose:
+				Console.WriteLine(
+					$"Camera initial pose: " +
+					$"{FormatCameraPose(camera)} at accepted frame " +
+					$"{presentedFrames}.");
+				break;
+
+			case CameraScriptCheckpoint.MovementStarted:
+				Console.WriteLine(
+					$"Camera script started: " +
+					$"{FormatCameraPose(camera)} at accepted frame " +
+					$"{presentedFrames}.");
+				break;
+
+			case CameraScriptCheckpoint.FinalPoseReached:
+				Console.WriteLine(
+					$"Camera final pose reached: " +
+					$"{FormatCameraPose(camera)} at accepted frame " +
+					$"{presentedFrames}; holding.");
+				break;
+		}
+	}
+
+	/// <summary>
+	/// Formats a camera pose with invariant numeric formatting.
+	/// </summary>
+	private static string FormatCameraPose(CameraController camera)
+	{
+		return string.Create(
+			CultureInfo.InvariantCulture,
+			$"position=({camera.Position.X:F3}, " +
+			$"{camera.Position.Y:F3}, {camera.Position.Z:F3}) " +
+			$"yaw={camera.YawDegrees:F2}deg " +
+			$"pitch={camera.PitchDegrees:F2}deg");
+	}
+
+	/// <summary>
 	/// Requires a supported swapchain maintenance1 extension with
 	/// presentation fences.
 	/// </summary>
@@ -636,6 +778,7 @@ internal static class Program
 		WindowSize? resizeTo = null;
 		DemoScene? scene = null;
 		bool depthTestDisabled = false;
+		bool cameraScript = false;
 
 		for (int index = 0; index < args.Length; index++)
 		{
@@ -790,6 +933,19 @@ internal static class Program
 					scene = parsedScene;
 					break;
 
+				case CameraScriptArgument:
+					if (cameraScript)
+					{
+						options = default;
+						error =
+							"The --camera-script argument was " +
+							"supplied twice.";
+						return false;
+					}
+
+					cameraScript = true;
+					break;
+
 				case DisableDepthTestArgument:
 					if (depthTestDisabled)
 					{
@@ -841,13 +997,43 @@ internal static class Program
 			return false;
 		}
 
+		if (cameraScript && selectedScene != DemoScene.CameraTransforms)
+		{
+			options = default;
+			error =
+				"The --camera-script argument requires " +
+				$"--scene {CameraTransformsSceneName}.";
+			return false;
+		}
+
+		if (cameraScript && !frameLimit.HasValue)
+		{
+			options = default;
+			error =
+				"The --camera-script argument requires a bounded " +
+				"--frames run.";
+			return false;
+		}
+
+		if (cameraScript &&
+			frameLimit is int scriptedFrames &&
+			scriptedFrames < CameraScript.MinimumFrameLimit)
+		{
+			options = default;
+			error =
+				"The --camera-script run requires --frames of at " +
+				$"least {CameraScript.MinimumFrameLimit}.";
+			return false;
+		}
+
 		options = new SampleOptions(
 			validation,
 			frameLimit,
 			resizeAtFrame,
 			resizeTo,
 			selectedScene,
-			depthTestDisabled);
+			depthTestDisabled,
+			cameraScript);
 
 		error = string.Empty;
 		return true;
@@ -984,4 +1170,5 @@ internal readonly record struct SampleOptions(
 	int? ResizeAtFrame,
 	WindowSize? ResizeTo,
 	DemoScene Scene,
-	bool DepthTestDisabled);
+	bool DepthTestDisabled,
+	bool CameraScript = false);

@@ -329,6 +329,17 @@ case "$mode" in
         printf 'Presented %s accepted frames.\n' "${frames:-0}"
         exit 0
         ;;
+    checkpoint)
+        printf 'Swapchain: 1280x720\n'
+        sleep 0.3
+        printf 'Frames presented: 1, FPS: 60.0\n'
+        sleep 0.3
+        printf 'Camera step $100 [ok]\n'
+        printf 'Camera final pose reached: mock\n'
+        sleep 0.4
+        printf 'Presented %s accepted frames.\n' "${frames:-0}"
+        exit 0
+        ;;
     orphan)
         sleep 100 &
         printf '%s\n' "$!" >"${MOCK_APP_CHILD_PIDFILE:?MOCK_APP_CHILD_PIDFILE is required}"
@@ -465,6 +476,29 @@ run_harness --help
 assert_rc 0
 assert_contains "$CASE_DIR/console.out" "Usage:"
 assert_contains "$CASE_DIR/console.out" "--screenshots"
+assert_contains "$CASE_DIR/console.out" "--screenshot-after-line"
+end_case
+
+begin_case "screenshot-after-line-requires-screenshots"
+run_default --frames 5 --screenshot-after-line "Camera final pose reached"
+assert_rc 2
+assert_contains "$CASE_DIR/console.err" \
+    "--screenshot-after-line requires --screenshots"
+end_case
+
+begin_case "screenshot-after-line-missing-value"
+run_harness --project "$CASE_DIR/sample" --output-dir "$CASE_DIR/out" \
+    --screenshot-after-line
+assert_rc 2
+assert_contains "$CASE_DIR/console.err" \
+    "option --screenshot-after-line requires a value"
+end_case
+
+begin_case "screenshot-after-line-empty-value"
+run_default --frames 5 --screenshots --screenshot-after-line=
+assert_rc 2
+assert_contains "$CASE_DIR/console.err" \
+    "--screenshot-after-line requires a value"
 end_case
 
 begin_case "unknown-argument"
@@ -633,6 +667,38 @@ assert_rc 10
 assert_run_dir
 assert_contains "$RUN_DIR/summary.txt" "screenshot tool exited with status 1"
 assert_contains "$RUN_DIR/summary.txt" "application_status=0"
+assert_process_dead "$CASE_DIR/app.pid"
+assert_runtime_clean
+end_case
+
+begin_case "checkpoint-reached"
+APP_MODE=checkpoint
+debug_line="Camera step \$100 [ok]"
+run_default --frames 5 --screenshots \
+    --screenshot-after-line "$debug_line"
+assert_rc 0
+assert_run_dir
+assert_contains "$CASE_DIR/console.out" "screenshot checkpoint reached"
+assert_contains "$RUN_DIR/summary.txt" "screenshot_after_line=$debug_line"
+assert_contains "$RUN_DIR/summary.txt" "screenshot_checkpoint=reached"
+assert_contains "$RUN_DIR/invocation.log" "screenshot_after_line=$debug_line"
+assert_contains "$RUN_DIR/image-analysis.log" "IMAGE_OK"
+assert_contains "$RUN_DIR/app.stdout.log" "Camera final pose reached: mock"
+assert_process_dead "$CASE_DIR/app.pid"
+assert_runtime_clean
+end_case
+
+begin_case "checkpoint-not-reached"
+run_default --frames 5 --screenshots \
+    --screenshot-after-line "Camera final pose reached"
+assert_rc 10
+assert_run_dir
+assert_contains "$CASE_DIR/console.err" \
+    "application exited before the screenshot checkpoint appeared"
+assert_contains "$RUN_DIR/summary.txt" "screenshot_checkpoint=not-reached"
+grep -qx 'screenshot=' "$RUN_DIR/summary.txt" ||
+    fail "expected no screenshot path in the summary"
+assert_no_file "$RUN_DIR/image-analysis.log"
 assert_process_dead "$CASE_DIR/app.pid"
 assert_runtime_clean
 end_case

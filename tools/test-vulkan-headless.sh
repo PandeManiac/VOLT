@@ -38,6 +38,8 @@ SCREENSHOTS=0
 EXPECT_CLUSTERS=""
 PIXEL_EXPECTATIONS=()
 WESTON_SHELL=kiosk
+SCREENSHOT_AFTER_LINE=""
+CHECKPOINT_STATUS="not-requested"
 SAMPLE_ARGS=()
 OUTPUT_DIR="$REPO_ROOT/artifacts/headless"
 TIMEOUT_SECONDS=180
@@ -89,6 +91,12 @@ Options:
                           CLASS: red or blue. Repeatable; needs
                           --screenshots. The actual RGB value and class
                           are recorded in image-analysis.log.
+  --screenshot-after-line TEXT
+                          Wait for TEXT to appear in the application's
+                          stdout before capturing the screenshot, then
+                          fail if it never appears. TEXT is matched
+                          literally, never evaluated. Needs
+                          --screenshots.
   --weston-shell NAME     Shell for the private headless Weston: kiosk
                           (default) or desktop. The desktop shell runs
                           without its panel so the sample window covers
@@ -325,6 +333,8 @@ write_summary() {
         printf 'application_status=%s\n' "${APP_STATUS:-}"
         printf 'screenshot=%s\n' "${SCREENSHOT_PATH:-}"
         printf 'screenshot_summary=%s\n' "${SCREENSHOT_SUMMARY:-}"
+        printf 'screenshot_after_line=%s\n' "$SCREENSHOT_AFTER_LINE"
+        printf 'screenshot_checkpoint=%s\n' "$CHECKPOINT_STATUS"
         printf 'pixel_expectations=%s\n' "${#PIXEL_EXPECTATIONS[@]}"
         printf 'gpu=%s\n' "${GPU_LINE:-}"
         printf 'timeout_seconds=%s\n' "$TIMEOUT_SECONDS"
@@ -465,6 +475,21 @@ while [ $# -gt 0 ]; do
             PIXEL_EXPECTATIONS+=("$pixel_expectation")
             shift
             ;;
+        --screenshot-after-line)
+            require_value "$1" "$#" "${2-}"
+            SCREENSHOT_AFTER_LINE=$2
+            shift 2
+            ;;
+        --screenshot-after-line=*)
+            screenshot_after_line=${1#*=}
+
+            if [ -z "$screenshot_after_line" ]; then
+                usage_error "--screenshot-after-line requires a value"
+            fi
+
+            SCREENSHOT_AFTER_LINE=$screenshot_after_line
+            shift
+            ;;
         --weston-shell)
             require_value "$1" "$#" "${2-}"
 
@@ -530,6 +555,10 @@ fi
 
 if [ "${#PIXEL_EXPECTATIONS[@]}" -gt 0 ] && [ "$SCREENSHOTS" -eq 0 ]; then
     usage_error "--expect-pixel-class requires --screenshots"
+fi
+
+if [ -n "$SCREENSHOT_AFTER_LINE" ] && [ "$SCREENSHOTS" -eq 0 ]; then
+    usage_error "--screenshot-after-line requires --screenshots"
 fi
 
 if [ ! -d "$PROJECT_DIR" ]; then
@@ -646,6 +675,7 @@ DEADLINE=$(( $(now) + TIMEOUT_SECONDS ))
     printf 'frames=%s\n' "$FRAMES"
     printf 'validation=%s\n' "$VALIDATION"
     printf 'screenshots=%s\n' "$SCREENSHOTS"
+    printf 'screenshot_after_line=%s\n' "$SCREENSHOT_AFTER_LINE"
     printf 'expect_clusters=%s\n' "${EXPECT_CLUSTERS:-}"
     printf 'pixel_expectations=%s\n' "${#PIXEL_EXPECTATIONS[@]}"
     printf 'weston_shell=%s\n' "$WESTON_SHELL"
@@ -826,37 +856,77 @@ if [ "$SCREENSHOTS" -eq 1 ]; then
         record_failure "$EXIT_SCREENSHOT" \
             "application did not present a frame in time; screenshot not captured"
     else
-        SHOOT_TIMEOUT=$(remaining_seconds)
+        CHECKPOINT_REACHED=1
 
-        if [ "$SHOOT_TIMEOUT" -gt 20 ]; then
-            SHOOT_TIMEOUT=20
+        # The opt-in checkpoint defers capture until the application
+        # has logged the requested line. The match is literal and is
+        # made against one line prefix, never evaluated as code.
+        if [ -n "$SCREENSHOT_AFTER_LINE" ]; then
+            CHECKPOINT_REACHED=0
+            CHECKPOINT_TIMEOUT=$(remaining_seconds)
+            CHECKPOINT_DEADLINE=$(( $(now) + CHECKPOINT_TIMEOUT ))
+
+            while [ "$(now)" -lt "$CHECKPOINT_DEADLINE" ]; do
+                if grep -qF -- "$SCREENSHOT_AFTER_LINE" \
+                        "$RUN_DIR/app.stdout.log" 2>/dev/null; then
+                    CHECKPOINT_REACHED=1
+                    break
+                fi
+
+                if [ -f "$APP_STATUS_FILE" ]; then
+                    break
+                fi
+
+                sleep 0.05
+            done
+
+            if [ "$CHECKPOINT_REACHED" -eq 1 ]; then
+                CHECKPOINT_STATUS=reached
+                log "screenshot checkpoint reached: $SCREENSHOT_AFTER_LINE"
+            elif [ -f "$APP_STATUS_FILE" ]; then
+                CHECKPOINT_STATUS=not-reached
+                record_failure "$EXIT_SCREENSHOT" \
+                    "application exited before the screenshot checkpoint appeared: $SCREENSHOT_AFTER_LINE"
+            else
+                CHECKPOINT_STATUS=not-reached
+                record_failure "$EXIT_SCREENSHOT" \
+                    "screenshot checkpoint did not appear within ${CHECKPOINT_TIMEOUT}s: $SCREENSHOT_AFTER_LINE"
+            fi
         fi
 
-        SHOOTER_STATUS=0
+        if [ "$CHECKPOINT_REACHED" -eq 1 ]; then
+            SHOOT_TIMEOUT=$(remaining_seconds)
 
-        (
-            cd -- "$RUN_DIR" || exit 1
-            XDG_RUNTIME_DIR="$RUNTIME_DIR" \
-            WAYLAND_DISPLAY="$SOCKET" \
-                timeout "$SHOOT_TIMEOUT" weston-screenshooter
-        ) >"$RUN_DIR/screenshooter.log" 2>&1 || SHOOTER_STATUS=$?
+            if [ "$SHOOT_TIMEOUT" -gt 20 ]; then
+                SHOOT_TIMEOUT=20
+            fi
 
-        SCREENSHOT_ENTRY=$(find "$RUN_DIR" -maxdepth 1 -type f -name '*.png' \
-            -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1)
-        SCREENSHOT_PATH=""
+            SHOOTER_STATUS=0
 
-        if [ -n "$SCREENSHOT_ENTRY" ]; then
-            SCREENSHOT_PATH=${SCREENSHOT_ENTRY#* }
-        fi
+            (
+                cd -- "$RUN_DIR" || exit 1
+                XDG_RUNTIME_DIR="$RUNTIME_DIR" \
+                WAYLAND_DISPLAY="$SOCKET" \
+                    timeout "$SHOOT_TIMEOUT" weston-screenshooter
+            ) >"$RUN_DIR/screenshooter.log" 2>&1 || SHOOTER_STATUS=$?
 
-        if [ "$SHOOTER_STATUS" -ne 0 ]; then
-            record_failure "$EXIT_SCREENSHOT" \
-                "screenshot tool exited with status $SHOOTER_STATUS"
+            SCREENSHOT_ENTRY=$(find "$RUN_DIR" -maxdepth 1 -type f -name '*.png' \
+                -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1)
             SCREENSHOT_PATH=""
-        elif [ -z "$SCREENSHOT_PATH" ]; then
-            record_failure "$EXIT_SCREENSHOT" "screenshot tool produced no PNG"
-        else
-            log "screenshot captured: $SCREENSHOT_PATH"
+
+            if [ -n "$SCREENSHOT_ENTRY" ]; then
+                SCREENSHOT_PATH=${SCREENSHOT_ENTRY#* }
+            fi
+
+            if [ "$SHOOTER_STATUS" -ne 0 ]; then
+                record_failure "$EXIT_SCREENSHOT" \
+                    "screenshot tool exited with status $SHOOTER_STATUS"
+                SCREENSHOT_PATH=""
+            elif [ -z "$SCREENSHOT_PATH" ]; then
+                record_failure "$EXIT_SCREENSHOT" "screenshot tool produced no PNG"
+            else
+                log "screenshot captured: $SCREENSHOT_PATH"
+            fi
         fi
     fi
 fi

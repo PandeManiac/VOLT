@@ -78,7 +78,9 @@ internal readonly struct MeshPushConstants
 /// triangle twice with different model matrices, the same two quad
 /// ranges, and the hexagon. Every draw shares one graphics pipeline,
 /// the uploaded mesh buffers, and one 64-byte MVP push constant that
-/// is rewritten before each draw.
+/// is rewritten before each draw. The camera scene reads the
+/// application's camera controller on every recorded frame, so
+/// movement reaches the GPU without recreating the renderer.
 ///
 /// The render pass has a color attachment and a depth attachment.
 /// One <see cref="VulkanDepthAttachment"/> is created per swapchain
@@ -107,7 +109,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 	private readonly MeshDraw[] _drawPlan;
 	private readonly VulkanDepthAttachment[] _depthAttachments;
 	private readonly DemoScene _scene;
-	private readonly Matrix4x4 _view;
+	private readonly CameraController? _camera;
 
 	private PipelineLayout _pipelineLayout;
 	private RenderPass _renderPass;
@@ -135,6 +137,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		VulkanSwapchain swapchain,
 		VulkanSwapchainImageViews imageViews,
 		DemoMeshes meshes,
+		CameraController? camera,
 		string vertexShaderPath,
 		string fragmentShaderPath,
 		bool depthTestEnabled = true)
@@ -256,7 +259,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		_drawPlan = drawPlan;
 		_depthAttachments = depthAttachments;
 		_scene = meshes.Scene;
-		_view = CameraTransforms.CreateView(meshes.Scene);
+		_camera = camera;
 
 		_renderPass = renderPass;
 		_pipelineLayout = pipelineLayout;
@@ -405,8 +408,10 @@ internal sealed unsafe class MeshRenderer : IDisposable
 	/// <remarks>
 	/// The projection is rebuilt from this generation's current
 	/// extent every frame, so a recreated swapchain can never use a
-	/// stale aspect ratio. Each draw receives its own composed MVP;
-	/// no matrix is allocated on the heap.
+	/// stale aspect ratio. The view comes from the application's
+	/// camera controller on the same frame, so movement is visible
+	/// without recreating this renderer. Each draw receives its own
+	/// composed MVP; no matrix is allocated on the heap.
 	/// </remarks>
 	public void Record(
 		CommandBuffer commandBuffer,
@@ -427,6 +432,8 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		}
 
 		float aspect = Extent.Width / (float)Extent.Height;
+
+		Matrix4x4 view = CameraTransforms.CreateView(_scene, _camera);
 
 		Matrix4x4 projection =
 			CameraTransforms.CreateProjection(_scene, aspect);
@@ -481,7 +488,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		{
 			MeshDraw draw = _drawPlan[index];
 
-			Matrix4x4 mvp = draw.Model * _view * projection;
+			Matrix4x4 mvp = draw.Model * view * projection;
 
 			MeshPushConstants constants = new(mvp);
 

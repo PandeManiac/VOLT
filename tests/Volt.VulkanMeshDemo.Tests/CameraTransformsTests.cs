@@ -48,6 +48,44 @@ public sealed class CameraTransformsTests
 	}
 
 	[Fact]
+	public void CreateView_UsesTheSuppliedCameraForThePerspectiveScene()
+	{
+		CameraController camera = new();
+
+		camera.ApplyLook(-300.0f, 40.0f);
+
+		Assert.Equal(
+			camera.CreateView(),
+			CameraTransforms.CreateView(
+				DemoScene.CameraTransforms,
+				camera));
+
+		Assert.NotEqual(
+			CameraTransforms.CreateView(DemoScene.CameraTransforms),
+			CameraTransforms.CreateView(
+				DemoScene.CameraTransforms,
+				camera));
+	}
+
+	[Fact]
+	public void CreateView_IgnoresTheCameraForClipSpaceScenes()
+	{
+		CameraController camera = new();
+
+		camera.ApplyLook(-300.0f, 40.0f);
+
+		Assert.Equal(
+			Matrix4x4.Identity,
+			CameraTransforms.CreateView(DemoScene.Gallery, camera));
+
+		Assert.Equal(
+			Matrix4x4.Identity,
+			CameraTransforms.CreateView(
+				DemoScene.DepthOcclusion,
+				camera));
+	}
+
+	[Fact]
 	public void CreateProjection_LegacySceneReproducesAspectCorrection()
 	{
 		Matrix4x4 projection = CameraTransforms.CreateProjection(

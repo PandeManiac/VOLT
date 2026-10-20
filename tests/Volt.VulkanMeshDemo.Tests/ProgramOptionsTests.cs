@@ -557,6 +557,159 @@ public sealed class ProgramOptionsTests
 	}
 
 	[Fact]
+	public void TryParseOptions_ParsesCameraScript()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--scene", "camera-transforms",
+					"--camera-script"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.Equal(DemoScene.CameraTransforms, options.Scene);
+		Assert.True(options.CameraScript);
+		Assert.Equal(600, options.FrameLimit);
+	}
+
+	[Fact]
+	public void TryParseOptions_CameraScriptWithResize_Parses()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--scene", "camera-transforms",
+					"--camera-script",
+					"--resize-at-frame", "200",
+					"--resize-to", "960x540"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.True(options.CameraScript);
+		Assert.Equal(200, options.ResizeAtFrame);
+		Assert.Equal(new WindowSize(960, 540), options.ResizeTo);
+	}
+
+	[Theory]
+	[InlineData("gallery")]
+	[InlineData("depth-occlusion")]
+	public void TryParseOptions_CameraScriptOutsideCameraScene_Fails(
+		string scene)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--scene", scene,
+					"--camera-script"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene camera-transforms", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_CameraScriptWithoutScene_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--frames", "600", "--camera-script"],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene camera-transforms", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_CameraScriptWithoutFrameLimit_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--scene", "camera-transforms", "--camera-script"],
+				out _,
+				out string error));
+
+		Assert.Contains("bounded --frames", error);
+	}
+
+	[Theory]
+	[InlineData("1")]
+	[InlineData("121")]
+	public void TryParseOptions_CameraScriptTooShort_Fails(string frames)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", frames,
+					"--scene", "camera-transforms",
+					"--camera-script"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains(
+			$"at least {CameraScript.MinimumFrameLimit}",
+			error);
+	}
+
+	[Fact]
+	public void TryParseOptions_CameraScriptAtMinimumFrames_Parses()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--frames",
+					CameraScript.MinimumFrameLimit.ToString(
+						System.Globalization.CultureInfo.InvariantCulture),
+					"--scene", "camera-transforms",
+					"--camera-script"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.True(options.CameraScript);
+		Assert.Equal(CameraScript.MinimumFrameLimit, options.FrameLimit);
+	}
+
+	[Fact]
+	public void TryParseOptions_DuplicateCameraScript_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--scene", "camera-transforms",
+					"--camera-script",
+					"--camera-script"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("twice", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DefaultRunHasNoCameraScript()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--frames", "120"],
+				out SampleOptions options,
+				out _));
+
+		Assert.False(options.CameraScript);
+		Assert.Equal(DemoScene.Gallery, options.Scene);
+	}
+
+	[Fact]
 	public void ShouldRequestResize_WithoutScenario_IsFalse()
 	{
 		SampleOptions options = new(

@@ -422,6 +422,247 @@ public sealed class MeshGeometryTests
 		}
 	}
 
+	[Fact]
+	public void CreateCameraTransformMeshes_ScriptedFinalPoseKeepsEveryMeshVisible()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateCameraTransformMeshes();
+
+		CameraController camera = ScriptedCamera();
+
+		(Matrix4x4 Model, MeshGeometry Mesh)[] draws =
+		[
+			(CameraTransforms.TriangleAModel, meshes[0]),
+			(CameraTransforms.TriangleBModel, meshes[0]),
+			(CameraTransforms.QuadModel, meshes[1]),
+			(CameraTransforms.HexagonModel, meshes[2])
+		];
+
+		foreach ((Matrix4x4 model, MeshGeometry mesh) in draws)
+		{
+			foreach (MeshVertex vertex in mesh.Vertices)
+			{
+				Vector4 clip = ProjectCameraClip(
+					camera,
+					model,
+					vertex.Position,
+					ProbeWidth,
+					ProbeHeight);
+
+				Assert.True(
+					clip.W > 0.0f,
+					$"{mesh.Name} has a non-positive clip W at the " +
+					$"scripted final pose.");
+
+				Assert.InRange(clip.X / clip.W, -0.95f, 0.95f);
+				Assert.InRange(clip.Y / clip.W, -0.95f, 0.95f);
+				Assert.InRange(clip.Z / clip.W, 0.0f, 1.0f);
+			}
+		}
+	}
+
+	[Fact]
+	public void CreateCameraTransformMeshes_ScriptedFinalPoseProbesAreInterior()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateCameraTransformMeshes();
+
+		CameraController camera = ScriptedCamera();
+
+		Vector2[] triangleA =
+			[.. meshes[0].Vertices.Select(v => ProjectCamera(
+				camera,
+				CameraTransforms.TriangleAModel,
+				v.Position))];
+
+		Vector2[] triangleB =
+			[.. meshes[0].Vertices.Select(v => ProjectCamera(
+				camera,
+				CameraTransforms.TriangleBModel,
+				v.Position))];
+
+		Vector2[] quad =
+			[.. meshes[1].Vertices.Select(v => ProjectCamera(
+				camera,
+				CameraTransforms.QuadModel,
+				v.Position))];
+
+		Vector2[] hexagon =
+			[.. meshes[2].Vertices.Select(v => ProjectCamera(
+				camera,
+				CameraTransforms.HexagonModel,
+				v.Position))];
+
+		Vector2 overlapProbe = ProjectCamera(
+			camera,
+			CameraTransforms.TriangleAModel,
+			new Vector3(0.0f, -0.1f, 0.0f));
+
+		// The projected point is derived from the geometry, not chosen
+		// from the screenshot. The harness asserts this exact pixel.
+		Assert.InRange(overlapProbe.X, 342.0f, 344.0f);
+		Assert.InRange(overlapProbe.Y, 279.0f, 281.0f);
+
+		Assert.True(IsInsideTriangle(
+			overlapProbe,
+			triangleA[0],
+			triangleA[1],
+			triangleA[2]));
+
+		Assert.True(IsInsideQuad(overlapProbe, quad));
+
+		Assert.True(MinTriangleEdgeDistance(
+			overlapProbe,
+			triangleA[0],
+			triangleA[1],
+			triangleA[2]) > 25.0f);
+
+		Assert.True(MinQuadEdgeDistance(overlapProbe, quad) > 25.0f);
+
+		// The quad-only probe is the projection of the quad's local
+		// origin at the same pose, so it is derived rather than chosen
+		// from a screenshot. The quad centre stays far away from every
+		// silhouette, so it cannot land on a rasterized edge.
+		Vector2 quadOnlyProbe = ProjectCamera(
+			camera,
+			CameraTransforms.QuadModel,
+			Vector3.Zero);
+
+		Assert.InRange(quadOnlyProbe.X, 545.0f, 547.0f);
+		Assert.InRange(quadOnlyProbe.Y, 359.0f, 361.0f);
+
+		Assert.True(IsInsideQuad(quadOnlyProbe, quad));
+		Assert.True(MinQuadEdgeDistance(quadOnlyProbe, quad) > 25.0f);
+
+		foreach (Vector2[] silhouette in new[]
+		{
+			triangleA,
+			triangleB,
+			hexagon
+		})
+		{
+			Assert.False(IsInsideTriangle(
+				quadOnlyProbe,
+				silhouette[0],
+				silhouette[1],
+				silhouette[2]));
+
+			Assert.True(MinTriangleEdgeDistance(
+				quadOnlyProbe,
+				silhouette[0],
+				silhouette[1],
+				silhouette[2]) > 25.0f);
+		}
+	}
+
+	[Fact]
+	public void CreateCameraTransformMeshes_ScriptedFinalPoseProbesScaleWithViewport()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateCameraTransformMeshes();
+
+		CameraController camera = ScriptedCamera();
+
+		// Both resize extents keep the 16:9 aspect, so the normalized
+		// position is unchanged and the pixel position scales by 0.75.
+		Vector2 overlapProbe = ProjectCamera(
+			camera,
+			CameraTransforms.TriangleAModel,
+			new Vector3(0.0f, -0.1f, 0.0f),
+			960,
+			540);
+
+		Vector2 quadOnlyProbe = ProjectCamera(
+			camera,
+			CameraTransforms.QuadModel,
+			Vector3.Zero,
+			960,
+			540);
+
+		Assert.InRange(overlapProbe.X, 256.0f, 258.0f);
+		Assert.InRange(overlapProbe.Y, 209.0f, 211.0f);
+
+		// The quad-only probe scales the 1280x720 probe (544,360) by
+		// 0.75. It is derived from the same local point at the same
+		// camera pose, not copied from a previous screenshot.
+		Vector2 quadLocalProbe = ProjectCamera(
+			camera,
+			CameraTransforms.QuadModel,
+			Vector3.Zero);
+
+		Assert.Equal(quadLocalProbe.X * 0.75f, quadOnlyProbe.X, 3);
+		Assert.Equal(quadLocalProbe.Y * 0.75f, quadOnlyProbe.Y, 3);
+
+		Assert.InRange(quadOnlyProbe.X, 408.0f, 411.0f);
+		Assert.InRange(quadOnlyProbe.Y, 269.0f, 272.0f);
+
+		Assert.Equal(3, meshes.Length);
+	}
+
+	/// <summary>
+	/// Advances a fresh camera through the complete deterministic
+	/// script so tests analyse the pose the sample actually presents.
+	/// </summary>
+	private static CameraController ScriptedCamera()
+	{
+		CameraController camera = new();
+		CameraScript script = new();
+
+		while (!script.HasReachedFinalPose)
+		{
+			script.Advance(camera);
+		}
+
+		return camera;
+	}
+
+	private static Vector2 ProjectCamera(
+		CameraController camera,
+		Matrix4x4 model,
+		Vector3 local)
+	{
+		return ProjectCamera(camera, model, local, ProbeWidth, ProbeHeight);
+	}
+
+	private static Vector2 ProjectCamera(
+		CameraController camera,
+		Matrix4x4 model,
+		Vector3 local,
+		int width,
+		int height)
+	{
+		Vector4 clip = ProjectCameraClip(
+			camera,
+			model,
+			local,
+			width,
+			height);
+
+		return new Vector2(
+			((clip.X / clip.W) + 1.0f) * 0.5f * width,
+			((clip.Y / clip.W) + 1.0f) * 0.5f * height);
+	}
+
+	private static Vector4 ProjectCameraClip(
+		CameraController camera,
+		Matrix4x4 model,
+		Vector3 local,
+		int width,
+		int height)
+	{
+		Matrix4x4 mvp =
+			model *
+			camera.CreateView() *
+			CameraTransforms.CreateProjection(
+				DemoScene.CameraTransforms,
+				width / (float)height);
+
+		Vector4 clip = Vector4.Transform(
+			new Vector4(local, 1.0f),
+			mvp);
+
+		Assert.True(clip.W > 0.0f);
+
+		return clip;
+	}
+
 	/// <summary>
 	/// Projects one local-space vertex through its draw instance's
 	/// model matrix and the fixed perspective camera.
