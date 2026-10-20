@@ -27,6 +27,7 @@ internal static class Program
 	private const string DisableDepthTestArgument = "--disable-depth-test";
 	private const string GallerySceneName = "gallery";
 	private const string DepthOcclusionSceneName = "depth-occlusion";
+	private const string CameraTransformsSceneName = "camera-transforms";
 
 	/// <summary>
 	/// Upper bound for a requested resize dimension. It keeps the
@@ -67,7 +68,7 @@ internal static class Program
 			Console.Error.WriteLine(error);
 			Console.Error.WriteLine(
 				"Usage: Volt.VulkanMeshDemo [--validation] [--frames N] " +
-				"[--scene gallery|depth-occlusion] " +
+				"[--scene gallery|depth-occlusion|camera-transforms] " +
 				"[--disable-depth-test] " +
 				"[--resize-at-frame N --resize-to WIDTHxHEIGHT]");
 
@@ -780,8 +781,9 @@ internal static class Program
 						options = default;
 						error =
 							"The --scene value must be " +
-							$"{GallerySceneName} or " +
-							$"{DepthOcclusionSceneName}.";
+							$"{GallerySceneName}, " +
+							$"{DepthOcclusionSceneName}, or " +
+							$"{CameraTransformsSceneName}.";
 						return false;
 					}
 
@@ -866,6 +868,10 @@ internal static class Program
 				scene = DemoScene.DepthOcclusion;
 				return true;
 
+			case CameraTransformsSceneName:
+				scene = DemoScene.CameraTransforms;
+				return true;
+
 			default:
 				scene = default;
 				return false;
@@ -878,6 +884,7 @@ internal static class Program
 		{
 			DemoScene.Gallery => GallerySceneName,
 			DemoScene.DepthOcclusion => DepthOcclusionSceneName,
+			DemoScene.CameraTransforms => CameraTransformsSceneName,
 			_ => "unknown"
 		};
 	}

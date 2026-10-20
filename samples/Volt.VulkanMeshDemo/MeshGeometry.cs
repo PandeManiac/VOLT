@@ -46,7 +46,13 @@ internal enum DemoScene
 	/// <summary>
 	/// Overlapping near and far meshes that prove depth testing.
 	/// </summary>
-	DepthOcclusion
+	DepthOcclusion,
+
+	/// <summary>
+	/// Local-space meshes drawn through model, view, and projection
+	/// matrices from a fixed perspective camera.
+	/// </summary>
+	CameraTransforms
 }
 
 /// <summary>
@@ -121,6 +127,114 @@ internal sealed class MeshGeometry
 			CreateFarQuadWithUInt16Indices(),
 			CreateReferenceHexagonWithUInt32Indices()
 		];
+	}
+
+	/// <summary>
+	/// Creates the three local-space meshes drawn by the camera scene.
+	/// </summary>
+	/// <remarks>
+	/// Positions stay in local space and are small and centred near
+	/// the origin. Placement, rotation, and scale come from the
+	/// per-draw model matrices in <see cref="CameraTransforms"/>, so
+	/// the same uploaded triangle is drawn twice with different
+	/// transforms. The array order is the draw order: triangle A,
+	/// triangle B, the two index ranges of the quad, then the
+	/// hexagon.
+	///
+	/// Every vertex uses uniform colors so screenshot probes do not
+	/// depend on interpolation between differently colored vertices.
+	/// </remarks>
+	public static MeshGeometry[] CreateCameraTransformMeshes()
+	{
+		return
+		[
+			CreateLocalTriangle(),
+			CreateLocalQuadWithUInt16Indices(),
+			CreateLocalHexagonWithUInt32Indices()
+		];
+	}
+
+	private static MeshGeometry CreateLocalTriangle()
+	{
+		Vector3 color = new(0.95f, 0.10f, 0.12f);
+
+		MeshVertex[] vertices =
+		[
+			new(new Vector3(-0.60f, -0.45f, 0.0f), color),
+			new(new Vector3(0.60f, -0.45f, 0.0f), color),
+			new(new Vector3(0.0f, 0.55f, 0.0f), color)
+		];
+
+		return new MeshGeometry(
+			"Local: red triangle (vkCmdDraw, two model transforms)",
+			MeshIndexFormat.None,
+			vertices,
+			[],
+			[]);
+	}
+
+	private static MeshGeometry CreateLocalQuadWithUInt16Indices()
+	{
+		Vector3 color = new(0.08f, 0.25f, 0.95f);
+
+		MeshVertex[] vertices =
+		[
+			new(new Vector3(-1.0f, -1.0f, 0.0f), color),
+			new(new Vector3(1.0f, -1.0f, 0.0f), color),
+			new(new Vector3(1.0f, 1.0f, 0.0f), color),
+			new(new Vector3(-1.0f, 1.0f, 0.0f), color)
+		];
+
+		ushort[] indices = [0, 1, 2, 0, 2, 3];
+
+		return new MeshGeometry(
+			"Local: blue quad (uint16 indices)",
+			MeshIndexFormat.UInt16,
+			vertices,
+			indices,
+			[]);
+	}
+
+	private static MeshGeometry CreateLocalHexagonWithUInt32Indices()
+	{
+		const int ringVertexCount = 6;
+
+		Vector3 color = new(0.10f, 0.85f, 0.25f);
+
+		MeshVertex[] vertices = new MeshVertex[ringVertexCount + 1];
+
+		vertices[0] = new MeshVertex(Vector3.Zero, color);
+
+		for (int index = 0; index < ringVertexCount; index++)
+		{
+			float angle = MathF.Tau * index / ringVertexCount;
+
+			vertices[index + 1] = new MeshVertex(
+				new Vector3(
+					MathF.Cos(angle),
+					MathF.Sin(angle),
+					0.0f),
+				color);
+		}
+
+		uint[] indices = new uint[ringVertexCount * 3];
+
+		for (int index = 0; index < ringVertexCount; index++)
+		{
+			int offset = index * 3;
+
+			indices[offset] = 0;
+			indices[offset + 1] = checked((uint)(index + 1));
+			indices[offset + 2] =
+				checked((uint)(((index + 1) % ringVertexCount) + 1));
+		}
+
+		return new MeshGeometry(
+			"Local: green hexagon (uint32 indices)",
+			MeshIndexFormat.UInt32,
+			vertices,
+			[],
+			indices);
 	}
 
 	private static MeshGeometry CreateNearTriangle()

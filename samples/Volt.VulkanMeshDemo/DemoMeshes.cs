@@ -25,14 +25,18 @@ internal sealed class DemoMeshes : IDisposable
 
 	private bool _disposed;
 
+	public DemoScene Scene { get; }
+
 	public IReadOnlyList<MeshGeometry> Geometries => _geometries;
 
 	public IReadOnlyList<VulkanMeshBuffers> Buffers => _buffers;
 
 	private DemoMeshes(
+		DemoScene scene,
 		MeshGeometry[] geometries,
 		VulkanMeshBuffers[] buffers)
 	{
+		Scene = scene;
 		_geometries = geometries;
 		_buffers = buffers;
 	}
@@ -42,10 +46,11 @@ internal sealed class DemoMeshes : IDisposable
 	/// sample scene.
 	/// </summary>
 	/// <remarks>
-	/// The gallery scene remains the default. Both scenes provide a
+	/// The gallery scene remains the default. Every scene provides a
 	/// non-indexed mesh, a 16-bit indexed mesh, and a 32-bit indexed
 	/// mesh in the same order, so the upload and draw-plan paths are
-	/// shared.
+	/// shared. The camera scene reuses one uploaded triangle mesh for
+	/// both of its triangle draw instances.
 	/// </remarks>
 	public static DemoMeshes Create(
 		VulkanInstance instance,
@@ -68,6 +73,8 @@ internal sealed class DemoMeshes : IDisposable
 			DemoScene.Gallery => MeshGeometry.CreateDemoMeshes(),
 			DemoScene.DepthOcclusion =>
 				MeshGeometry.CreateDepthOcclusionMeshes(),
+			DemoScene.CameraTransforms =>
+				MeshGeometry.CreateCameraTransformMeshes(),
 			_ => throw new ArgumentOutOfRangeException(
 				nameof(scene),
 				scene,
@@ -99,7 +106,7 @@ internal sealed class DemoMeshes : IDisposable
 			throw;
 		}
 
-		return new DemoMeshes(geometries, buffers);
+		return new DemoMeshes(scene, geometries, buffers);
 	}
 
 	public void Dispose()

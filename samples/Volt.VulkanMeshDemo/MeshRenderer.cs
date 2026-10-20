@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Devices;
@@ -31,13 +32,36 @@ internal enum MeshDrawKind
 /// <remarks>
 /// MeshIndex selects the uploaded mesh. FirstElement is a first
 /// vertex for a non-indexed mesh and a first index for an indexed
-/// mesh.
+/// mesh. Model places that mesh instance in world space; two draws
+/// of the same mesh may use different model transforms.
 /// </remarks>
 internal readonly record struct MeshDraw(
 	MeshDrawKind Kind,
 	int MeshIndex,
 	uint FirstElement,
-	uint ElementCount);
+	uint ElementCount,
+	Matrix4x4 Model);
+
+/// <summary>
+/// Push constants shared by every draw of the sample pipeline.
+/// </summary>
+/// <remarks>
+/// One 64-byte <see cref="Matrix4x4"/> per draw. The bytes are pushed
+/// in natural <see cref="Matrix4x4"/> memory order and read by GLSL
+/// as a column-major <c>mat4</c>, which transposes them implicitly;
+/// see <see cref="CameraTransforms"/>. This stays well inside
+/// Vulkan's guaranteed minimum of 128 push-constant bytes.
+/// </remarks>
+[StructLayout(LayoutKind.Sequential)]
+internal readonly struct MeshPushConstants
+{
+	public readonly Matrix4x4 Mvp;
+
+	public MeshPushConstants(Matrix4x4 mvp)
+	{
+		Mvp = mvp;
+	}
+}
 
 /// <summary>
 /// Owns the graphics pipeline and framebuffers for one swapchain
@@ -45,12 +69,16 @@ internal readonly record struct MeshDraw(
 /// </summary>
 /// <remarks>
 /// Mesh buffers are owned by the application and uploaded once.
-/// Each frame records one render pass containing four draw calls
-/// across the three meshes through <see cref="VulkanMeshDrawCommands"/>:
-/// the complete non-indexed triangle, the two constituent triangles
-/// of the 16-bit indexed quad as two partial index ranges, and the
-/// complete 32-bit indexed hexagon. Every draw shares one graphics
-/// pipeline and the uploaded mesh buffers.
+/// Each frame records one render pass across the three uploaded
+/// meshes through <see cref="VulkanMeshDrawCommands"/>. The gallery
+/// and depth-occlusion scenes record four draws: the complete
+/// non-indexed triangle, the two constituent triangles of the
+/// 16-bit indexed quad as two partial index ranges, and the complete
+/// 32-bit indexed hexagon. The camera scene records five draws: the
+/// triangle twice with different model matrices, the same two quad
+/// ranges, and the hexagon. Every draw shares one graphics pipeline,
+/// the uploaded mesh buffers, and one 64-byte MVP push constant that
+/// is rewritten before each draw.
 ///
 /// The render pass has a color attachment and a depth attachment.
 /// One <see cref="VulkanDepthAttachment"/> is created per swapchain
@@ -78,6 +106,8 @@ internal sealed unsafe class MeshRenderer : IDisposable
 	private readonly DemoMeshes _meshes;
 	private readonly MeshDraw[] _drawPlan;
 	private readonly VulkanDepthAttachment[] _depthAttachments;
+	private readonly DemoScene _scene;
+	private readonly Matrix4x4 _view;
 
 	private PipelineLayout _pipelineLayout;
 	private RenderPass _renderPass;
@@ -137,7 +167,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 				"The swapchain must support color attachments.");
 		}
 
-		MeshDraw[] drawPlan = CreateDrawPlan(meshes.Geometries);
+		MeshDraw[] drawPlan = CreateDrawPlan(meshes.Scene, meshes.Geometries);
 
 		Vk api = instance.Api;
 		Device deviceHandle = device.Handle;
@@ -225,6 +255,8 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		_meshes = meshes;
 		_drawPlan = drawPlan;
 		_depthAttachments = depthAttachments;
+		_scene = meshes.Scene;
+		_view = CameraTransforms.CreateView(meshes.Scene);
 
 		_renderPass = renderPass;
 		_pipelineLayout = pipelineLayout;
@@ -238,14 +270,18 @@ internal sealed unsafe class MeshRenderer : IDisposable
 	/// Builds the ordered draw plan recorded every frame.
 	/// </summary>
 	/// <remarks>
-	/// The plan is derived from the uploaded mesh geometries, so the
-	/// sample's draw sequence can be inspected and tested without a
+	/// The plan is derived from the scene selection and the uploaded
+	/// mesh geometries, so the sample's draw sequence and every draw
+	/// instance's model matrix can be inspected and tested without a
 	/// Vulkan device. The complete non-indexed triangle and the
 	/// complete 32-bit indexed hexagon use the whole-mesh overload.
 	/// The 16-bit indexed quad is drawn as its two constituent
 	/// triangles: two partial index ranges of the same uploaded mesh.
+	/// The camera scene adds a second triangle instance that reuses
+	/// the same uploaded mesh with a different model transform.
 	/// </remarks>
 	internal static MeshDraw[] CreateDrawPlan(
+		DemoScene scene,
 		IReadOnlyList<MeshGeometry> geometries)
 	{
 		ArgumentNullException.ThrowIfNull(geometries);
@@ -282,40 +318,99 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		uint hexagonIndexCount =
 			checked((uint)geometries[2].Indices32.Length);
 
+		if (scene == DemoScene.CameraTransforms)
+		{
+			// Triangle A and triangle B are two draws of the same
+			// uploaded mesh (MeshIndex 0) with different model
+			// matrices. Both quad ranges share one model matrix so
+			// the split draw still covers a single transformed quad.
+			return
+			[
+				new(
+					MeshDrawKind.CompleteMesh,
+					MeshIndex: 0,
+					FirstElement: 0,
+					triangleVertexCount,
+					CameraTransforms.TriangleAModel),
+				new(
+					MeshDrawKind.CompleteMesh,
+					MeshIndex: 0,
+					FirstElement: 0,
+					triangleVertexCount,
+					CameraTransforms.TriangleBModel),
+				new(
+					MeshDrawKind.ElementRange,
+					MeshIndex: 1,
+					FirstElement: 0,
+					quadTriangleIndexCount,
+					CameraTransforms.QuadModel),
+				new(
+					MeshDrawKind.ElementRange,
+					MeshIndex: 1,
+					FirstElement: quadTriangleIndexCount,
+					quadIndexCount - quadTriangleIndexCount,
+					CameraTransforms.QuadModel),
+				new(
+					MeshDrawKind.CompleteMesh,
+					MeshIndex: 2,
+					FirstElement: 0,
+					hexagonIndexCount,
+					CameraTransforms.HexagonModel)
+			];
+		}
+
+		if (scene is not (DemoScene.Gallery or DemoScene.DepthOcclusion))
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(scene),
+				scene,
+				"Unsupported demo scene.");
+		}
+
+		// The clip-space scenes keep their authored positions, so
+		// every instance uses the identity model transform.
 		return
 		[
 			new(
 				MeshDrawKind.CompleteMesh,
 				MeshIndex: 0,
 				FirstElement: 0,
-				triangleVertexCount),
+				triangleVertexCount,
+				Matrix4x4.Identity),
 			new(
 				MeshDrawKind.ElementRange,
 				MeshIndex: 1,
 				FirstElement: 0,
-				quadTriangleIndexCount),
+				quadTriangleIndexCount,
+				Matrix4x4.Identity),
 			new(
 				MeshDrawKind.ElementRange,
 				MeshIndex: 1,
 				FirstElement: quadTriangleIndexCount,
-				quadIndexCount - quadTriangleIndexCount),
+				quadIndexCount - quadTriangleIndexCount,
+				Matrix4x4.Identity),
 			new(
 				MeshDrawKind.CompleteMesh,
 				MeshIndex: 2,
 				FirstElement: 0,
-				hexagonIndexCount)
+				hexagonIndexCount,
+				Matrix4x4.Identity)
 		];
 	}
 
 	/// <summary>
 	/// Records one render pass that clears the image and draws the
-	/// planned mesh ranges: the complete triangle, the two triangles
-	/// of the indexed quad, and the complete hexagon.
+	/// planned mesh instances.
 	/// </summary>
+	/// <remarks>
+	/// The projection is rebuilt from this generation's current
+	/// extent every frame, so a recreated swapchain can never use a
+	/// stale aspect ratio. Each draw receives its own composed MVP;
+	/// no matrix is allocated on the heap.
+	/// </remarks>
 	public void Record(
 		CommandBuffer commandBuffer,
-		int imageIndex,
-		float aspect)
+		int imageIndex)
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -331,12 +426,10 @@ internal sealed unsafe class MeshRenderer : IDisposable
 			throw new ArgumentOutOfRangeException(nameof(imageIndex));
 		}
 
-		if (!float.IsFinite(aspect) || aspect <= 0.0f)
-		{
-			throw new ArgumentOutOfRangeException(
-				nameof(aspect),
-				"The aspect ratio must be finite and positive.");
-		}
+		float aspect = Extent.Width / (float)Extent.Height;
+
+		Matrix4x4 projection =
+			CameraTransforms.CreateProjection(_scene, aspect);
 
 		ClearValue* clearValues = stackalloc ClearValue[2];
 
@@ -374,8 +467,6 @@ internal sealed unsafe class MeshRenderer : IDisposable
 			PClearValues = clearValues
 		};
 
-		float aspectValue = aspect;
-
 		_api.CmdBeginRenderPass(
 			commandBuffer,
 			in begin,
@@ -386,17 +477,21 @@ internal sealed unsafe class MeshRenderer : IDisposable
 			PipelineBindPoint.Graphics,
 			_pipeline);
 
-		_api.CmdPushConstants(
-			commandBuffer,
-			_pipelineLayout,
-			ShaderStageFlags.VertexBit,
-			0,
-			(uint)sizeof(float),
-			&aspectValue);
-
 		for (int index = 0; index < _drawPlan.Length; index++)
 		{
 			MeshDraw draw = _drawPlan[index];
+
+			Matrix4x4 mvp = draw.Model * _view * projection;
+
+			MeshPushConstants constants = new(mvp);
+
+			_api.CmdPushConstants(
+				commandBuffer,
+				_pipelineLayout,
+				ShaderStageFlags.VertexBit,
+				0,
+				(uint)sizeof(MeshPushConstants),
+				&constants);
 
 			VulkanMeshBuffers mesh =
 				_meshes.Buffers[draw.MeshIndex];
@@ -578,11 +673,13 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		Vk api,
 		Device device)
 	{
+		// One 4x4 matrix per draw: 64 bytes, well inside the 128
+		// bytes every Vulkan implementation must support.
 		PushConstantRange range = new()
 		{
 			StageFlags = ShaderStageFlags.VertexBit,
 			Offset = 0,
-			Size = (uint)sizeof(float)
+			Size = (uint)sizeof(MeshPushConstants)
 		};
 
 		PipelineLayoutCreateInfo description = new()

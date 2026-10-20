@@ -163,14 +163,19 @@ internal sealed class MeshSwapchainResources : IDisposable
 		RecordFrame = RecordFrameCore;
 	}
 
+	/// <summary>
+	/// Records one frame with this generation's swapchain resources.
+	/// </summary>
+	/// <remarks>
+	/// The renderer derives its projection from its own swapchain
+	/// extent every frame, so this generation's resize is reflected
+	/// without any cached aspect ratio.
+	/// </remarks>
 	private void RecordFrameCore(
 		CommandBuffer commandBuffer,
 		int imageIndex)
 	{
-		Extent2D extent = Swapchain.Extent;
-		float aspect = (float)extent.Width / extent.Height;
-
-		Renderer.Record(commandBuffer, imageIndex, aspect);
+		Renderer.Record(commandBuffer, imageIndex);
 	}
 
 	/// <summary>

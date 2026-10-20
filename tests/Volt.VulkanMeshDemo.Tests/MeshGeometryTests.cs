@@ -227,6 +227,242 @@ public sealed class MeshGeometryTests
 		Assert.True(referenceMaxX + 20.0f < quadMinX);
 	}
 
+	[Fact]
+	public void CreateCameraTransformMeshes_CoversEveryDrawPath()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateCameraTransformMeshes();
+
+		Assert.Equal(3, meshes.Length);
+		Assert.Equal(MeshIndexFormat.None, meshes[0].IndexFormat);
+		Assert.Equal(MeshIndexFormat.UInt16, meshes[1].IndexFormat);
+		Assert.Equal(MeshIndexFormat.UInt32, meshes[2].IndexFormat);
+
+		Assert.Equal(3, meshes[0].Vertices.Length);
+		Assert.Equal(4, meshes[1].Vertices.Length);
+		Assert.Equal(6, meshes[1].Indices16.Length);
+		Assert.Equal(7, meshes[2].Vertices.Length);
+		Assert.Equal(18, meshes[2].Indices32.Length);
+
+		Assert.Contains("red", meshes[0].Name);
+		Assert.Contains("blue", meshes[1].Name);
+		Assert.Contains("green", meshes[2].Name);
+	}
+
+	[Fact]
+	public void CreateCameraTransformMeshes_StoresLocalSpaceGeometry()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateCameraTransformMeshes();
+
+		// Local-space geometry is centred near the origin and is not
+		// pre-transformed on the CPU. Placement and scale come from
+		// the draw instances' model matrices.
+		foreach (MeshGeometry mesh in meshes)
+		{
+			Assert.All(
+				mesh.Vertices,
+				vertex => Assert.Equal(0.0f, vertex.Position.Z));
+
+			Assert.All(
+				mesh.Vertices,
+				vertex => Assert.InRange(vertex.Position.X, -1.0f, 1.0f));
+
+			Assert.All(
+				mesh.Vertices,
+				vertex => Assert.InRange(vertex.Position.Y, -1.0f, 1.0f));
+		}
+
+		Assert.Equal(-0.60f, meshes[0].Vertices[0].Position.X);
+		Assert.Equal(0.60f, meshes[0].Vertices[1].Position.X);
+		Assert.Equal(0.0f, meshes[0].Vertices[2].Position.X);
+
+		Assert.Equal(-1.0f, meshes[1].Vertices[0].Position.X);
+		Assert.Equal(1.0f, meshes[1].Vertices[1].Position.X);
+	}
+
+	[Fact]
+	public void CreateCameraTransformMeshes_UsesUniformInstanceColors()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateCameraTransformMeshes();
+
+		foreach (MeshGeometry mesh in meshes)
+		{
+			Vector3 color = mesh.Vertices[0].Color;
+
+			Assert.All(
+				mesh.Vertices,
+				vertex => Assert.Equal(color, vertex.Color));
+		}
+
+		Assert.True(meshes[0].Vertices[0].Color.X > 0.9f);
+		Assert.True(meshes[1].Vertices[0].Color.Z > 0.9f);
+		Assert.True(meshes[2].Vertices[0].Color.Y > 0.8f);
+	}
+
+	[Fact]
+	public void CreateCameraTransformMeshes_EveryIndexReferencesAnExistingVertex()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateCameraTransformMeshes();
+
+		Assert.Empty(meshes[0].Indices16);
+		Assert.Empty(meshes[0].Indices32);
+
+		Assert.Equal(0, meshes[1].Indices16.Length % 3);
+		Assert.All(
+			meshes[1].Indices16,
+			index => Assert.True(index < meshes[1].Vertices.Length));
+
+		Assert.Equal(0, meshes[2].Indices32.Length % 3);
+		Assert.All(
+			meshes[2].Indices32,
+			index => Assert.True(index < meshes[2].Vertices.Length));
+	}
+
+	[Fact]
+	public void CreateCameraTransformMeshes_DocumentedProbesLieInsideExpectedGeometry()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateCameraTransformMeshes();
+
+		Vector2[] triangleA = ProjectCamera(
+			CameraTransforms.TriangleAModel,
+			meshes[0].Vertices);
+
+		Vector2[] triangleB = ProjectCamera(
+			CameraTransforms.TriangleBModel,
+			meshes[0].Vertices);
+
+		Vector2[] quad = ProjectCamera(
+			CameraTransforms.QuadModel,
+			meshes[1].Vertices);
+
+		// The red probe is the projection of a point well inside
+		// triangle A. It must also fall inside the farther quad so
+		// the depth test decides which colour appears there.
+		Vector2 overlapProbe = ProjectCamera(
+			CameraTransforms.TriangleAModel,
+			new Vector3(0.0f, -0.1f, 0.0f));
+
+		Assert.InRange(overlapProbe.X, 483.0f, 485.0f);
+		Assert.InRange(overlapProbe.Y, 295.5f, 297.5f);
+
+		Assert.True(IsInsideTriangle(
+			overlapProbe,
+			triangleA[0],
+			triangleA[1],
+			triangleA[2]));
+
+		Assert.True(IsInsideQuad(overlapProbe, quad));
+
+		Assert.True(MinTriangleEdgeDistance(
+			overlapProbe,
+			triangleA[0],
+			triangleA[1],
+			triangleA[2]) > 25.0f);
+
+		Assert.True(MinQuadEdgeDistance(overlapProbe, quad) > 25.0f);
+
+		// The blue probe is inside the quad only, away from every
+		// triangle silhouette and from the quad's edges.
+		Vector2 quadOnlyProbe = new(700.0f, 430.0f);
+
+		Assert.True(IsInsideQuad(quadOnlyProbe, quad));
+		Assert.True(MinQuadEdgeDistance(quadOnlyProbe, quad) > 25.0f);
+
+		Assert.False(IsInsideTriangle(
+			quadOnlyProbe,
+			triangleA[0],
+			triangleA[1],
+			triangleA[2]));
+
+		Assert.False(IsInsideTriangle(
+			quadOnlyProbe,
+			triangleB[0],
+			triangleB[1],
+			triangleB[2]));
+
+		Assert.True(MinTriangleEdgeDistance(
+			quadOnlyProbe,
+			triangleA[0],
+			triangleA[1],
+			triangleA[2]) > 25.0f);
+
+		Assert.True(MinTriangleEdgeDistance(
+			quadOnlyProbe,
+			triangleB[0],
+			triangleB[1],
+			triangleB[2]) > 25.0f);
+	}
+
+	[Fact]
+	public void CreateCameraTransformMeshes_AllVerticesStayInsideTheFrustum()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateCameraTransformMeshes();
+
+		(Matrix4x4 Model, MeshGeometry Mesh)[] draws =
+		[
+			(CameraTransforms.TriangleAModel, meshes[0]),
+			(CameraTransforms.TriangleBModel, meshes[0]),
+			(CameraTransforms.QuadModel, meshes[1]),
+			(CameraTransforms.HexagonModel, meshes[2])
+		];
+
+		foreach ((Matrix4x4 model, MeshGeometry mesh) in draws)
+		{
+			foreach (MeshVertex vertex in mesh.Vertices)
+			{
+				Vector4 clip = ProjectCameraClip(model, vertex.Position);
+
+				Assert.True(
+					clip.W > 0.0f,
+					$"{mesh.Name} has a non-positive clip W.");
+
+				Assert.InRange(clip.X / clip.W, -0.9f, 0.9f);
+				Assert.InRange(clip.Y / clip.W, -0.9f, 0.9f);
+				Assert.InRange(clip.Z / clip.W, 0.0f, 1.0f);
+			}
+		}
+	}
+
+	/// <summary>
+	/// Projects one local-space vertex through its draw instance's
+	/// model matrix and the fixed perspective camera.
+	/// </summary>
+	private static Vector2 ProjectCamera(Matrix4x4 model, Vector3 local)
+	{
+		Vector4 clip = ProjectCameraClip(model, local);
+
+		return new Vector2(
+			((clip.X / clip.W) + 1.0f) * 0.5f * ProbeWidth,
+			((clip.Y / clip.W) + 1.0f) * 0.5f * ProbeHeight);
+	}
+
+	private static Vector4 ProjectCameraClip(
+		Matrix4x4 model,
+		Vector3 local)
+	{
+		Matrix4x4 mvp = CameraTransforms.CreateModelViewProjection(
+			DemoScene.CameraTransforms,
+			model,
+			ProbeWidth / (float)ProbeHeight);
+
+		Vector4 clip = Vector4.Transform(
+			new Vector4(local, 1.0f),
+			mvp);
+
+		Assert.True(clip.W > 0.0f);
+
+		return clip;
+	}
+
+	private static Vector2[] ProjectCamera(
+		Matrix4x4 model,
+		MeshVertex[] vertices)
+	{
+		return
+		[
+			.. vertices.Select(vertex => ProjectCamera(model, vertex.Position))
+		];
+	}
+
 	private const int ProbeWidth = 1280;
 	private const int ProbeHeight = 720;
 

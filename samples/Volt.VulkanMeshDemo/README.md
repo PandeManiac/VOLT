@@ -22,9 +22,11 @@ whole-mesh `VulkanMeshDrawCommands.Record` path, so the sample covers
 both complete-mesh and range draws of the same helper.
 
 The pipeline uses conventional position and color vertex input at
-binding zero, not shader-based vertex pulling. A single push constant
-supplies the current aspect ratio, so the three shapes stay separated
-and keep their proportions when the window is resized.
+binding zero, not shader-based vertex pulling. Each draw pushes one
+64-byte model-view-projection matrix, so the same pipeline renders
+clip-space shapes for the gallery and perspective geometry for the
+camera scene. The shader transforms local-space positions with
+`mvp * vec4(position, 1.0)`.
 
 ## Scenes
 
@@ -60,7 +62,59 @@ its image unchanged.
 `--scene depth-occlusion`. It disables depth testing and depth writes
 for the sample pipeline without changing the draw order, geometry,
 colours, mesh uploads, or depth attachment. The overlap pixel turns
-blue because the later quad is no longer rejected.
+blue because the later quad is no longer rejected. It is rejected for
+the gallery and camera scenes.
+
+## Camera transforms
+
+`--scene camera-transforms` uploads local-space meshes and draws them
+through model, view, and projection matrices. Three uploaded meshes
+produce five draw calls:
+
+| Draw | Mesh | Model transform | Draw path |
+| --- | --- | --- | --- |
+| Triangle A | Local triangle | Scale `0.45`, translate `(-0.75, 0.35, 0)` | 1 `vkCmdDraw` |
+| Triangle B | Same triangle buffer | Scale `0.40`, rotate Z 25°, rotate Y 35°, translate `(1.05, 0.50, -0.35)` | 1 `vkCmdDraw` |
+| Quad triangle A | Local quad | Scale `(1.35, 0.75, 1)`, translate `(0, 0, -1.1)` | First index range |
+| Quad triangle B | Same quad buffer | Same model matrix | Second index range |
+| Hexagon | Local hexagon | Scale `0.30`, translate `(-1.60, -0.85, -0.30)` | Complete mesh |
+
+Both triangle draws reference `MeshIndex 0`, so the sample uploads one
+triangle buffer and reuses it with two different model matrices. The
+quad's two index ranges share one model matrix, so the split draw still
+covers a single transformed quad. No vertices are pre-transformed and
+no vertex buffer is uploaded per frame.
+
+The camera is fixed at `(0, 0, 3)` looking at the world origin with up
+vector `(0, 1, 0)`. The projection uses a 60° vertical field of view,
+the current framebuffer aspect ratio, and near/far planes `0.1` and
+`100`. The near plane maps to depth `0` and the far plane to depth `1`,
+which matches Vulkan's 0..1 clip-space depth range. The projected Y
+row is negated so world-space +Y appears upwards in Vulkan's downward
+viewport.
+
+### Matrix convention
+
+`System.Numerics.Matrix4x4` uses row-vector transforms, so the sample
+composes `model * view * projection` and multiplies positions on the
+left. The sixteen floats are pushed in their natural memory order and
+GLSL reads them as a column-major `mat4`, which transposes the matrix
+implicitly. The shader therefore multiplies `mvp * vec4(position, 1.0)`
+and the CPU does not transpose. `CameraTransformsTests` checks this by
+reproducing the shader's column-major multiply from the packed bytes
+and comparing it to the CPU row-vector product for an asymmetric
+transform.
+
+The gallery and depth-occlusion scenes keep their previous behavior
+with identity model and view matrices and a projection that reproduces
+the old shader exactly: horizontal scale `1 / max(aspect, 1)`, vertical
+scale `min(aspect, 1)`, and Y inversion. Their geometry, draw order,
+depth values, and screenshots are unchanged.
+
+The projection is recomputed from the renderer's current extent on
+every frame, so a recreated swapchain cannot reuse a stale aspect
+ratio. The uploaded meshes are not re-uploaded when the window is
+resized.
 
 ## Depth attachment
 
@@ -97,11 +151,16 @@ later far blue quad. That is the depth-test proof; see
   logical device. Swapchain recreation does not re-upload them.
 - `MeshRenderer` owns the render pass, pipeline, depth attachments,
   and one framebuffer per swapchain image. It records one render pass
-  containing the draw plan: three meshes and four draw calls. Complete
-  meshes use `VulkanMeshDrawCommands.Record`; the quad's two triangles
-  use `VulkanMeshDrawCommands.RecordRange`. `MeshRenderer.CreateDrawPlan`
-  derives that sequence from the mesh geometries, so the plan can be
-  inspected and tested without a Vulkan device.
+  containing the draw plan: three meshes and four draw calls for the
+  gallery and depth-occlusion scenes, or five draw calls for the
+  camera scene. Complete meshes use `VulkanMeshDrawCommands.Record`;
+  the quad's two triangles use `VulkanMeshDrawCommands.RecordRange`.
+  `MeshRenderer.CreateDrawPlan` derives that sequence, including each
+  draw instance's model matrix, so the plan can be inspected and
+  tested without a Vulkan device.
+- `CameraTransforms` builds the legacy and perspective projections,
+  the fixed look-at view matrix, and the camera scene's model
+  transforms. It documents the row-vector/column-major convention.
 - `MeshSwapchainResources` owns one swapchain generation, including
   image views and the frame scheduler. It is recreated after resize or
   presentation-driven swapchain changes. Each creation is reported with
@@ -190,6 +249,29 @@ points are more than 30 pixels from every silhouette. The unit tests
 recompute this mapping and fail if geometry changes move either probe
 onto an edge.
 
+### Headless camera-transform verification
+
+The camera scene is verified on the GPU with the same harness. The red
+probe is the projected local point `(0, -0.1, 0)` inside triangle A,
+which also falls inside the farther blue quad. The blue probe is inside
+the quad only:
+
+```bash
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots --expect-clusters 2 \
+  --sample-arg=--scene --sample-arg camera-transforms \
+  --expect-pixel-class 484,296,red \
+  --expect-pixel-class 700,430,blue
+```
+
+At 1280x720 the camera projection places triangle A over the quad at
+about `(484, 296)`, triangle B around `(839, 275)`, the quad at
+`x = 435..845, y = 246..474`, and the hexagon below and left. The
+triangles are drawn before the quad, so the red probe proves depth
+testing still decides the overlap. Unit tests project the meshes with
+the same matrices and fail if either probe moves onto a silhouette.
+
 ### Resize scenario
 
 An opt-in resize scenario exercises swapchain recreation without user
@@ -238,10 +320,15 @@ this scenario; see `tools/README.md`.
 dotnet test tests/Volt.VulkanMeshDemo.Tests -c Release
 ```
 
-The focused tests cover mesh counts, index validity, the four-draw
-plan including the quad's two partial index ranges, scene selection
-and the depth-negative-control rules, occlusion depths and colours,
-analytic probe placement, command-line parsing for validation, bounded
-frames, and the resize scenario (paired arguments, bounds, malformed
-sizes, triggers at or past the frame limit, duplicates, and one-time
-triggering), plus the required swapchain maintenance1 negotiation.
+The focused tests cover mesh counts, index validity, the draw plans
+including the quad's two partial index ranges and the camera scene's
+two triangle instances sharing one uploaded mesh, scene selection and
+the depth-negative-control rules, occlusion depths and colours,
+local-space camera geometry, analytic probe placement for both scenes,
+matrix convention and packing, legacy projection equivalence,
+perspective near/far depth mapping, Y orientation, aspect-dependent
+projection for both resize extents, command-line parsing for
+validation, bounded frames, and the resize scenario (paired arguments,
+bounds, malformed sizes, triggers at or past the frame limit,
+duplicates, and one-time triggering), plus the required swapchain
+maintenance1 negotiation.

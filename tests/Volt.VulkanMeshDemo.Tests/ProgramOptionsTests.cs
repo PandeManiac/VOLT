@@ -152,6 +152,40 @@ public sealed class ProgramOptionsTests
 	}
 
 	[Fact]
+	public void TryParseOptions_ParsesCameraTransforms()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--scene", "camera-transforms"],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.Equal(DemoScene.CameraTransforms, options.Scene);
+		Assert.False(options.DepthTestDisabled);
+	}
+
+	[Fact]
+	public void TryParseOptions_ParsesCameraTransformsWithResize()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--frames", "600",
+					"--scene", "camera-transforms",
+					"--resize-at-frame", "200",
+					"--resize-to", "960x540"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.Equal(DemoScene.CameraTransforms, options.Scene);
+		Assert.Equal(200, options.ResizeAtFrame);
+		Assert.Equal(new WindowSize(960, 540), options.ResizeTo);
+	}
+
+	[Fact]
 	public void TryParseOptions_MissingSceneValue_Fails()
 	{
 		Assert.False(
@@ -176,7 +210,9 @@ public sealed class ProgramOptionsTests
 				out _,
 				out string error));
 
-		Assert.Contains("gallery or depth-occlusion", error);
+		Assert.Contains("gallery", error);
+		Assert.Contains("depth-occlusion", error);
+		Assert.Contains("camera-transforms", error);
 	}
 
 	[Fact]
@@ -226,6 +262,18 @@ public sealed class ProgramOptionsTests
 		Assert.False(
 			Program.TryParseOptions(
 				["--scene", "gallery", "--disable-depth-test"],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene depth-occlusion", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DisableDepthTestInCameraScene_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--scene", "camera-transforms", "--disable-depth-test"],
 				out _,
 				out string error));
 
