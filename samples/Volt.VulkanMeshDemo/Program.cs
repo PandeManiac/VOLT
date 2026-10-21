@@ -29,10 +29,12 @@ internal static class Program
 	private const string DisableDepthTestArgument = "--disable-depth-test";
 	private const string CameraScriptArgument = "--camera-script";
 	private const string EcsScriptArgument = "--ecs-script";
+	private const string RangeScriptArgument = "--range-script";
 	private const string GallerySceneName = "gallery";
 	private const string DepthOcclusionSceneName = "depth-occlusion";
 	private const string CameraTransformsSceneName = "camera-transforms";
 	private const string EcsSceneName = "ecs-scene";
+	private const string TargetRangeSceneName = "target-range";
 
 	/// <summary>
 	/// Upper bound for a requested resize dimension. It keeps the
@@ -80,7 +82,8 @@ internal static class Program
 			Console.Error.WriteLine(
 				"Usage: Volt.VulkanMeshDemo [--validation] [--frames N] " +
 				"[--scene gallery|depth-occlusion|camera-transforms|" +
-				"ecs-scene] [--camera-script] [--ecs-script] " +
+				"ecs-scene|target-range] [--camera-script] " +
+				"[--ecs-script] [--range-script] " +
 				"[--disable-depth-test] " +
 				"[--resize-at-frame N --resize-to WIDTHxHEIGHT]");
 
@@ -102,8 +105,15 @@ internal static class Program
 
 	private static void Run(SampleOptions options)
 	{
+		string windowTitle = options.Scene == DemoScene.TargetRange
+			? FormatTargetRangeTitle(
+				score: 0,
+				remaining: TargetRangeScene.TargetCount,
+				complete: false)
+			: "VOLT - Vulkan Mesh Demo";
+
 		WindowDescription description = new(
-			Title: "VOLT - Vulkan Mesh Demo",
+			Title: windowTitle,
 			Size: new WindowSize(1280, 720),
 			Resizable: true,
 			VulkanCompatible: true);
@@ -113,8 +123,13 @@ internal static class Program
 		// The camera and its input sampler live for the whole
 		// application, not for one swapchain generation, so a resize
 		// never resets the pose. The sample supplies its documented
-		// initial pose; the shared controller has no default.
-		CameraController camera = new(CameraTransforms.CameraPosition);
+		// initial pose; the shared controller has no default. The
+		// target range documents its own pose, and gameplay writes this
+		// controller into the camera entity on the first update, so the
+		// two must agree or the first frame would use a stale view.
+		CameraController camera = options.Scene == DemoScene.TargetRange
+			? new CameraController(TargetRangeScene.InitialCameraPosition)
+			: new CameraController(CameraTransforms.CameraPosition);
 
 		using CameraInput cameraInput = new(window);
 
@@ -275,6 +290,34 @@ internal static class Program
 					EcsMeshResolver.CreateDefault(meshes.Geometries))
 				: null;
 
+		// The playable scene owns its world and gameplay state for the
+		// whole application, so a resize never resets a round.
+		using TargetRangeScene? targetRangeScene =
+			options.Scene == DemoScene.TargetRange
+				? new TargetRangeScene(
+					EcsMeshResolver.CreateTargetRange(meshes.Geometries))
+				: null;
+
+		if (targetRangeScene is not null &&
+			Vector3.Distance(
+				targetRangeScene.CameraPosition,
+				camera.Position) > 0.0001f)
+		{
+			throw new InvalidOperationException(
+				"The target range camera entity and the active camera " +
+				"must start at the same documented pose; otherwise the " +
+				"first gameplay update would move the view unexpectedly.");
+		}
+
+		TargetRangeController? targetRangeController =
+			targetRangeScene is null
+				? null
+				: new TargetRangeController(targetRangeScene);
+
+		TargetRangeScript? targetRangeScript = options.RangeScript
+			? new TargetRangeScript()
+			: null;
+
 		string shaderDirectory = Path.Combine(
 			AppContext.BaseDirectory,
 			"Shaders");
@@ -317,6 +360,26 @@ internal static class Program
 						"camera mutation.");
 		}
 
+		if (targetRangeScene is not null && targetRangeController is not null)
+		{
+			Console.WriteLine(
+				$"Target range: {TargetRangeScene.TargetCount} targets, " +
+				$"{targetRangeScene.Extract().Length} renderable entities " +
+				$"from {targetRangeScene.World.Count} world entities, " +
+				$"camera entity {targetRangeScene.CameraEntity}, " +
+				$"{targetRangeScene.CountDrawCommands()} scene draws plus " +
+				$"1 reticle draw per frame, " +
+				$"score {targetRangeController.Score}/" +
+				$"{TargetRangeScene.MaximumScore}.");
+
+			Console.WriteLine(
+				targetRangeScript is null
+					? "Target range: interactive (WASD, space/ctrl, " +
+						"shift sprints, click captures the mouse then fires, " +
+						"R restarts, escape releases)."
+					: "Target range: scripted deterministic round.");
+		}
+
 		foreach (MeshGeometry geometry in meshes.Geometries)
 		{
 			string indexDescription = geometry.IndexFormat switch
@@ -351,6 +414,9 @@ internal static class Program
 			cameraScript,
 			ecsScene,
 			ecsScript,
+			targetRangeScene,
+			targetRangeController,
+			targetRangeScript,
 			options,
 			Path.Combine(shaderDirectory, "mesh.vert.spv"),
 			Path.Combine(shaderDirectory, "mesh.frag.spv"));
@@ -371,6 +437,9 @@ internal static class Program
 		CameraScript? cameraScript,
 		EcsDemoScene? ecsScene,
 		EcsScript? ecsScript,
+		TargetRangeScene? targetRangeScene,
+		TargetRangeController? targetRangeController,
+		TargetRangeScript? targetRangeScript,
 		SampleOptions options,
 		string vertexShaderPath,
 		string fragmentShaderPath)
@@ -384,6 +453,21 @@ internal static class Program
 		bool interactiveCamera =
 			options.Scene == DemoScene.CameraTransforms &&
 			cameraScript is null;
+
+		bool interactiveTargetRange =
+			targetRangeScene is not null &&
+			targetRangeScript is null;
+
+		IEcsRenderScene? renderScene = targetRangeScene is not null
+			? targetRangeScene
+			: ecsScene;
+
+		// The window is created with the matching initial title, so the
+		// first update does not rewrite it. A title is only rebuilt when
+		// the score or the round state actually changes.
+		int lastTargetRangeScore = 0;
+		bool lastTargetRangeComplete = false;
+		bool titleFailureReported = false;
 
 		bool postRecreationCheckpointLogged = false;
 
@@ -423,6 +507,26 @@ internal static class Program
 				if (interactiveCamera)
 				{
 					cameraInput.Update(camera, deltaSeconds);
+				}
+				else if (interactiveTargetRange &&
+					targetRangeController is not null)
+				{
+					// The same sampler drives the camera, then gameplay
+					// consumes only the one-shot edges it reports. A click
+					// that captures the mouse never also fires.
+					CameraInputSnapshot snapshot =
+						cameraInput.Update(camera, deltaSeconds);
+
+					targetRangeController.Update(
+						TargetRangeCommand.FromInput(snapshot),
+						camera);
+
+					UpdateTargetRangeTitle(
+						window,
+						targetRangeController,
+						ref lastTargetRangeScore,
+						ref lastTargetRangeComplete,
+						ref titleFailureReported);
 				}
 
 				if (window.ShouldClose)
@@ -487,7 +591,7 @@ internal static class Program
 						surface,
 						meshes,
 						camera,
-						ecsScene,
+						renderScene,
 						commandBuffers,
 						framebufferSize,
 						MaxFramesInFlight,
@@ -580,6 +684,32 @@ internal static class Program
 						presentedFrames);
 				}
 
+				if (targetRangeScript is not null &&
+					targetRangeScene is not null &&
+					targetRangeController is not null)
+				{
+					// The script only advances on accepted presentation,
+					// so a dropped frame or a swapchain recreation never
+					// repeats or skips a gameplay action. Its mutation is
+					// visible from the next recorded frame.
+					LogTargetRangeCheckpoint(
+						targetRangeScript.Advance(
+							targetRangeScene,
+							targetRangeController,
+							camera),
+						targetRangeController,
+						targetRangeScene,
+						presentedFrames,
+						targetRangeScript);
+
+					UpdateTargetRangeTitle(
+						window,
+						targetRangeController,
+						ref lastTargetRangeScore,
+						ref lastTargetRangeComplete,
+						ref titleFailureReported);
+				}
+
 				if (ShouldRequestResize(
 						presentedFrames,
 						options,
@@ -636,6 +766,24 @@ internal static class Program
 					Console.WriteLine(
 						$"Ecs state stable after recreation: " +
 						$"{FormatEcsState(ecsScene)} after " +
+						$"{presentedFrames - resizeRecreationFrame} " +
+						$"accepted frames in generation " +
+						$"{swapchainGeneration}.");
+				}
+
+				if (targetRangeController is not null &&
+					targetRangeScene is not null &&
+					resizeObserved &&
+					!postRecreationCheckpointLogged &&
+					presentedFrames - resizeRecreationFrame >=
+						PostRecreationCheckpointFrames)
+				{
+					postRecreationCheckpointLogged = true;
+
+					Console.WriteLine(
+						$"Target range state stable after recreation: " +
+						$"{FormatTargetRangeState(targetRangeController, targetRangeScene)} " +
+						$"after " +
 						$"{presentedFrames - resizeRecreationFrame} " +
 						$"accepted frames in generation " +
 						$"{swapchainGeneration}.");
@@ -719,6 +867,31 @@ internal static class Program
 					$"Ecs changed state held for " +
 					$"{ecsScript.FramesHoldingChangedState} " +
 					$"accepted frames.");
+			}
+
+			if (targetRangeScript is not null &&
+				targetRangeController is not null &&
+				targetRangeScene is not null)
+			{
+				if (!targetRangeScript.HasReachedFinalState)
+				{
+					throw new InvalidOperationException(
+						$"The target range script did not reach its " +
+						$"completed round before the run ended at " +
+						$"{presentedFrames} accepted frames; it " +
+						$"presented the completed state for " +
+						$"{targetRangeScript.FramesHoldingFinalState} " +
+						$"frames of {TargetRangeScript.FinalHoldFrames}.");
+				}
+
+				Console.WriteLine(
+					$"Target range completed state held for " +
+					$"{targetRangeScript.FramesHoldingFinalState} " +
+					$"accepted frames.");
+
+				Console.WriteLine(
+					$"Target range final state: " +
+					$"{FormatTargetRangeState(targetRangeController, targetRangeScene)}.");
 			}
 
 			Console.WriteLine(
@@ -877,6 +1050,230 @@ internal static class Program
 	}
 
 	/// <summary>
+	/// Writes the checkpoint produced by one accepted scripted
+	/// gameplay frame.
+	/// </summary>
+	/// <remarks>
+	/// Every line is emitted from the accepted-presentation path, so it
+	/// describes state that the next recorded frame will draw. Lines say
+	/// whether they report a request, a verified state change, or a state
+	/// held long enough to be proven presented.
+	/// </remarks>
+	private static void LogTargetRangeCheckpoint(
+		TargetRangeScriptCheckpoint checkpoint,
+		TargetRangeController controller,
+		TargetRangeScene scene,
+		int presentedFrames,
+		TargetRangeScript script)
+	{
+		switch (checkpoint)
+		{
+			case TargetRangeScriptCheckpoint.None:
+				break;
+
+			case TargetRangeScriptCheckpoint.InitialState:
+				Console.WriteLine(
+					$"Target range script: initial state presented at " +
+					$"accepted frame {presentedFrames}: " +
+					$"{FormatTargetRangeState(controller, scene)}.");
+				break;
+
+			case TargetRangeScriptCheckpoint.MissRequested:
+				Console.WriteLine(
+					$"Target range script: miss shot requested after " +
+					$"accepted frame {presentedFrames}: " +
+					$"score={controller.Score}, camera=" +
+					$"{FormatCameraEntityPose(scene)}.");
+				break;
+
+			case TargetRangeScriptCheckpoint.MissVerified:
+				Console.WriteLine(
+					$"Target range script: miss verified after accepted " +
+					$"frame {presentedFrames}: score unchanged at " +
+					$"{controller.Score}, remaining=" +
+					$"{controller.RemainingTargets}; state presented from " +
+					$"frame {presentedFrames + 1}.");
+				break;
+
+			case TargetRangeScriptCheckpoint.HitRequested:
+				Console.WriteLine(
+					$"Target range script: shot requested after accepted " +
+					$"frame {presentedFrames}: score={controller.Score}, " +
+					$"camera={FormatCameraEntityPose(scene)}.");
+				break;
+
+			case TargetRangeScriptCheckpoint.HitVerified:
+				Console.WriteLine(
+					$"Target range script: hit verified after accepted " +
+					$"frame {presentedFrames}: " +
+					$"{FormatTargetRangeState(controller, scene)}; " +
+					$"target visuals updated in ECS and presented from " +
+					$"frame {presentedFrames + 1}.");
+				break;
+
+			case TargetRangeScriptCheckpoint.DuplicateRequested:
+				Console.WriteLine(
+					$"Target range script: duplicate shot requested at a " +
+					$"completed target after accepted frame " +
+					$"{presentedFrames}.");
+				break;
+
+			case TargetRangeScriptCheckpoint.DuplicateVerified:
+				Console.WriteLine(
+					$"Target range script: duplicate shot verified after " +
+					$"accepted frame {presentedFrames}: score unchanged " +
+					$"at {controller.Score}.");
+				break;
+
+			case TargetRangeScriptCheckpoint.MovementStarted:
+				Console.WriteLine(
+					$"Target range script: forward movement requested " +
+					$"after accepted frame {presentedFrames}: camera=" +
+					$"{FormatCameraEntityPose(scene)}.");
+				break;
+
+			case TargetRangeScriptCheckpoint.MovementVerified:
+				Console.WriteLine(
+					$"Target range script: movement verified after " +
+					$"accepted frame {presentedFrames}: camera entity " +
+					$"moved to {FormatCameraEntityPose(scene)}.");
+				break;
+
+			case TargetRangeScriptCheckpoint.RestartRequested:
+				Console.WriteLine(
+					$"Target range script: restart requested after " +
+					$"accepted frame {presentedFrames}: score before " +
+					$"restart={script.ScoreBeforeRestart}.");
+				break;
+
+			case TargetRangeScriptCheckpoint.RestartVerified:
+				Console.WriteLine(
+					$"Target range script: restart verified after " +
+					$"accepted frame {presentedFrames}: " +
+					$"{FormatTargetRangeState(controller, scene)}; " +
+					$"every target restored to its authored position, " +
+					$"size, and unhit mesh.");
+				break;
+
+			case TargetRangeScriptCheckpoint.RoundCompleted:
+				Console.WriteLine(
+					$"Target range script: round complete after accepted " +
+					$"frame {presentedFrames}: " +
+					$"{FormatTargetRangeState(controller, scene)}; " +
+					$"completed state presented from frame " +
+					$"{presentedFrames + 1}.");
+				break;
+
+			case TargetRangeScriptCheckpoint.FinalStateHeld:
+				Console.WriteLine(
+					$"Target range script: final state proven presented " +
+					$"after accepted frame {presentedFrames}: " +
+					$"{FormatTargetRangeState(controller, scene)}; " +
+					$"held for {script.FramesHoldingFinalState} accepted " +
+					$"frames.");
+				break;
+		}
+	}
+
+	/// <summary>
+	/// Formats the target range's gameplay and camera state with
+	/// invariant numbers.
+	/// </summary>
+	private static string FormatTargetRangeState(
+		TargetRangeController controller,
+		TargetRangeScene scene)
+	{
+		return string.Create(
+			CultureInfo.InvariantCulture,
+			$"score={controller.Score}, " +
+			$"completed={controller.CompletedTargets}, " +
+			$"remaining={controller.RemainingTargets}, " +
+			$"roundComplete={controller.IsRoundComplete}, " +
+			$"camera={FormatCameraEntityPose(scene)}");
+	}
+
+	/// <summary>
+	/// Formats the ECS camera entity's pose with invariant numbers.
+	/// </summary>
+	private static string FormatCameraEntityPose(TargetRangeScene scene)
+	{
+		Vector3 position = scene.CameraPosition;
+		Vector3 forward = scene.CameraForward;
+
+		return string.Create(
+			CultureInfo.InvariantCulture,
+			$"({position.X:F3}, {position.Y:F3}, " +
+			$"{position.Z:F3}) forward=({forward.X:F3}, " +
+			$"{forward.Y:F3}, {forward.Z:F3})");
+	}
+
+	/// <summary>
+	/// Formats the target range window title.
+	/// </summary>
+	/// <remarks>
+	/// This is the sample's visible score and progress feedback. It is
+	/// only called when the score or round state changes, so no formatted
+	/// string is allocated per frame.
+	/// </remarks>
+	internal static string FormatTargetRangeTitle(
+		int score,
+		int remaining,
+		bool complete)
+	{
+		if (complete)
+		{
+			return $"VOLT Target Range - COMPLETE {score}/" +
+				$"{TargetRangeScene.MaximumScore} - press R to restart";
+		}
+
+		return $"VOLT Target Range - {score}/" +
+			$"{TargetRangeScene.MaximumScore} - {remaining} " +
+			$"{(remaining == 1 ? "target" : "targets")} remaining";
+	}
+
+	/// <summary>
+	/// Updates the window title when, and only when, the score or round
+	/// state changed.
+	/// </summary>
+	private static void UpdateTargetRangeTitle(
+		Window window,
+		TargetRangeController controller,
+		ref int lastScore,
+		ref bool lastComplete,
+		ref bool failureReported)
+	{
+		if (controller.Score == lastScore &&
+			controller.IsRoundComplete == lastComplete)
+		{
+			return;
+		}
+
+		lastScore = controller.Score;
+		lastComplete = controller.IsRoundComplete;
+
+		string title = FormatTargetRangeTitle(
+			controller.Score,
+			controller.RemainingTargets,
+			controller.IsRoundComplete);
+
+		if (SDL.SetWindowTitle(window.NativeHandle, title))
+		{
+			return;
+		}
+
+		if (failureReported)
+		{
+			return;
+		}
+
+		failureReported = true;
+
+		Console.Error.WriteLine(
+			$"The target range window title could not be updated: " +
+			$"{SDL.GetError()}");
+	}
+
+	/// <summary>
 	/// Requires a supported swapchain maintenance1 extension with
 	/// presentation fences.
 	/// </summary>
@@ -918,6 +1315,7 @@ internal static class Program
 		bool depthTestDisabled = false;
 		bool cameraScript = false;
 		bool ecsScript = false;
+		bool rangeScript = false;
 
 		for (int index = 0; index < args.Length; index++)
 		{
@@ -1065,8 +1463,9 @@ internal static class Program
 							"The --scene value must be " +
 							$"{GallerySceneName}, " +
 							$"{DepthOcclusionSceneName}, " +
-							$"{CameraTransformsSceneName}, or " +
-							$"{EcsSceneName}.";
+							$"{CameraTransformsSceneName}, " +
+							$"{EcsSceneName}, or " +
+							$"{TargetRangeSceneName}.";
 						return false;
 					}
 
@@ -1083,6 +1482,18 @@ internal static class Program
 					}
 
 					ecsScript = true;
+					break;
+
+				case RangeScriptArgument:
+					if (rangeScript)
+					{
+						options = default;
+						error =
+							"The --range-script argument was supplied twice.";
+						return false;
+					}
+
+					rangeScript = true;
 					break;
 
 				case CameraScriptArgument:
@@ -1207,6 +1618,35 @@ internal static class Program
 			return false;
 		}
 
+		if (rangeScript && selectedScene != DemoScene.TargetRange)
+		{
+			options = default;
+			error =
+				"The --range-script argument requires " +
+				$"--scene {TargetRangeSceneName}.";
+			return false;
+		}
+
+		if (rangeScript && !frameLimit.HasValue)
+		{
+			options = default;
+			error =
+				"The --range-script argument requires a bounded " +
+				"--frames run.";
+			return false;
+		}
+
+		if (rangeScript &&
+			frameLimit is int rangeFrames &&
+			rangeFrames < TargetRangeScript.MinimumFrameLimit)
+		{
+			options = default;
+			error =
+				"The --range-script run requires --frames of at " +
+				$"least {TargetRangeScript.MinimumFrameLimit}.";
+			return false;
+		}
+
 		options = new SampleOptions(
 			validation,
 			frameLimit,
@@ -1215,7 +1655,8 @@ internal static class Program
 			selectedScene,
 			depthTestDisabled,
 			cameraScript,
-			ecsScript);
+			ecsScript,
+			rangeScript);
 
 		error = string.Empty;
 		return true;
@@ -1244,6 +1685,10 @@ internal static class Program
 				scene = DemoScene.EcsScene;
 				return true;
 
+			case TargetRangeSceneName:
+				scene = DemoScene.TargetRange;
+				return true;
+
 			default:
 				scene = default;
 				return false;
@@ -1258,6 +1703,7 @@ internal static class Program
 			DemoScene.DepthOcclusion => DepthOcclusionSceneName,
 			DemoScene.CameraTransforms => CameraTransformsSceneName,
 			DemoScene.EcsScene => EcsSceneName,
+			DemoScene.TargetRange => TargetRangeSceneName,
 			_ => "unknown"
 		};
 	}
@@ -1359,4 +1805,5 @@ internal readonly record struct SampleOptions(
 	DemoScene Scene,
 	bool DepthTestDisabled,
 	bool CameraScript = false,
-	bool EcsScript = false);
+	bool EcsScript = false,
+	bool RangeScript = false);

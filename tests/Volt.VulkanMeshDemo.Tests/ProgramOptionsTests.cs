@@ -946,6 +946,186 @@ public sealed class ProgramOptionsTests
 		Assert.Equal(DemoScene.Gallery, options.Scene);
 	}
 
+	[Fact]
+	public void TryParseOptions_ParsesTargetRange()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--frames", "600", "--scene", "target-range"],
+				out SampleOptions options,
+				out _));
+
+		Assert.Equal(DemoScene.TargetRange, options.Scene);
+		Assert.False(options.RangeScript);
+		Assert.Null(options.ResizeAtFrame);
+	}
+
+	[Fact]
+	public void TryParseOptions_ParsesRangeScript()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--scene", "target-range",
+					"--range-script",
+					"--frames", "600"
+				],
+				out SampleOptions options,
+				out _));
+
+		Assert.Equal(DemoScene.TargetRange, options.Scene);
+		Assert.True(options.RangeScript);
+	}
+
+	[Fact]
+	public void TryParseOptions_RangeScriptWithResize_Parses()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--scene", "target-range",
+					"--range-script",
+					"--frames", "600",
+					"--resize-at-frame", "200",
+					"--resize-to", "960x540"
+				],
+				out SampleOptions options,
+				out _));
+
+		Assert.True(options.RangeScript);
+		Assert.Equal(200, options.ResizeAtFrame);
+		Assert.Equal(new WindowSize(960, 540), options.ResizeTo);
+	}
+
+	[Theory]
+	[InlineData("gallery")]
+	[InlineData("depth-occlusion")]
+	[InlineData("camera-transforms")]
+	[InlineData("ecs-scene")]
+	public void TryParseOptions_RangeScriptOutsideTargetRange_Fails(
+		string scene)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", scene,
+					"--range-script",
+					"--frames", "600"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene target-range", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_RangeScriptWithoutScene_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--range-script", "--frames", "600"],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene target-range", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_RangeScriptWithoutFrameLimit_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--scene", "target-range", "--range-script"],
+				out _,
+				out string error));
+
+		Assert.Contains("bounded --frames run", error);
+	}
+
+	[Theory]
+	[InlineData("1")]
+	[InlineData("189")]
+	public void TryParseOptions_RangeScriptTooShort_Fails(string frames)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "target-range",
+					"--range-script",
+					"--frames", frames
+				],
+				out _,
+				out string error));
+
+		Assert.Contains(
+			$"at least {TargetRangeScript.MinimumFrameLimit}",
+			error);
+	}
+
+	[Fact]
+	public void TryParseOptions_RangeScriptAtMinimumFrames_Parses()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--scene", "target-range",
+					"--range-script",
+					"--frames",
+					TargetRangeScript.MinimumFrameLimit.ToString(
+						System.Globalization.CultureInfo.InvariantCulture)
+				],
+				out SampleOptions options,
+				out _));
+
+		Assert.True(options.RangeScript);
+	}
+
+	[Fact]
+	public void TryParseOptions_DuplicateRangeScript_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "target-range",
+					"--range-script",
+					"--range-script",
+					"--frames", "600"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("twice", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_CameraScriptWithTargetRange_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "target-range",
+					"--camera-script",
+					"--frames", "600"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene camera-transforms", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DefaultRunHasNoRangeScript()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--frames", "120"],
+				out SampleOptions options,
+				out _));
+
+		Assert.False(options.RangeScript);
+		Assert.Equal(DemoScene.Gallery, options.Scene);
+	}
+
 	private static SampleOptions ResizeOptions(int frame)
 	{
 		return new SampleOptions(

@@ -5,6 +5,33 @@ using Volt.Rendering.Cameras;
 namespace Volt.VulkanMeshDemo;
 
 /// <summary>
+/// Describes the gameplay-relevant events of one sampled input frame.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The camera itself has already been updated by the time this value
+/// is returned. The snapshot carries only what gameplay needs: whether
+/// this window owns the input, the one-shot button edges, and the
+/// movement that was requested.
+/// </para>
+/// <para>
+/// Both edges are computed from raw sampled state, including samples
+/// taken while the window is unfocused. Holding a button in another
+/// application and then focusing this one therefore cannot fabricate a
+/// press: the held state has already been observed.
+/// </para>
+/// <para>
+/// The type is a value type with no managed references, so returning
+/// it per frame allocates nothing.
+/// </para>
+/// </remarks>
+internal readonly record struct CameraInputSnapshot(
+	bool KeyboardFocused,
+	bool FireRequested,
+	bool RestartRequested,
+	CameraMovementInput Movement);
+
+/// <summary>
 /// Samples the sample window's keyboard and mouse state and feeds it
 /// to the camera controller.
 /// </summary>
@@ -42,6 +69,7 @@ internal sealed class CameraInput : IDisposable
 	private readonly CameraCaptureController _capture;
 
 	private bool _releaseFailureReported;
+	private bool _restartWasDown;
 	private bool _disposed;
 
 	/// <summary>
@@ -61,14 +89,21 @@ internal sealed class CameraInput : IDisposable
 	}
 
 	/// <summary>
-	/// Samples input and integrates it into the camera.
+	/// Samples input, integrates it into the camera, and reports the
+	/// frame's gameplay edges.
 	/// </summary>
 	/// <param name="camera">The camera to update.</param>
 	/// <param name="deltaSeconds">
 	/// Elapsed time since the previous update, in seconds. The
 	/// controller clamps and validates it.
 	/// </param>
-	public void Update(CameraController camera, float deltaSeconds)
+	/// <returns>
+	/// The frame's focus state, one-shot fire and restart edges, and
+	/// the movement that was applied.
+	/// </returns>
+	public CameraInputSnapshot Update(
+		CameraController camera,
+		float deltaSeconds)
 	{
 		ArgumentNullException.ThrowIfNull(camera);
 		ObjectDisposedException.ThrowIf(_disposed, this);
@@ -106,11 +141,28 @@ internal sealed class CameraInput : IDisposable
 			}
 		}
 
-		camera.Move(
-			keyboardFocused
-				? SampleMovement(keys)
-				: CameraMovementInput.None,
-			deltaSeconds);
+		CameraMovementInput movement = keyboardFocused
+			? SampleMovement(keys)
+			: CameraMovementInput.None;
+
+		camera.Move(movement, deltaSeconds);
+
+		// The raw key state is tracked even without focus so a key that
+		// was already held when the window regained focus is not a new
+		// press. The edge itself is only reported while focused.
+		bool restartDown = IsDown(keys, SDL.Scancode.R);
+		bool restartRequested =
+			keyboardFocused &&
+			restartDown &&
+			!_restartWasDown;
+
+		_restartWasDown = restartDown;
+
+		return new CameraInputSnapshot(
+			KeyboardFocused: keyboardFocused,
+			FireRequested: transition.FireRequested,
+			RestartRequested: restartRequested,
+			Movement: movement);
 	}
 
 	/// <summary>

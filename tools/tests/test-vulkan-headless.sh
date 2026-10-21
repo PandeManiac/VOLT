@@ -385,6 +385,7 @@ width, height = 1280, 720
 background = (16, 16, 20)
 foreground = (220, 90, 60)
 blue = (60, 90, 220)
+white = (245, 245, 245)
 runs = ((300, 490), (560, 720), (770, 960))
 
 background_row = bytes(background) * width
@@ -400,6 +401,11 @@ for y in range(200, 481):
     # unchanged while giving pixel-class assertions both colours.
     if 300 <= y <= 340:
         row[600 * 3:681 * 3] = bytes(blue) * 81
+
+    # A small white patch inside the same bar exercises the bright
+    # neutral class without adding a content cluster.
+    if 247 <= y <= 253:
+        row[637 * 3:644 * 3] = bytes(white) * 7
 
     content_rows[y] = bytes(row)
 
@@ -952,6 +958,26 @@ assert_contains "$RUN_DIR/summary.txt" "pixel_expectations=3"
 assert_contains "$RUN_DIR/summary.txt" "IMAGE_PIXEL=350,300"
 assert_contains "$RUN_DIR/invocation.log" "pixel_expectation=350,300,red"
 assert_contains "$RUN_DIR/invocation.log" "pixel_expectation=640,320,blue"
+assert_runtime_clean
+end_case
+
+begin_case "pixel-white-pass"
+run_default --frames 5 --screenshots --expect-pixel-class 640,250,white
+assert_rc 0
+assert_run_dir
+assert_contains "$RUN_DIR/image-analysis.log" \
+    "IMAGE_PIXEL=640,250,expected=white,actual=245,245,245,class=white,PASS"
+assert_contains "$RUN_DIR/image-analysis.log" "IMAGE_OK"
+assert_runtime_clean
+end_case
+
+begin_case "pixel-white-fail"
+run_default --frames 5 --screenshots --expect-pixel-class 350,300,white
+assert_rc 10
+assert_run_dir
+assert_contains "$RUN_DIR/image-analysis.log" \
+    "IMAGE_PIXEL=350,300,expected=white,actual=220,90,60,class=red,FAIL"
+assert_contains "$CASE_DIR/console.err" "expected white, got red"
 assert_runtime_clean
 end_case
 

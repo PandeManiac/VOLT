@@ -88,7 +88,7 @@ Options:
                           screenshot (use 3 for Volt.VulkanMeshDemo).
   --expect-pixel-class X,Y,CLASS
                           Require the pixel at X,Y to be dominated by
-                          CLASS: red or blue. Repeatable; needs
+                          CLASS: red, blue, or white. Repeatable; needs
                           --screenshots. The actual RGB value and class
                           are recorded in image-analysis.log.
   --screenshot-after-line TEXT
@@ -1106,13 +1106,13 @@ if chunks[-1][0] != b"IEND" or chunks[-1][1] != b"":
 (width, height, depth, color_type, compression, filter_method,
     interlace) = struct.unpack(">IIBBBBB", chunks[0][1])
 
-supported_pixel_classes = ("red", "blue")
+supported_pixel_classes = ("red", "blue", "white")
 
 for pixel_x, pixel_y, expected_class in pixel_expectations:
     if expected_class not in supported_pixel_classes:
         fail(
             f"unsupported pixel class '{expected_class}'; "
-            "supported classes: red, blue")
+            "supported classes: red, blue, white")
 
     if pixel_x >= width or pixel_y >= height:
         fail(
@@ -1238,12 +1238,19 @@ def pixel(row, x):
 
 def classify_pixel(red, green, blue):
     # Dominance checks tolerate sRGB conversion and rasterization
-    # differences while rejecting blended or background pixels.
+    # differences while rejecting blended or background pixels. The
+    # white class is for bright neutral geometry such as a reticle: it
+    # requires every channel above the background and only a small
+    # spread between them, so a pale target tint stays "other".
     if red > 100 and red - green >= 40 and red - blue >= 40:
         return "red"
 
     if blue > 100 and blue - red >= 40 and blue - green >= 40:
         return "blue"
+
+    if min(red, green, blue) > 150 and max(red, green, blue) - min(
+            red, green, blue) <= 60:
+        return "white"
 
     return "other"
 

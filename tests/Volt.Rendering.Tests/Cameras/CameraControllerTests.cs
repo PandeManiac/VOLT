@@ -691,6 +691,88 @@ public sealed class CameraControllerTests
 			sprint);
 	}
 
+	[Fact]
+	public void SetPose_RestoresTheDocumentedPose()
+	{
+		CameraController camera = new(new Vector3(4.0f, 2.0f, -3.0f));
+
+		camera.ApplyLook(400.0f, -120.0f);
+		camera.Move(CameraMovementInput.ForwardOnly, 0.5f);
+
+		Vector3 position = new(1.5f, 0.25f, 6.0f);
+
+		camera.SetPose(position, 0.75f, -0.4f);
+
+		Assert.Equal(position, camera.Position);
+		Assert.Equal(0.75f, camera.Yaw, 5);
+		Assert.Equal(-0.4f, camera.Pitch, 5);
+
+		float cosPitch = MathF.Cos(-0.4f);
+
+		AssertVectorNear(
+			new Vector3(
+				-MathF.Sin(0.75f) * cosPitch,
+				MathF.Sin(-0.4f),
+				-MathF.Cos(0.75f) * cosPitch),
+			camera.Forward);
+	}
+
+	[Fact]
+	public void SetPose_ReturnsToTheIdentityOrientation()
+	{
+		CameraController camera = new(Vector3.Zero);
+
+		camera.ApplyLook(-900.0f, 300.0f);
+
+		camera.SetPose(Vector3.Zero, 0.0f, 0.0f);
+
+		Assert.Equal(Quaternion.Identity, camera.CreateRotation());
+		Assert.Equal(-Vector3.UnitZ, camera.Forward);
+		Assert.Equal(Matrix4x4.Identity, camera.CreateView());
+	}
+
+	[Fact]
+	public void SetPose_ClampsPitchWithoutWrappingYaw()
+	{
+		CameraController camera = new(Vector3.Zero);
+
+		camera.SetPose(Vector3.Zero, 9.0f, MathF.PI);
+
+		Assert.Equal(9.0f, camera.Yaw, 5);
+		Assert.Equal(CameraController.MaxPitchRadians, camera.Pitch, 5);
+	}
+
+	[Theory]
+	[InlineData(float.NaN, 0.0f)]
+	[InlineData(0.0f, float.PositiveInfinity)]
+	[InlineData(0.0f, float.NaN)]
+	public void SetPose_RejectsNonFiniteAngles(float yaw, float pitch)
+	{
+		CameraController camera = new(Vector3.One);
+
+		Assert.Throws<ArgumentOutOfRangeException>(
+			() => camera.SetPose(Vector3.One, yaw, pitch));
+
+		// The invalid call leaves the previous pose untouched.
+		Assert.Equal(Vector3.One, camera.Position);
+		Assert.Equal(0.0f, camera.Yaw);
+		Assert.Equal(0.0f, camera.Pitch);
+	}
+
+	[Fact]
+	public void SetPose_RejectsANonFinitePosition()
+	{
+		CameraController camera = new(Vector3.One);
+
+		Assert.Throws<ArgumentOutOfRangeException>(
+			() => camera.SetPose(
+				new Vector3(float.NaN, 0.0f, 0.0f),
+				0.0f,
+				0.0f));
+
+		Assert.Equal(Vector3.One, camera.Position);
+	}
+
 	/// <summary>
 	/// Produces the requested orientation through the same mouse-delta
 	/// path as interactive input.

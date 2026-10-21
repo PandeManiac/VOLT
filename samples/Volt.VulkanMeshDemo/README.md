@@ -32,9 +32,10 @@ camera scene. The shader transforms local-space positions with
 
 `--scene gallery` is the default and renders the three separated meshes
 described above. `--scene ecs-scene` is the opt-in ECS-driven scene
-described in [ECS scene](#ecs-scene). `--scene depth-occlusion` uploads
-an overlapping scene instead, once per run, through the same mesh
-buffers:
+described in [ECS scene](#ecs-scene). `--scene target-range` is the
+playable first-person round described in
+[Target range](#target-range). `--scene depth-occlusion` uploads an
+overlapping scene instead, once per run, through the same mesh buffers:
 
 | Mesh | Geometry | Depth | Index format | Draws |
 | --- | --- | --- | --- | --- |
@@ -387,6 +388,306 @@ the sharper camera probe. Comparing the two screenshots leaves about
 `x = 430..866` to `x = 554..814`: triangle A moved right, triangle B
 moved left.
 
+## Target range
+
+`--scene target-range` is a small, complete first-person round. It
+reuses the ECS extraction path, the uploaded-mesh pipeline, the depth
+attachment, and `CameraController`, and adds gameplay around them. It
+is opt-in; the default scene remains `gallery`.
+
+```bash
+dotnet run \
+  --project samples/Volt.VulkanMeshDemo \
+  -c Release -- \
+  --validation \
+  --scene target-range
+```
+
+Without `--frames` the window stays open until it is closed. Closing
+the window releases relative mouse mode and exits with status zero.
+
+### Controls
+
+| Input | Action |
+| --- | --- |
+| `W` / `S` | Fly forward / backward along the view direction |
+| `A` / `D` | Strafe left / right |
+| Mouse X / Y | Yaw / pitch |
+| Left click | Capture the mouse; every later click fires |
+| `Space` / `Left Ctrl` | Fly up / down along world Y |
+| `Left Shift` | Sprint (3x speed) |
+| `R` | Restart the round |
+| `Escape` | Release the mouse |
+
+Capture rules come from the existing `CameraCaptureController`:
+
+- The click that captures the mouse never fires. It is consumed by the
+  capture transition, and the captured state only exists from the next
+  sampled frame.
+- A fresh left press while captured fires exactly once. Holding the
+  button does not repeat, and releasing then pressing again fires again.
+- Escape is level-triggered: the first held sample releases the
+  pointer, and for as long as the key stays down no click can recapture
+  it or fire. Losing keyboard focus, another window taking the pointer,
+  or a failed native release also suppress firing for that frame. A
+  release that SDL did not confirm stays pending: the view stays
+  frozen, the pending state is retried, and no shot is accepted while
+  it lasts.
+- `R` is a one-shot edge sampled only while the window has focus. Both
+  button edges are tracked from raw samples even while unfocused, so
+  holding a key or button in another application and then focusing this
+  one cannot fabricate a press.
+
+The window title reports score and progress, for example
+`VOLT Target Range - 100/500 - 4 targets remaining`, and changes to
+`VOLT Target Range - COMPLETE 500/500 - press R to restart` when the
+last target is hit. The title is only rebuilt when the score or round
+state changes, never per frame. Console messages report each hit, each
+miss, round completion, and restart.
+
+### Arena and ECS layout
+
+The world contains seven entities: five targets, one floor, and one
+camera. The six renderable entities go through the same
+`EcsRenderExtractor` as the ECS scene, so the draw list is derived from
+the world every frame rather than from a static plan.
+
+| Target | World position | Radius | Distance from the initial pose |
+| --- | --- | --- | --- |
+| 1 | `(-3.0, 1.7, 0.0)` | `0.55` | 8.0 |
+| 2 | `(3.2, 1.7, -1.0)` | `0.55` | 9.0 |
+| 3 | `(0.0, 1.6, -6.0)` | `0.60` | 14.0 |
+| 4 | `(-2.0, 3.2, -8.0)` | `0.65` | 16.1 |
+| 5 | `(2.4, 0.6, -11.0)` | `0.70` | 19.1 |
+
+Each target is an entity with `PositionComponent`,
+`RotationComponent`, `ScaleComponent`, `MeshRendererComponent`, and one
+small unmanaged gameplay component, `TargetStateComponent`, whose byte
+is `Live` or `Completed`. There is no separate transform cache: hit
+detection reads the position and scale components, and rendering reads
+the extracted model matrices built from the same components.
+
+The camera is an entity with `CameraComponent`, `PositionComponent`,
+and `RotationComponent`. It starts at `(0, 1.7, 8)` looking down `-Z`
+with a 60-degree vertical field of view and a `0.1..100` clip range. All
+five targets are inside that first view; the nearest is centred about
+`35` pixels left of the crosshair, so a target can be acquired
+immediately after capturing the mouse. `TargetRangeController` copies
+the active `CameraController` pose into these components before every
+decision, and the renderer builds the view and projection from the
+entity with `CameraEntityMatrices`, so the shot and the image always
+use the same pose and the same live extent.
+
+The floor is a plane at `y = 0` covering `x = -20..20, z = -30..12`. It
+is the only other geometry; nothing in the range blocks a shot.
+
+### Hit detection
+
+A shot casts the camera's forward ray against the targets' world-space
+spheres:
+
+- The origin is the camera entity's position and the direction is its
+  normalized forward vector, `rotation * (0, 0, -1)`.
+- The target mesh is a faceted unit sphere whose vertices reach radius
+  `1`, so the collision radius is the target's current
+  `ScaleComponent` value. The sphere tightly bounds the low-poly mesh
+  rather than coinciding with its polygon surface: the flat facets sit
+  a few percent of the radius inside it. With 12 longitudes and 6
+  latitude bands the facet corners are 15 degrees apart, so the
+  silhouette chord sags `1 - cos(15 deg) = 0.034` of the radius and a
+  facet centre is up to twice that. A ray crossing the silhouette can
+  therefore be accepted slightly outside the drawn polygon edge, but
+  there is no aiming assist beyond that bounding radius.
+- The quadratic is solved against each live sphere. A positive entry
+  distance is a hit from outside; when the camera is inside a sphere
+  the positive exit distance is the hit instead. Non-positive
+  distances are rejected, which excludes targets behind the camera.
+- The nearest valid intersection wins, so overlapping targets resolve
+  deterministically. Distances beyond `40` world units are rejected.
+- Completed targets are skipped, so they cannot score again even
+  though their geometry is still present.
+- A non-finite origin or direction, a zero-length direction, and a
+  non-positive or non-finite maximum distance all report an explicit
+  miss instead of a NaN distance or an exception.
+
+Walls do not exist in this range, so no occlusion test is performed.
+The floor cannot block a shot because every target sits above it and
+the camera cannot go below it without leaving the arena.
+
+### Hit reaction, score, and restart
+
+A hit mutates the target's components in place:
+
+- `MeshRendererComponent.Mesh` switches to a second unit sphere that was
+  uploaded once at startup and is coloured blue.
+- `ScaleComponent` shrinks to 55% of the authored radius, so the target
+  visibly contracts about its own centre.
+- `TargetStateComponent` becomes `Completed`.
+
+No vertex buffer is uploaded, no pipeline is created, and no entity is
+added or removed, so the next extraction and the next recorded frame
+show the change. The hit volume then follows the shrunken scale,
+although completed targets are ignored anyway.
+
+Each target awards `100` points once; the maximum is `500`. A miss
+changes nothing. Hitting the last target enters the completed state:
+all five targets are blue and small, the title reports completion, and
+the console prints the final score. Restarting restores every target's
+position, rotation, scale, mesh handle, and live state, resets score,
+shots, and round state, and returns the camera to `(0, 1.7, 8)` with
+yaw and pitch zero via `CameraController.SetPose`. Entity identities
+and archetypes survive, so no GPU or ECS structure is rebuilt.
+
+### Reticle
+
+The reticle is a white plus made of two rectangles in one pre-uploaded
+mesh. It is drawn inside the same render pass, with the same pipeline
+and vertex layout as every other mesh, after the extracted instances.
+Its transform is a pure clip-space scale with no view or projection:
+
+- The camera's forward vector always projects to the clip-space origin,
+  so a mesh centred there is centred on the shot ray at every camera
+  pose and every framebuffer size. No viewport uniform is involved.
+- The scale is derived from the current extent each frame, keeping the
+  plus about 32 pixels across at 1280x720 and 24 pixels at 960x540, so
+  a resize cannot leave it off centre or stretched.
+- The authored clip-space depth is zero. The sample's depth test is
+  less-than against a cleared value of one, so the reticle always
+  passes and is visible over targets without disabling depth testing or
+  changing any other draw's depth state. It writes depth only over its
+  own few pixels, after every scene draw.
+- It is not an ECS entity, so extraction and the aiming candidates
+  cannot include it.
+
+### Scripted verification
+
+`--range-script` drives the same controller and camera a player drives,
+from value-type commands, and is accepted only with
+`--scene target-range` and a bounded run of at least `190` frames:
+
+```bash
+dotnet run \
+  --project samples/Volt.VulkanMeshDemo \
+  -c Release -- \
+  --validation \
+  --frames 600 \
+  --scene target-range \
+  --range-script
+```
+
+The script advances once per accepted presented frame. It never sends
+SDL events, never writes the score, and never marks a target complete:
+all of those effects come from the gameplay path. It throws if an
+expected outcome does not hold, so a regression fails the run instead
+of only printing different numbers.
+
+| Accepted frames | Step |
+| --- | --- |
+| 1 | Present the initial state. |
+| 2-9 | Idle frames. |
+| 10-11 | Aim 45 degrees up and fire; the shot must miss, and the score must stay zero. |
+| 12 | Confirm the score is still zero. |
+| 13-14 | Aim at target 1 and fire; exactly one hit is scored. |
+| 15 | Confirm the target's component and mesh handle changed. |
+| 16 | Fire again at the completed target; nothing is scored. |
+| 17 | Confirm the round still has one completed target. |
+| 18-35 | Hold `W` for 16 fixed one-sixtieth-second steps; the ECS camera must move. |
+| 37 | Restart; the round had a positive score. |
+| 38 | Confirm score, round state, target components, and the camera pose are reset. |
+| 39-48 | Aim and fire at all five live targets. |
+| 49 | Confirm a completed round with a score of 500. |
+| 50-167 | Hold the completed round for 120 accepted frames. |
+
+Console checkpoints from a passing run:
+
+```
+Target range script: initial state presented at accepted frame 1: score=0, completed=0, remaining=5, roundComplete=False, camera=(0.000, 1.700, 8.000) forward=(0.000, 0.000, -1.000).
+Target range script: miss verified after accepted frame 11: score unchanged at 0, remaining=5; state presented from frame 12.
+Target range script: hit verified after accepted frame 14: score=100, completed=1, remaining=4, roundComplete=False, camera=(0.000, 1.700, 8.000) forward=(-0.351, 0.000, -0.936); target visuals updated in ECS and presented from frame 15.
+Target range: miss; score 100/500, 4 targets remaining.
+Target range script: duplicate shot verified after accepted frame 16: score unchanged at 100.
+Target range script: movement verified after accepted frame 35: camera entity moved to (-0.234, 1.700, 7.376) forward=(-0.351, 0.000, -0.936).
+Target range script: restart requested after accepted frame 37: score before restart=100.
+Target range script: restart verified after accepted frame 38: score=0, completed=0, remaining=5, roundComplete=False, camera=(0.000, 1.700, 8.000) forward=(0.000, 0.000, -1.000); every target restored to its authored position, size, and unhit mesh.
+Target range script: round complete after accepted frame 49: score=500, completed=5, remaining=0, roundComplete=True, camera=(0.000, 1.700, 8.000) forward=(0.125, -0.057, -0.990); completed state presented from frame 50.
+Target range script: final state proven presented after accepted frame 167: score=500, completed=5, remaining=0, roundComplete=True, camera=(0.000, 1.700, 8.000) forward=(0.125, -0.057, -0.990); held for 120 accepted frames.
+```
+
+### Headless GPU verification
+
+The idle range is verified on the GPU with analytically derived probes:
+
+```bash
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots \
+  --sample-arg=--scene --sample-arg target-range \
+  --expect-pixel-class 405,360,red \
+  --expect-pixel-class 648,372,red \
+  --expect-pixel-class 647,360,white
+```
+
+At 1280x720 target 1 projects to `(404.5, 359.5)` with a 44-pixel radius,
+and target 3 to `(639.5, 364.0)` with a 27-pixel radius. `405,360` is the
+first target's centre; `648,372` is inside the third target but outside
+the reticle's arms; `647,360` is seven pixels right of the crosshair and
+still on its horizontal arm, which proves the white plus renders on top
+of the target behind it.
+
+The scripted round is captured only after the completed state has been
+held long enough to be proven presented, so the image cannot race the
+last hit:
+
+```bash
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots \
+  --sample-arg=--scene --sample-arg target-range \
+  --sample-arg=--range-script \
+  --screenshot-after-line "final state proven presented" \
+  --expect-pixel-class 310,323,blue \
+  --expect-pixel-class 479,263,blue \
+  --expect-pixel-class 647,360,white
+```
+
+The scripted camera ends aimed at target 5, so the completed targets
+project elsewhere than at the initial pose. Target 1's centre is at
+`(310, 323.5)` and target 4's at `(479, 263)`; both probes are inside
+their shrunken blue silhouettes. The reticle probe is unchanged, which
+shows the overlay follows the view rather than the world.
+
+Resizing proves the completed round survives swapchain recreation and
+that the reticle stays centred in the new viewport:
+
+```bash
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots \
+  --weston-shell desktop \
+  --sample-arg=--scene --sample-arg target-range \
+  --sample-arg=--range-script \
+  --sample-arg=--resize-at-frame --sample-arg 200 \
+  --sample-arg=--resize-to --sample-arg 960x540 \
+  --screenshot-after-line "Target range state stable after recreation" \
+  --expect-pixel-class 232,242,blue \
+  --expect-pixel-class 359,197,blue \
+  --expect-pixel-class 485,270,white
+```
+
+The two blue probes are the same target centres scaled by `0.75`, and
+`485,270` is five pixels right of the centre of the `960x540` viewport.
+The run reports `Resize observed: ... generation 1 -> 2` and
+`Target range state stable after recreation: score=500, completed=5,
+remaining=0, roundComplete=True, camera=(0.000, 1.700, 8.000)
+forward=(0.125, -0.057, -0.990) after 30 accepted frames in generation
+2.`, so the world, score, and completed visuals were not rebuilt.
+
+Probe placement is guarded by unit tests, not just by a screenshot:
+`TargetRangeProbeTests` projects the target centres with the same view,
+projection, and extent, requires each probe to sit within 60% of its
+target's pixel radius, and requires the reticle probes to lie on the
+horizontal arm at both extents.
+
 ## Depth attachment
 
 The render pass has a color attachment and a depth attachment. Each
@@ -506,6 +807,17 @@ Interactive:
 
 ```bash
 dotnet run --project samples/Volt.VulkanMeshDemo -c Release
+```
+
+The playable first-person round (see [Target range](#target-range) for
+the controls):
+
+```bash
+dotnet run \
+  --project samples/Volt.VulkanMeshDemo \
+  -c Release -- \
+  --validation \
+  --scene target-range
 ```
 
 Bounded run with validation layers:
@@ -661,7 +973,7 @@ the final pose is still rendered at `960x540`:
 ```bash
 ./tools/test-vulkan-headless.sh \
   --project samples/Volt.VulkanMeshDemo \
-  --frames 600 --validation --screenshots --expect-clusters 2 \
+  --frames 600 --validation --screenshots \
   --weston-shell desktop \
   --sample-arg=--scene --sample-arg camera-transforms \
   --sample-arg=--camera-script \
@@ -673,7 +985,13 @@ the final pose is still rendered at `960x540`:
 ```
 
 The two probes are the same local points as the 1280x720 run scaled by
-`0.75`; both resize extents share the 16:9 aspect ratio.
+`0.75`; both resize extents share the 16:9 aspect ratio. These resize
+runs deliberately omit `--expect-clusters`: once the client shrinks to
+`960x540` the window no longer covers the compositor output, so the
+horizontal content clusters include compositor chrome and the desktop
+behind the window. Pixel-class probes at points derived from the new
+extent are the verification; the cluster count is only meaningful for a
+fullscreen window, as in the runs above.
 
 The ECS scene uses the same scenario. The world, the entity identities,
 and the camera component values survive recreation, and the projection
@@ -731,3 +1049,31 @@ scripted probes. `EcsMeshResolverTests` covers valid, invalid, stale,
 and unknown mesh and material handles plus an unexpected upload order.
 `EcsScriptTests` covers the initial hold, the change frame, the settled
 checkpoint, the held changed state, and determinism.
+
+The target range has its own focused coverage. `TargetRangeRaycastTests`
+covers direct hits, misses, nearest overlap, targets behind the origin,
+the distance limit, a ray starting inside a sphere, an arbitrary camera
+orientation, completed targets, direction normalization, degenerate
+spheres, and invalid origins, directions, and distances.
+`TargetRangeControllerTests` covers the initial state, a hit from the
+initial pose, an aimed miss, distinct hits, duplicate hits, round
+completion, restart, ECS camera movement and rotation, extraction of
+the hit visuals, aiming accuracy, pitch clamping, and zero allocation
+for updates without gameplay actions. `TargetRangeSceneTests` covers
+the entity layout, extraction, the collision sphere bounding the
+authored scale, every target being inside the initial view and above a
+two-degree angular radius, idempotent hits, value-only mutation (the
+world's query enumerator stays valid), target restoration, camera sync,
+and the overlay handle. `TargetRangeScriptTests` covers the checkpoint
+order, the miss and first hit, restart verification, movement distance,
+repeatability, the held completed state, and the required minimum
+frames. `TargetRangeProbeTests` recomputes every documented screenshot
+probe from the scene and camera at both extents. `TargetRangeReticleTests`
+covers centring, square pixel size on non-square and resized viewports,
+the minimum size, and viewport validation. `TargetRangeInputTests` and
+new `CameraCaptureControllerTests` cases cover the capture click not
+firing, one shot per press, held buttons, Escape releasing once and
+blocking capture and fire for as long as it stays down, focus loss,
+another window's click, a pending release, failed capture, and restart
+precedence. `CameraControllerTests` covers the new `SetPose` reset,
+including pitch clamping and rejection of non-finite values.

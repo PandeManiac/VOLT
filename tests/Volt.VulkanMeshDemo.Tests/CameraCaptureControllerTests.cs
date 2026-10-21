@@ -125,7 +125,7 @@ public sealed class CameraCaptureControllerTests
 	}
 
 	[Fact]
-	public void Update_ReleasesOnTheEscapeEdge()
+	public void Update_ReleasesWhileEscapeIsHeld()
 	{
 		FakeRelativeMouseMode native = new();
 		CameraCaptureController capture = native.CreateController();
@@ -154,6 +154,83 @@ public sealed class CameraCaptureControllerTests
 		capture.Update(Idle with { EscapeDown = false });
 
 		Assert.Equal(1, native.DisableCalls);
+	}
+
+	[Fact]
+	public void Update_HeldEscapeBlocksCaptureAndFireUntilItIsReleased()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		Assert.True(capture.Update(FocusedClick).CaptureStarted);
+
+		capture.Update(Idle);
+
+		// The first held sample releases the pointer exactly once.
+		Assert.False(
+			capture.Update(Idle with { EscapeDown = true }).ReleaseFailed);
+
+		Assert.False(capture.IsCaptured);
+		Assert.Equal(1, native.DisableCalls);
+
+		int enableCalls = native.EnableCalls;
+
+		// Escape stays down across several frames of fresh clicks. No
+		// click may recapture the pointer or fire while it is held, and
+		// the confirmed release is not repeated frame after frame.
+		for (int frame = 0; frame < 4; frame++)
+		{
+			CameraCaptureTransition pressed = capture.Update(
+				FocusedClick with { EscapeDown = true });
+
+			Assert.False(pressed.CaptureStarted);
+			Assert.False(pressed.FireRequested);
+			Assert.False(capture.IsCaptured);
+
+			Assert.False(
+				capture.Update(
+					Idle with { EscapeDown = true }).FireRequested);
+
+			Assert.Equal(enableCalls, native.EnableCalls);
+			Assert.Equal(1, native.DisableCalls);
+		}
+
+		Assert.False(native.NativeEnabled);
+
+		// Releasing Escape restores the normal click behaviour: the
+		// first fresh press captures without firing and the next fresh
+		// press fires exactly once.
+		CameraCaptureTransition recapture = capture.Update(FocusedClick);
+
+		Assert.True(recapture.CaptureStarted);
+		Assert.False(recapture.FireRequested);
+		Assert.True(capture.IsCaptured);
+		Assert.Equal(2, native.EnableCalls);
+
+		Assert.False(capture.Update(FocusedClick).FireRequested);
+		Assert.False(
+			capture.Update(FocusedClick with { LeftButtonDown = false })
+				.FireRequested);
+
+		CameraCaptureTransition shot = capture.Update(FocusedClick);
+
+		Assert.True(shot.FireRequested);
+		Assert.False(shot.CaptureStarted);
+	}
+
+	[Fact]
+	public void Update_EscapeHeldBeforeTheFirstClick_BlocksCapture()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		CameraCaptureTransition transition = capture.Update(
+			FocusedClick with { EscapeDown = true });
+
+		Assert.False(transition.CaptureStarted);
+		Assert.False(transition.FireRequested);
+		Assert.False(capture.IsCaptured);
+		Assert.Equal(0, native.EnableCalls);
 	}
 
 	[Fact]
@@ -443,6 +520,149 @@ public sealed class CameraCaptureControllerTests
 		Assert.True(capture.Close());
 		Assert.True(capture.Close());
 		Assert.Equal(0, native.DisableCalls);
+	}
+
+	[Fact]
+	public void Update_TheCaptureClickDoesNotFire()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		CameraCaptureTransition transition = capture.Update(FocusedClick);
+
+		Assert.True(transition.CaptureStarted);
+		Assert.False(transition.FireRequested);
+	}
+
+	[Fact]
+	public void Update_AFreshClickWhileCapturedFiresOnce()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		capture.Update(FocusedClick);
+		capture.Update(Idle);
+
+		CameraCaptureTransition transition = capture.Update(FocusedClick);
+
+		Assert.True(transition.FireRequested);
+		Assert.False(transition.CaptureStarted);
+
+		// The same press continued into the next sampled frame is not a
+		// new click.
+		Assert.False(capture.Update(FocusedClick).FireRequested);
+		Assert.False(capture.Update(FocusedClick).FireRequested);
+	}
+
+	[Fact]
+	public void Update_AReleaseAndSecondPressFiresAgain()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		capture.Update(FocusedClick);
+		capture.Update(Idle);
+
+		Assert.True(capture.Update(FocusedClick).FireRequested);
+
+		capture.Update(Idle);
+
+		Assert.True(capture.Update(FocusedClick).FireRequested);
+	}
+
+	[Fact]
+	public void Update_EscapeSuppressesTheSameFrameClick()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		capture.Update(FocusedClick);
+		capture.Update(Idle);
+
+		CameraCaptureTransition transition = capture.Update(
+			FocusedClick with { EscapeDown = true });
+
+		Assert.False(capture.IsCaptured);
+		Assert.False(transition.FireRequested);
+		Assert.False(transition.CaptureStarted);
+
+		// Both are still held on the next frame; release must not turn
+		// into a shot either.
+		Assert.False(
+			capture.Update(
+				FocusedClick with { EscapeDown = true }).FireRequested);
+	}
+
+	[Fact]
+	public void Update_FocusLossSuppressesFire()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		capture.Update(FocusedClick);
+		capture.Update(Idle);
+
+		CameraCaptureTransition transition = capture.Update(
+			FocusedClick with { KeyboardFocused = false });
+
+		Assert.False(transition.FireRequested);
+		Assert.False(capture.IsCaptured);
+	}
+
+	[Fact]
+	public void Update_AClickFromAnotherWindowDoesNotFire()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		capture.Update(FocusedClick);
+		capture.Update(Idle);
+
+		CameraCaptureTransition transition = capture.Update(
+			FocusedClick with
+			{
+				PointerFocus = CameraPointerFocus.OtherWindow
+			});
+
+		Assert.False(transition.FireRequested);
+		Assert.False(capture.IsCaptured);
+	}
+
+	[Fact]
+	public void Update_APendingReleaseSuppressesFire()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		capture.Update(FocusedClick);
+
+		native.DisableResult = false;
+
+		Assert.True(
+			capture.Update(Idle with { EscapeDown = true }).ReleaseFailed);
+
+		CameraCaptureTransition transition = capture.Update(FocusedClick);
+
+		Assert.True(transition.ReleasePending);
+		Assert.False(transition.FireRequested);
+	}
+
+	[Fact]
+	public void Update_AFailedCaptureDoesNotFire()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		native.EnableResult = false;
+
+		CameraCaptureTransition transition = capture.Update(FocusedClick);
+
+		Assert.True(transition.CaptureFailed);
+		Assert.False(transition.CaptureStarted);
+		Assert.False(transition.FireRequested);
+
+		// The press that failed to capture stays consumed.
+		Assert.False(capture.Update(FocusedClick).FireRequested);
 	}
 
 	private sealed class FakeRelativeMouseMode

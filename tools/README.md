@@ -45,7 +45,7 @@ shell, with the application arguments forwarded unchanged:
 | `--validation` | off | Passes `--validation` to the sample |
 | `--screenshots` | off | Captures and verifies a screenshot |
 | `--expect-clusters N` | off | Requires `N` horizontal content clusters; needs `--screenshots` |
-| `--expect-pixel-class X,Y,CLASS` | off | Requires the pixel at `X,Y` to be dominated by `red` or `blue`; repeatable, needs `--screenshots` |
+| `--expect-pixel-class X,Y,CLASS` | off | Requires the pixel at `X,Y` to be dominated by `red`, `blue`, or `white`; repeatable, needs `--screenshots` |
 | `--screenshot-after-line TEXT` | off | Waits for `TEXT` to appear in the sample log before capturing; needs `--screenshots` |
 | `--weston-shell kiosk\|desktop` | `kiosk` | Shell for the private compositor |
 | `--sample-arg VALUE` | none | Extra sample argument forwarded unchanged; repeatable, `--sample-arg=VALUE` also accepted |
@@ -86,11 +86,13 @@ should omit it until their expected layout is known.
 ### Pixel-class assertions
 
 `--expect-pixel-class X,Y,CLASS` checks one screenshot pixel. `CLASS` is
-`red` or `blue`; the check requires the named channel to be above 100
-and at least 40 higher than each other channel, so sRGB conversion and
-minor rasterization differences cannot flip the result. Repeat the
-option to assert several pixels in one run; `--expect-pixel-class=X,Y,CLASS`
-is also accepted.
+`red`, `blue`, or `white`. The two chroma classes require the named
+channel to be above 100 and at least 40 higher than each other channel;
+`white` requires every channel above 150 with at most 60 between the
+brightest and darkest, which keeps pale tints out. All three checks
+tolerate sRGB conversion and minor rasterization differences. Repeat
+the option to assert several pixels in one run;
+`--expect-pixel-class=X,Y,CLASS` is also accepted.
 
 Coordinates must be non-negative integers inside the captured image;
 the image size is checked after decoding, and out-of-bounds or
@@ -129,6 +131,13 @@ covers the whole output, so the screenshot analysis, background
 detection, and `--expect-clusters` behavior are the same as with the
 kiosk shell. The configuration is created per run and is listed in
 `invocation.log`; it is never installed or reused globally.
+
+A sample that resizes its own window smaller than the output breaks
+that assumption: the window frame and the desktop behind it then belong
+to the screenshot, so the horizontal content clusters are no longer the
+sample's meshes and `--expect-clusters` should be omitted. Verify such
+runs with `--expect-pixel-class` probes derived from the new extent
+instead.
 
 `--sample-arg` values are stored in a Bash array and appended to the
 sample command as separate elements. There is no `eval`, no string

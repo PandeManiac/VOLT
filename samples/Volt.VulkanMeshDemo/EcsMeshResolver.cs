@@ -72,6 +72,56 @@ internal sealed class EcsMeshResolver
 	}
 
 	/// <summary>
+	/// Creates the resolver for the target range's four uploaded
+	/// meshes.
+	/// </summary>
+	/// <param name="geometries">
+	/// The uploaded geometries, in upload order.
+	/// </param>
+	/// <remarks>
+	/// The range deliberately ships no 16-bit indexed mesh. Its draw
+	/// records therefore always produce one command each, unlike the
+	/// ECS scene's split quad.
+	/// </remarks>
+	public static EcsMeshResolver CreateTargetRange(
+		IReadOnlyList<MeshGeometry> geometries)
+	{
+		ArgumentNullException.ThrowIfNull(geometries);
+
+		if (geometries.Count != 4)
+		{
+			throw new ArgumentException(
+				"The target range requires exactly four uploaded " +
+				"meshes.",
+				nameof(geometries));
+		}
+
+		for (int index = 0; index < geometries.Count; index++)
+		{
+			if (geometries[index].IndexFormat != MeshIndexFormat.None)
+			{
+				throw new ArgumentException(
+					"The target range requires non-indexed meshes.",
+					nameof(geometries));
+			}
+		}
+
+		return new EcsMeshResolver(
+			[
+				TargetRangeScene.UnhitTargetMesh,
+				TargetRangeScene.HitTargetMesh,
+				TargetRangeScene.FloorMesh,
+				TargetRangeScene.ReticleMesh
+			],
+			[
+				new EcsMeshBinding(0, geometries[0]),
+				new EcsMeshBinding(1, geometries[1]),
+				new EcsMeshBinding(2, geometries[2]),
+				new EcsMeshBinding(3, geometries[3])
+			]);
+	}
+
+	/// <summary>
 	/// Attempts to resolve a complete mesh handle.
 	/// </summary>
 	/// <returns>

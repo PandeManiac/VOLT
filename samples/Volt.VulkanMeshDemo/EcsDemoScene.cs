@@ -31,7 +31,7 @@ namespace Volt.VulkanMeshDemo;
 /// extraction, so steady-state frames do not allocate.
 /// </para>
 /// </remarks>
-internal sealed class EcsDemoScene : IDisposable
+internal sealed class EcsDemoScene : IEcsRenderScene, IDisposable
 {
 	/// <summary>
 	/// Handle of the uploaded non-indexed triangle mesh.
@@ -132,6 +132,40 @@ internal sealed class EcsDemoScene : IDisposable
 	/// Gets the camera entity.
 	/// </summary>
 	public Entity CameraEntity { get; }
+
+	/// <summary>
+	/// Gets no overlay mesh: the fixed scene has no reticle.
+	/// </summary>
+	public MeshHandle? OverlayMesh => null;
+
+	/// <summary>
+	/// Resolves a complete generational mesh handle.
+	/// </summary>
+	public bool TryResolveMesh(
+		MeshHandle handle,
+		out EcsMeshBinding binding)
+	{
+		return Meshes.TryResolve(handle, out binding);
+	}
+
+	/// <summary>
+	/// Reports whether the scene's palette knows a material handle.
+	/// </summary>
+	public bool ContainsMaterial(MaterialHandle handle)
+	{
+		return Materials.Contains(handle);
+	}
+
+	/// <summary>
+	/// Creates the overlay transform. The fixed scene draws no overlay,
+	/// so this is the identity and the renderer never records it.
+	/// </summary>
+	public Matrix4x4 CreateOverlayTransform(
+		int framebufferWidth,
+		int framebufferHeight)
+	{
+		return Matrix4x4.Identity;
+	}
 
 	public Entity TriangleAEntity { get; }
 

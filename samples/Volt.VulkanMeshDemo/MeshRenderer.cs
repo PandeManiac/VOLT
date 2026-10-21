@@ -7,6 +7,7 @@ using Volt.Graphics.Vulkan.Rendering;
 using Volt.Graphics.Vulkan.Swapchain;
 using Volt.Rendering.Cameras;
 using Volt.Rendering.Extraction;
+using Volt.Rendering.Resources;
 using Volt.Rendering.Transforms;
 
 namespace Volt.VulkanMeshDemo;
@@ -71,6 +72,15 @@ internal readonly struct MeshPushConstants
 /// generation.
 /// </summary>
 /// <remarks>
+/// <para>
+/// ECS-driven scenes (the fixed ECS scene and the playable target range)
+/// share one recording path: the scene extracts its renderable entities
+/// from its world, the renderer resolves their complete generational
+/// handles, and the camera entity supplies the view and projection. A
+/// scene may also expose one clip-space overlay mesh, which the target
+/// range uses for its aiming reticle.
+/// </para>
+/// <para>
 /// Mesh buffers are owned by the application and uploaded once.
 /// Each frame records one render pass across the three uploaded
 /// meshes through <see cref="VulkanMeshDrawCommands"/>. The gallery
@@ -113,7 +123,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 	private readonly VulkanDepthAttachment[] _depthAttachments;
 	private readonly DemoScene _scene;
 	private readonly CameraController? _camera;
-	private readonly EcsDemoScene? _ecsScene;
+	private readonly IEcsRenderScene? _renderScene;
 
 	private PipelineLayout _pipelineLayout;
 	private RenderPass _renderPass;
@@ -142,7 +152,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		VulkanSwapchainImageViews imageViews,
 		DemoMeshes meshes,
 		CameraController? camera,
-		EcsDemoScene? ecsScene,
+		IEcsRenderScene? renderScene,
 		string vertexShaderPath,
 		string fragmentShaderPath,
 		bool depthTestEnabled = true)
@@ -175,17 +185,20 @@ internal sealed unsafe class MeshRenderer : IDisposable
 				"The swapchain must support color attachments.");
 		}
 
-		if ((meshes.Scene == DemoScene.EcsScene) != (ecsScene is not null))
+		bool ecsDriven = meshes.Scene is
+			DemoScene.EcsScene or DemoScene.TargetRange;
+
+		if (ecsDriven != (renderScene is not null))
 		{
 			throw new ArgumentException(
-				"The ECS scene must be supplied exactly when the demo " +
-				"scene is EcsScene.",
-				nameof(ecsScene));
+				"An ECS render scene must be supplied exactly when the " +
+				"demo scene is ECS-driven.",
+				nameof(renderScene));
 		}
 
-		// The ECS scene derives its draw instances from the world on
-		// every recorded frame, so it has no static plan.
-		MeshDraw[] drawPlan = meshes.Scene == DemoScene.EcsScene
+		// ECS-driven scenes derive their draw instances from the world
+		// on every recorded frame, so they have no static plan.
+		MeshDraw[] drawPlan = ecsDriven
 			? []
 			: CreateDrawPlan(meshes.Scene, meshes.Geometries);
 
@@ -277,7 +290,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		_depthAttachments = depthAttachments;
 		_scene = meshes.Scene;
 		_camera = camera;
-		_ecsScene = ecsScene;
+		_renderScene = renderScene;
 
 		_renderPass = renderPass;
 		_pipelineLayout = pipelineLayout;
@@ -454,14 +467,14 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		Matrix4x4 view;
 		Matrix4x4 projection;
 
-		if (_ecsScene is not null)
+		if (_renderScene is not null)
 		{
-			// The camera entity is the authority for the ECS scene,
-			// so a component update is visible on the next frame
+			// The camera entity is the authority for every ECS-driven
+			// scene, so a component update is visible on the next frame
 			// without touching swapchain resources.
 			CameraEntityMatrices.CreateMatrices(
-				_ecsScene.World,
-				_ecsScene.CameraEntity,
+				_renderScene.World,
+				_renderScene.CameraEntity,
 				aspect,
 				ViewportYOrientation.YDown,
 				out view,
@@ -522,9 +535,10 @@ internal sealed unsafe class MeshRenderer : IDisposable
 			PipelineBindPoint.Graphics,
 			_pipeline);
 
-		if (_ecsScene is not null)
+		if (_renderScene is not null)
 		{
 			RecordEcsInstances(commandBuffer, view, projection);
+			RecordOverlay(commandBuffer);
 		}
 
 		else
@@ -581,18 +595,18 @@ internal sealed unsafe class MeshRenderer : IDisposable
 	/// Records one frame's extracted ECS instances.
 	/// </summary>
 	/// <remarks>
-	/// Each render record becomes one Vulkan draw, except the sample's
-	/// 16-bit indexed quad, which keeps its two partial index ranges.
-	/// Four mesh entities therefore still produce five draw commands.
-	/// The complete generational handles are verified before any GPU
-	/// buffer is used.
+	/// Each render record becomes one Vulkan draw, except the fixed ECS
+	/// scene's 16-bit indexed quad, which keeps its two partial index
+	/// ranges. The complete generational handles are verified before
+	/// any GPU buffer is used, and the scene decides what its own
+	/// handles mean.
 	/// </remarks>
 	private void RecordEcsInstances(
 		CommandBuffer commandBuffer,
 		Matrix4x4 view,
 		Matrix4x4 projection)
 	{
-		EcsDemoScene scene = _ecsScene!;
+		IEcsRenderScene scene = _renderScene!;
 
 		ReadOnlySpan<RenderInstance> instances = scene.Extract();
 
@@ -600,7 +614,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 		{
 			RenderInstance instance = instances[index];
 
-			if (!scene.Meshes.TryResolve(
+			if (!scene.TryResolveMesh(
 				instance.Mesh,
 				out EcsMeshBinding binding))
 			{
@@ -609,7 +623,7 @@ internal sealed unsafe class MeshRenderer : IDisposable
 					$"handle {instance.Mesh}.");
 			}
 
-			if (!scene.Materials.Contains(instance.Material))
+			if (!scene.ContainsMaterial(instance.Material))
 			{
 				throw new InvalidOperationException(
 					$"The ECS scene references an unknown material " +
@@ -642,6 +656,60 @@ internal sealed unsafe class MeshRenderer : IDisposable
 					mesh);
 			}
 		}
+	}
+
+	/// <summary>
+	/// Records the scene's clip-space overlay after the extracted
+	/// instances.
+	/// </summary>
+	/// <remarks>
+	/// <para>
+	/// The overlay is sample-local: one pre-uploaded mesh drawn inside
+	/// the same render pass, with the same pipeline and vertex layout as
+	/// every other mesh. It is not an entity, so the scene's extraction
+	/// and the aiming ray's candidate list can never include it.
+	/// </para>
+	/// <para>
+	/// Its transform places it around the clip-space origin, which is
+	/// where the camera's forward direction projects at any extent, so
+	/// the reticle is centred at every window size without a viewport
+	/// uniform or a second pipeline.
+	/// </para>
+	/// <para>
+	/// The authored clip-space depth is zero. With the sample's
+	/// less-than depth comparison against a cleared value of one, the
+	/// overlay always passes and is drawn last, so it stays visible over
+	/// targets without disabling depth testing or changing any other
+	/// draw's depth state. Its depth writes touch only the few pixels it
+	/// covers, after every scene draw has already been recorded.
+	/// </para>
+	/// </remarks>
+	private void RecordOverlay(CommandBuffer commandBuffer)
+	{
+		IEcsRenderScene scene = _renderScene!;
+
+		if (scene.OverlayMesh is not MeshHandle overlay)
+		{
+			return;
+		}
+
+		if (!scene.TryResolveMesh(overlay, out EcsMeshBinding binding))
+		{
+			throw new InvalidOperationException(
+				$"The ECS scene references an unbound overlay mesh " +
+				$"handle {overlay}.");
+		}
+
+		PushMvp(
+			commandBuffer,
+			scene.CreateOverlayTransform(
+				checked((int)Extent.Width),
+				checked((int)Extent.Height)));
+
+		VulkanMeshDrawCommands.Record(
+			_instance,
+			commandBuffer,
+			_meshes.Buffers[binding.BufferIndex]);
 	}
 
 	/// <summary>

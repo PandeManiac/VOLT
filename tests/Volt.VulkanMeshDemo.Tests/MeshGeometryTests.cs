@@ -851,4 +851,154 @@ public sealed class MeshGeometryTests
 				$"Triangle {triangle} has zero or near-zero area.");
 		}
 	}
+
+	[Fact]
+	public void CreateTargetRangeMeshes_ReturnsFourNonIndexedMeshes()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateTargetRangeMeshes();
+
+		Assert.Equal(4, meshes.Length);
+
+		Assert.All(
+			meshes,
+			mesh => Assert.Equal(
+				MeshIndexFormat.None,
+				mesh.IndexFormat));
+
+		// 12 longitudes, 6 latitude bands, two triangles each.
+		int sphereVertices = 12 * 6 * 2 * 3;
+
+		Assert.Equal(sphereVertices, meshes[0].Vertices.Length);
+		Assert.Equal(sphereVertices, meshes[1].Vertices.Length);
+		Assert.Equal(6, meshes[2].Vertices.Length);
+		Assert.Equal(12, meshes[3].Vertices.Length);
+	}
+
+	[Fact]
+	public void CreateTargetRangeMeshes_TargetSpheresHaveUnitRadius()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateTargetRangeMeshes();
+
+		for (int meshIndex = 0; meshIndex < 2; meshIndex++)
+		{
+			Vector3 minimum = new(float.MaxValue);
+			Vector3 maximum = new(float.MinValue);
+
+			foreach (MeshVertex vertex in meshes[meshIndex].Vertices)
+			{
+				Assert.Equal(1.0f, vertex.Position.Length(), 5);
+
+				minimum = Vector3.Min(minimum, vertex.Position);
+				maximum = Vector3.Max(maximum, vertex.Position);
+			}
+
+			// The mesh reaches every extreme, so a uniform scale is
+			// exactly the sphere radius the collision test uses.
+			Assert.Equal(-1.0f, minimum.X, 5);
+			Assert.Equal(-1.0f, minimum.Y, 5);
+			Assert.Equal(-1.0f, minimum.Z, 5);
+			Assert.Equal(1.0f, maximum.X, 5);
+			Assert.Equal(1.0f, maximum.Y, 5);
+			Assert.Equal(1.0f, maximum.Z, 5);
+		}
+	}
+
+	[Fact]
+	public void CreateTargetRangeMeshes_UnhitAndHitSpheresDifferOnlyInColour()
+	{
+		MeshGeometry[] meshes = MeshGeometry.CreateTargetRangeMeshes();
+
+		MeshGeometry unhit = meshes[0];
+		MeshGeometry hit = meshes[1];
+
+		Assert.Equal(unhit.Vertices.Length, hit.Vertices.Length);
+
+		for (int index = 0; index < unhit.Vertices.Length; index++)
+		{
+			Assert.Equal(
+				unhit.Vertices[index].Position,
+				hit.Vertices[index].Position);
+		}
+
+		foreach (MeshVertex vertex in unhit.Vertices)
+		{
+			// Red dominance with a clear margin, so the harness's red
+			// pixel class holds after sRGB conversion.
+			Assert.True(
+				vertex.Color.X > 0.7f &&
+				vertex.Color.X - vertex.Color.Y > 0.4f &&
+				vertex.Color.X - vertex.Color.Z > 0.4f);
+		}
+
+		foreach (MeshVertex vertex in hit.Vertices)
+		{
+			Assert.True(
+				vertex.Color.Z > 0.7f &&
+				vertex.Color.Z - vertex.Color.X > 0.4f &&
+				vertex.Color.Z - vertex.Color.Y > 0.2f);
+		}
+	}
+
+	[Fact]
+	public void CreateTargetRangeMeshes_FloorIsAPlaneThroughTheOrigin()
+	{
+		MeshGeometry floor =
+			MeshGeometry.CreateTargetRangeMeshes()[2];
+
+		foreach (MeshVertex vertex in floor.Vertices)
+		{
+			Assert.Equal(0.0f, vertex.Position.Y);
+			Assert.Equal(1.0f, MathF.Abs(vertex.Position.X));
+			Assert.Equal(1.0f, MathF.Abs(vertex.Position.Z));
+		}
+
+		// The floor must not be the same tone as the targets: it is the
+		// spatial reference behind them, not camouflage.
+		Vector3 floorColor = floor.Vertices[0].Color;
+
+		Assert.True(floorColor.X < 0.3f);
+		Assert.True(floorColor.Z < 0.3f);
+	}
+
+	[Fact]
+	public void CreateTargetRangeMeshes_ReticleIsACentredPlus()
+	{
+		MeshGeometry reticle =
+			MeshGeometry.CreateTargetRangeMeshes()[3];
+
+		Vector3 center = Vector3.Zero;
+
+		foreach (MeshVertex vertex in reticle.Vertices)
+		{
+			center += vertex.Position;
+
+			Assert.InRange(vertex.Position.X, -1.0f, 1.0f);
+			Assert.InRange(vertex.Position.Y, -1.0f, 1.0f);
+			Assert.Equal(0.0f, vertex.Position.Z);
+
+			// Bright and almost neutral: the reticle must read as white
+			// against both the dark background and the target meshes.
+			Assert.True(vertex.Color.X > 0.9f);
+			Assert.True(vertex.Color.Y > 0.9f);
+			Assert.True(vertex.Color.Z > 0.9f);
+		}
+
+		center /= reticle.Vertices.Length;
+
+		Assert.Equal(0.0f, center.X, 5);
+		Assert.Equal(0.0f, center.Y, 5);
+
+		// The plus has both a horizontal and a vertical arm.
+		Assert.Contains(
+			reticle.Vertices,
+			vertex =>
+				MathF.Abs(vertex.Position.X) == 1.0f &&
+				MathF.Abs(vertex.Position.Y) < 0.3f);
+
+		Assert.Contains(
+			reticle.Vertices,
+			vertex =>
+				MathF.Abs(vertex.Position.Y) == 1.0f &&
+				MathF.Abs(vertex.Position.X) < 0.3f);
+	}
 }

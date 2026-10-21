@@ -38,16 +38,31 @@ internal readonly record struct CameraInputSample(
 	bool EscapeDown);
 
 /// <summary>
-/// Describes what one update did to relative mouse mode.
+/// Describes what one update did to relative mouse mode, and what
+/// gameplay may do with the same sample.
 /// </summary>
 /// <remarks>
+/// <para>
 /// A failure means the native transition could not be confirmed. The
 /// controller never reports a release that SDL did not confirm.
+/// </para>
+/// <para>
+/// <see cref="CaptureStarted"/> is true only in the update that
+/// enabled relative mouse mode. <see cref="FireRequested"/> is the
+/// gameplay contract for a left-button press: it is set exactly once
+/// per fresh press, only while capture was already confirmed at the
+/// start of the update, and never in an update that captured,
+/// released, or is still waiting to release. One owner for the button
+/// edge is why the capture decision and the firing decision cannot
+/// drift apart.
+/// </para>
 /// </remarks>
 internal readonly record struct CameraCaptureTransition(
 	bool CaptureFailed,
 	bool ReleaseFailed,
-	bool ReleasePending);
+	bool ReleasePending,
+	bool CaptureStarted,
+	bool FireRequested);
 
 /// <summary>
 /// Owns the relative mouse capture state machine for the sample.
@@ -62,12 +77,17 @@ internal readonly record struct CameraCaptureTransition(
 /// </para>
 /// <para>
 /// Escape, keyboard focus loss, or another window taking the pointer
-/// releases capture. A release is only recorded once the native state
-/// is confirmed, so a failing
-/// <c>SDL_SetWindowRelativeMouseMode</c> call leaves the controller in
-/// a pending state that keeps the view frozen and is retried on the
-/// next update and at shutdown. Capture is never started in an update
-/// that released the mouse or that is still waiting to release it.
+/// releases capture. Escape is level-triggered rather than an edge:
+/// while the key is held, capture cannot be started and no shot is
+/// accepted, so clicking again after Escape can neither recapture the
+/// pointer nor fire. A confirmed release is not repeated, so holding
+/// the key does not call the native disable path every frame. A
+/// release is only recorded once the native state is confirmed, so a
+/// failing <c>SDL_SetWindowRelativeMouseMode</c> call leaves the
+/// controller in a pending state that keeps the view frozen and is
+/// retried on the next update and at shutdown. Capture is never
+/// started in an update that released the mouse or that is still
+/// waiting to release it.
 /// </para>
 /// </remarks>
 internal sealed class CameraCaptureController
@@ -80,7 +100,6 @@ internal sealed class CameraCaptureController
 	private bool _releasePending;
 	private bool _closed;
 	private bool _leftButtonWasDown;
-	private bool _escapeWasDown;
 
 	/// <param name="setRelativeMouseMode">
 	/// Enables or disables relative mouse mode and returns whether SDL
@@ -135,9 +154,11 @@ internal sealed class CameraCaptureController
 	/// Applies one sampled input state.
 	/// </summary>
 	/// <remarks>
-	/// Button and key edges are tracked from every sample, including
+	/// The left-button edge is tracked from every sample, including
 	/// samples that only retry a pending release, so a held button
-	/// never turns into a new capture request.
+	/// never turns into a new capture request. Escape and focus are
+	/// evaluated at the level, so a key that stays down keeps blocking
+	/// capture and fire instead of only acting on its first frame.
 	/// </remarks>
 	public CameraCaptureTransition Update(CameraInputSample sample)
 	{
@@ -146,6 +167,10 @@ internal sealed class CameraCaptureController
 			return default;
 		}
 
+		// The firing decision is made against the capture state at the
+		// start of the update: the click that starts capture is consumed
+		// by capture and must never also fire.
+		bool wasCaptured = _captured;
 		bool released = false;
 		bool releaseFailed = false;
 
@@ -156,7 +181,7 @@ internal sealed class CameraCaptureController
 		}
 
 		bool releaseRequested =
-			_captured &&
+			wasCaptured &&
 			!_releasePending &&
 			IsReleaseRequested(sample);
 
@@ -167,25 +192,44 @@ internal sealed class CameraCaptureController
 		}
 
 		bool captureFailed = false;
+		bool captureStarted = false;
 
 		// Capture is blocked in any update that released the mouse, so
 		// Escape or focus loss combined with a fresh click cannot
 		// release and immediately recapture in the same frame.
-		if (!_captured &&
+		if (!wasCaptured &&
 			!_releasePending &&
 			!released &&
 			IsCaptureRequested(sample))
 		{
-			captureFailed = !TryCapture();
+			captureStarted = TryCapture();
+			captureFailed = !captureStarted;
 		}
 
+		// A shot is a fresh left press with capture already confirmed.
+		// Escape, focus loss, another window taking the pointer, and a
+		// pending failed release all suppress it, and the held state of
+		// the button is tracked below so holding never repeats a shot.
+		// Escape is checked at the level rather than as an edge, so a
+		// click made while the key is still down stays inert.
+		bool fireRequested =
+			wasCaptured &&
+			!_releasePending &&
+			!released &&
+			sample.KeyboardFocused &&
+			sample.PointerFocus == CameraPointerFocus.OwnWindow &&
+			!sample.EscapeDown &&
+			sample.LeftButtonDown &&
+			!_leftButtonWasDown;
+
 		_leftButtonWasDown = sample.LeftButtonDown;
-		_escapeWasDown = sample.EscapeDown;
 
 		return new CameraCaptureTransition(
 			CaptureFailed: captureFailed,
 			ReleaseFailed: releaseFailed,
-			ReleasePending: _releasePending);
+			ReleasePending: _releasePending,
+			CaptureStarted: captureStarted,
+			FireRequested: fireRequested);
 	}
 
 	/// <summary>
@@ -240,17 +284,31 @@ internal sealed class CameraCaptureController
 		return TryRelease();
 	}
 
-	private bool IsReleaseRequested(CameraInputSample sample)
+	/// <remarks>
+	/// Escape is level-triggered while captured: the first held sample
+	/// releases, and every later sample sees an already released
+	/// controller, so the native disable path runs once per press
+	/// instead of once per frame. A pending release keeps being retried
+	/// by <see cref="Update"/> regardless of the key state.
+	/// </remarks>
+	private static bool IsReleaseRequested(CameraInputSample sample)
 	{
 		return !sample.KeyboardFocused ||
 			sample.PointerFocus == CameraPointerFocus.OtherWindow ||
-			(sample.EscapeDown && !_escapeWasDown);
+			sample.EscapeDown;
 	}
 
+	/// <remarks>
+	/// A held Escape blocks capture at the level, so a click after
+	/// releasing the pointer can neither recapture nor fire while the
+	/// key remains down. Capture becomes available again once Escape is
+	/// released and a fresh press is seen.
+	/// </remarks>
 	private bool IsCaptureRequested(CameraInputSample sample)
 	{
 		return sample.KeyboardFocused &&
 			sample.PointerFocus == CameraPointerFocus.OwnWindow &&
+			!sample.EscapeDown &&
 			sample.LeftButtonDown &&
 			!_leftButtonWasDown;
 	}

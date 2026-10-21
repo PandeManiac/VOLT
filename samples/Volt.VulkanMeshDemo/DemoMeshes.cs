@@ -79,6 +79,8 @@ internal sealed class DemoMeshes : IDisposable
 				MeshGeometry.CreateCameraTransformMeshes(),
 			DemoScene.EcsScene =>
 				MeshGeometry.CreateCameraTransformMeshes(),
+			DemoScene.TargetRange =>
+				MeshGeometry.CreateTargetRangeMeshes(),
 			_ => throw new ArgumentOutOfRangeException(
 				nameof(scene),
 				scene,

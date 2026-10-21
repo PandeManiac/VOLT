@@ -124,6 +124,62 @@ public sealed class CameraController
 	public float PitchDegrees => Pitch * (180.0f / MathF.PI);
 
 	/// <summary>
+	/// Restores a documented camera pose.
+	/// </summary>
+	/// <remarks>
+	/// <para>
+	/// A round that restarts must return the camera to its initial
+	/// pose, and the controller deliberately exposes no mutable pose
+	/// properties. This method is the documented way to do that: it
+	/// sets position and orientation together so a reset can never
+	/// leave half of the old pose behind.
+	/// </para>
+	/// <para>
+	/// Pitch is clamped to <see cref="MaxPitchRadians"/>, exactly as
+	/// look input is. Yaw is stored as supplied, so callers that want
+	/// a wrapped heading must wrap it themselves; the controller never
+	/// wraps yaw on its own.
+	/// </para>
+	/// <para>
+	/// Non-finite values throw instead of silently corrupting the
+	/// view, because a reset is authored data rather than sampled
+	/// input.
+	/// </para>
+	/// </remarks>
+	/// <exception cref="ArgumentOutOfRangeException">
+	/// The position, yaw, or pitch is not finite.
+	/// </exception>
+	public void SetPose(Vector3 position, float yaw, float pitch)
+	{
+		if (!float.IsFinite(position.X) ||
+			!float.IsFinite(position.Y) ||
+			!float.IsFinite(position.Z))
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(position),
+				"The camera position must be finite.");
+		}
+
+		if (!float.IsFinite(yaw))
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(yaw),
+				"The camera yaw must be finite.");
+		}
+
+		if (!float.IsFinite(pitch))
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(pitch),
+				"The camera pitch must be finite.");
+		}
+
+		Position = position;
+		Yaw = yaw;
+		Pitch = Math.Clamp(pitch, -MaxPitchRadians, MaxPitchRadians);
+	}
+
+	/// <summary>
 	/// Gets the unit forward vector for the current orientation.
 	/// </summary>
 	public Vector3 Forward
