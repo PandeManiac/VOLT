@@ -7,14 +7,21 @@ public sealed class CameraCaptureControllerTests
 	private static readonly CameraInputSample Idle = new(
 		KeyboardFocused: true,
 		PointerFocus: CameraPointerFocus.OwnWindow,
-		LeftButtonDown: false,
-		EscapeDown: false);
+		LeftButtonPressed: false,
+		EscapeDown: false,
+		FocusLostDuringFrame: false);
 
+	/// <summary>
+	/// A sample carrying a fresh left press. The platform reports one
+	/// press edge per physical click, so this value is a click, not a
+	/// held button.
+	/// </summary>
 	private static readonly CameraInputSample FocusedClick = new(
 		KeyboardFocused: true,
 		PointerFocus: CameraPointerFocus.OwnWindow,
-		LeftButtonDown: true,
-		EscapeDown: false);
+		LeftButtonPressed: true,
+		EscapeDown: false,
+		FocusLostDuringFrame: false);
 
 	[Fact]
 	public void Update_CapturesOnAClickInTheFocusedOwnWindow()
@@ -99,7 +106,7 @@ public sealed class CameraCaptureControllerTests
 	}
 
 	[Fact]
-	public void Update_DoesNotRecaptureFromAHeldButton()
+	public void Update_DoesNotRecaptureWhileTheButtonStaysHeld()
 	{
 		FakeRelativeMouseMode native = new();
 		CameraCaptureController capture = native.CreateController();
@@ -107,17 +114,17 @@ public sealed class CameraCaptureControllerTests
 		capture.Update(FocusedClick);
 
 		// Losing focus releases capture while the button is still held.
-		capture.Update(FocusedClick with { KeyboardFocused = false });
+		capture.Update(Idle with { KeyboardFocused = false });
 
 		Assert.False(capture.IsCaptured);
 
-		// The held press is not a new click, so regaining focus does not
-		// recapture.
-		capture.Update(FocusedClick);
-
-		Assert.False(capture.IsCaptured);
-
+		// A held button produces no further press edge, so regaining
+		// focus reports idle samples until the user clicks again.
 		capture.Update(Idle);
+
+		Assert.False(capture.IsCaptured);
+		Assert.Equal(1, native.EnableCalls);
+
 		capture.Update(FocusedClick);
 
 		Assert.True(capture.IsCaptured);
@@ -207,10 +214,10 @@ public sealed class CameraCaptureControllerTests
 		Assert.True(capture.IsCaptured);
 		Assert.Equal(2, native.EnableCalls);
 
-		Assert.False(capture.Update(FocusedClick).FireRequested);
-		Assert.False(
-			capture.Update(FocusedClick with { LeftButtonDown = false })
-				.FireRequested);
+		// The button stays down, so the following frames carry no new
+		// press edge and produce no shot.
+		Assert.False(capture.Update(Idle).FireRequested);
+		Assert.False(capture.Update(Idle).FireRequested);
 
 		CameraCaptureTransition shot = capture.Update(FocusedClick);
 
@@ -252,9 +259,9 @@ public sealed class CameraCaptureControllerTests
 		Assert.Equal(enableCalls, native.EnableCalls);
 		Assert.False(native.NativeEnabled);
 
-		// The keys and button are still held one frame later; a held
-		// click is not a new capture request either.
-		capture.Update(FocusedClick with { EscapeDown = true });
+		// The key is still held one frame later and the button yields no
+		// new press edge; neither can recapture.
+		capture.Update(Idle with { EscapeDown = true });
 
 		Assert.False(capture.IsCaptured);
 		Assert.Equal(enableCalls, native.EnableCalls);
@@ -275,8 +282,9 @@ public sealed class CameraCaptureControllerTests
 			new CameraInputSample(
 				KeyboardFocused: false,
 				PointerFocus: CameraPointerFocus.OwnWindow,
-				LeftButtonDown: true,
-				EscapeDown: false));
+				LeftButtonPressed: true,
+				EscapeDown: false,
+				FocusLostDuringFrame: false));
 
 		Assert.False(capture.IsCaptured);
 		Assert.False(transition.ReleaseFailed);
@@ -548,10 +556,10 @@ public sealed class CameraCaptureControllerTests
 		Assert.True(transition.FireRequested);
 		Assert.False(transition.CaptureStarted);
 
-		// The same press continued into the next sampled frame is not a
-		// new click.
-		Assert.False(capture.Update(FocusedClick).FireRequested);
-		Assert.False(capture.Update(FocusedClick).FireRequested);
+		// The frames in which the button stays down carry no press edge,
+		// so the shot is not repeated.
+		Assert.False(capture.Update(Idle).FireRequested);
+		Assert.False(capture.Update(Idle).FireRequested);
 	}
 
 	[Fact]
@@ -586,11 +594,11 @@ public sealed class CameraCaptureControllerTests
 		Assert.False(transition.FireRequested);
 		Assert.False(transition.CaptureStarted);
 
-		// Both are still held on the next frame; release must not turn
-		// into a shot either.
+		// Escape is still held on the next frame and the button has no
+		// new edge; none of that may turn into a shot.
 		Assert.False(
 			capture.Update(
-				FocusedClick with { EscapeDown = true }).FireRequested);
+				Idle with { EscapeDown = true }).FireRequested);
 	}
 
 	[Fact]
@@ -661,8 +669,83 @@ public sealed class CameraCaptureControllerTests
 		Assert.False(transition.CaptureStarted);
 		Assert.False(transition.FireRequested);
 
-		// The press that failed to capture stays consumed.
-		Assert.False(capture.Update(FocusedClick).FireRequested);
+		// The press that failed to capture stays consumed: the button is
+		// down, so later frames carry no new edge and no shot.
+		Assert.False(capture.Update(Idle).FireRequested);
+	}
+
+	[Fact]
+	public void Update_TransientFocusLossReleasesCapture()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		capture.Update(FocusedClick);
+
+		Assert.True(capture.IsCaptured);
+
+		// Focus left and returned inside one poll, so the sample is
+		// focused and idle apart from the loss indication.
+		CameraCaptureTransition transition = capture.Update(
+			Idle with { FocusLostDuringFrame = true });
+
+		Assert.False(transition.ReleaseFailed);
+		Assert.False(capture.IsCaptured);
+		Assert.False(capture.IsLookActive);
+		Assert.False(native.NativeEnabled);
+		Assert.Equal(1, native.DisableCalls);
+	}
+
+	[Fact]
+	public void Update_TransientFocusLossDoesNotRecaptureWithoutAFreshPress()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		capture.Update(FocusedClick);
+
+		int enableCalls = native.EnableCalls;
+
+		// Focus is back before the application reads the frame.
+		capture.Update(Idle with { FocusLostDuringFrame = true });
+
+		for (int frame = 0; frame < 4; frame++)
+		{
+			capture.Update(Idle);
+		}
+
+		Assert.False(capture.IsCaptured);
+		Assert.Equal(enableCalls, native.EnableCalls);
+		Assert.Equal(1, native.DisableCalls);
+
+		// Only a new intentional click may capture again.
+		Assert.True(capture.Update(FocusedClick).CaptureStarted);
+		Assert.Equal(enableCalls + 1, native.EnableCalls);
+	}
+
+	[Fact]
+	public void Update_TransientFocusLossSuppressesTheSameFramePress()
+	{
+		FakeRelativeMouseMode native = new();
+		CameraCaptureController capture = native.CreateController();
+
+		capture.Update(FocusedClick);
+
+		CameraCaptureTransition transition = capture.Update(
+			FocusedClick with { FocusLostDuringFrame = true });
+
+		Assert.False(transition.FireRequested);
+		Assert.False(capture.IsCaptured);
+		Assert.Equal(1, native.DisableCalls);
+
+		// The press belonged to the unsafe frame, so it cannot fire on a
+		// later frame either. A fresh click only recaptures.
+		Assert.False(capture.Update(Idle).FireRequested);
+
+		CameraCaptureTransition recapture = capture.Update(FocusedClick);
+
+		Assert.True(recapture.CaptureStarted);
+		Assert.False(recapture.FireRequested);
 	}
 
 	private sealed class FakeRelativeMouseMode

@@ -27,15 +27,32 @@ internal enum CameraPointerFocus
 /// Describes the input state relevant to relative mouse capture.
 /// </summary>
 /// <remarks>
-/// Sampling this struct is the SDL adapter's only job, which keeps the
-/// capture decision itself free of platform calls and testable
-/// without a desktop.
+/// <para>
+/// Sampling this struct is the platform adapter's only job, which
+/// keeps the capture decision itself free of platform calls and
+/// testable without a desktop.
+/// </para>
+/// <para>
+/// <see cref="LeftButtonPressed"/> is the platform's press edge for
+/// this frame, not the held state. A click that begins and ends
+/// between two polls therefore still reaches the state machine, and
+/// a button that stays down produces exactly one press edge across
+/// all the frames it is held, so the platform edge is the only button
+/// edge this sample needs.
+/// </para>
+/// <para>
+/// <see cref="FocusLostDuringFrame"/> is true for a frame in which the
+/// window lost keyboard focus, even if it has focus again by the time
+/// the frame is read. Such a frame is cleared by the platform and must
+/// also break capture.
+/// </para>
 /// </remarks>
 internal readonly record struct CameraInputSample(
 	bool KeyboardFocused,
 	CameraPointerFocus PointerFocus,
-	bool LeftButtonDown,
-	bool EscapeDown);
+	bool LeftButtonPressed,
+	bool EscapeDown,
+	bool FocusLostDuringFrame);
 
 /// <summary>
 /// Describes what one update did to relative mouse mode, and what
@@ -77,7 +94,10 @@ internal readonly record struct CameraCaptureTransition(
 /// </para>
 /// <para>
 /// Escape, keyboard focus loss, or another window taking the pointer
-/// releases capture. Escape is level-triggered rather than an edge:
+/// releases capture. A focus loss releases even when the window has
+/// focus again before the next sampled frame, because the sample also
+/// carries the platform's per-frame focus-loss indication. Escape is
+/// level-triggered rather than an edge:
 /// while the key is held, capture cannot be started and no shot is
 /// accepted, so clicking again after Escape can neither recapture the
 /// pointer nor fire. A confirmed release is not repeated, so holding
@@ -99,7 +119,6 @@ internal sealed class CameraCaptureController
 	private bool _captured;
 	private bool _releasePending;
 	private bool _closed;
-	private bool _leftButtonWasDown;
 
 	/// <param name="setRelativeMouseMode">
 	/// Enables or disables relative mouse mode and returns whether SDL
@@ -154,11 +173,12 @@ internal sealed class CameraCaptureController
 	/// Applies one sampled input state.
 	/// </summary>
 	/// <remarks>
-	/// The left-button edge is tracked from every sample, including
-	/// samples that only retry a pending release, so a held button
-	/// never turns into a new capture request. Escape and focus are
-	/// evaluated at the level, so a key that stays down keeps blocking
-	/// capture and fire instead of only acting on its first frame.
+	/// The capture and fire decisions both read the platform's
+	/// press edge, so a held button cannot turn into a new request and
+	/// a click that starts and ends between two polls is still seen.
+	/// Escape, focus, and a transient focus loss are evaluated at the
+	/// level, so a key that stays down keeps blocking capture and fire
+	/// instead of only acting on its first frame.
 	/// </remarks>
 	public CameraCaptureTransition Update(CameraInputSample sample)
 	{
@@ -206,23 +226,23 @@ internal sealed class CameraCaptureController
 			captureFailed = !captureStarted;
 		}
 
-		// A shot is a fresh left press with capture already confirmed.
-		// Escape, focus loss, another window taking the pointer, and a
-		// pending failed release all suppress it, and the held state of
-		// the button is tracked below so holding never repeats a shot.
-		// Escape is checked at the level rather than as an edge, so a
-		// click made while the key is still down stays inert.
+		// A shot is the platform's left press edge with capture already
+		// confirmed. Escape, focus loss, another window taking the
+		// pointer, and a pending failed release all suppress it. The
+		// edge already means "down this frame, not down last frame", so
+		// holding the button never repeats a shot and no second edge
+		// tracker is needed. Escape is checked at the level rather than
+		// as an edge, so a click made while the key is still down stays
+		// inert.
 		bool fireRequested =
 			wasCaptured &&
 			!_releasePending &&
 			!released &&
 			sample.KeyboardFocused &&
+			!sample.FocusLostDuringFrame &&
 			sample.PointerFocus == CameraPointerFocus.OwnWindow &&
 			!sample.EscapeDown &&
-			sample.LeftButtonDown &&
-			!_leftButtonWasDown;
-
-		_leftButtonWasDown = sample.LeftButtonDown;
+			sample.LeftButtonPressed;
 
 		return new CameraCaptureTransition(
 			CaptureFailed: captureFailed,
@@ -289,11 +309,14 @@ internal sealed class CameraCaptureController
 	/// releases, and every later sample sees an already released
 	/// controller, so the native disable path runs once per press
 	/// instead of once per frame. A pending release keeps being retried
-	/// by <see cref="Update"/> regardless of the key state.
+	/// by <see cref="Update"/> regardless of the key state. A frame that
+	/// lost keyboard focus releases even when final focus is back, so a
+	/// transient loss cannot leave the pointer captured.
 	/// </remarks>
 	private static bool IsReleaseRequested(CameraInputSample sample)
 	{
 		return !sample.KeyboardFocused ||
+			sample.FocusLostDuringFrame ||
 			sample.PointerFocus == CameraPointerFocus.OtherWindow ||
 			sample.EscapeDown;
 	}
@@ -307,10 +330,10 @@ internal sealed class CameraCaptureController
 	private bool IsCaptureRequested(CameraInputSample sample)
 	{
 		return sample.KeyboardFocused &&
+			!sample.FocusLostDuringFrame &&
 			sample.PointerFocus == CameraPointerFocus.OwnWindow &&
 			!sample.EscapeDown &&
-			sample.LeftButtonDown &&
-			!_leftButtonWasDown;
+			sample.LeftButtonPressed;
 	}
 
 	private bool TryCapture()

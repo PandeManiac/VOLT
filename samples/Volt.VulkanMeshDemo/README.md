@@ -137,10 +137,12 @@ disables it again. A release is only recorded after SDL confirms the
 native state: if `SDL_SetWindowRelativeMouseMode` fails, the camera
 stops looking, the release stays pending, and it is retried on the next
 update and at shutdown instead of silently reporting success. Input is
-sampled on the main thread through SDL's state queries, so the existing
-event pump, resize handling, and close handling are unchanged and no
-global hooks or synthetic events are used. A headless run never clicks,
-so it never captures the mouse.
+read from the engine's per-window snapshot: `Window.PollEvents` starts
+an input frame for every VOLT window, routes each native event to its
+own window, and completes the frames on the main thread, so the
+existing event pump, resize handling, and close handling are unchanged
+and no global hooks or synthetic events are used. A headless run never
+clicks, so it never captures the mouse.
 
 The camera controller has application lifetime. `MeshRenderer` queries
 it for the view matrix on every recorded frame and composes
@@ -426,6 +428,11 @@ Capture rules come from the existing `CameraCaptureController`:
   sampled frame.
 - A fresh left press while captured fires exactly once. Holding the
   button does not repeat, and releasing then pressing again fires again.
+- The press edge, not the held state, is what the sample consumes, so a
+  short click that begins and ends between two polls still captures or
+  fires exactly once. The platform reports one edge per physical press,
+  so a single click cannot fire twice and a held button cannot fire
+  again on a later frame.
 - Escape is level-triggered: the first held sample releases the
   pointer, and for as long as the key stays down no click can recapture
   it or fire. Losing keyboard focus, another window taking the pointer,
@@ -433,10 +440,15 @@ Capture rules come from the existing `CameraCaptureController`:
   release that SDL did not confirm stays pending: the view stays
   frozen, the pending state is retried, and no shot is accepted while
   it lasts.
-- `R` is a one-shot edge sampled only while the window has focus. Both
-  button edges are tracked from raw samples even while unfocused, so
+- `R` is a one-shot edge taken from the engine snapshot. The platform
+  clears held state and suppresses edges for an unfocused window, so
   holding a key or button in another application and then focusing this
   one cannot fabricate a press.
+- A frame in which keyboard focus was lost is cleared by the platform
+  and flagged with `FocusLostDuringFrame`. Capture is released on that
+  flag even when focus returns before the frame is read, and nothing is
+  captured, fired, restarted, or rotated in that frame; a new click is
+  required to capture again.
 
 The window title reports score and progress, for example
 `VOLT Target Range - 100/500 - 4 targets remaining`, and changes to
@@ -688,6 +700,67 @@ projection, and extent, requires each probe to sit within 60% of its
 target's pixel radius, and requires the reticle probes to lie on the
 horizontal arm at both extents.
 
+## Engine input
+
+`Volt.Platform.Input` owns the keyboard and mouse state of every
+window. The sample reads it once per polled frame instead of calling
+any SDL input function:
+
+```csharp
+window.PollEvents();
+
+InputSnapshot input = window.Input.Snapshot;
+
+if (input.WasKeyPressed(KeyCode.R))
+{
+    Restart();
+}
+
+if (input.IsKeyDown(KeyCode.W))
+{
+    MoveForward(deltaSeconds);
+}
+```
+
+`PollEvents` starts an input frame for every VOLT window, dispatches
+each native event to the window named by its ID, and then freezes one
+snapshot per window. Polling from any window therefore updates all of
+them, and input from one window never becomes input for another. A
+snapshot is a value type: a copy taken before the next poll keeps its
+own state, and querying it allocates nothing. Call `PollEvents` once
+per application frame and read the snapshot afterwards; a second poll
+starts a new frame, so an edge belongs to exactly one completed frame.
+
+Keys are physical positions (`KeyCode.W`, `KeyCode.LeftShift`,
+`KeyCode.Escape`), not characters produced by the layout.
+`IsKeyDown` is held state; `WasKeyPressed` and `WasKeyReleased` are
+one-frame edges. A key pressed and released within one frame reports
+both edges and ends up, and native key repeats never add a press.
+Mouse buttons have the same three queries. Motion and wheel deltas
+accumulate within a frame and reset at the next poll. `MousePosition`
+is in logical window units and must not be compared with framebuffer
+pixels on a high-density display; `MouseMotion` is the unclamped
+frame movement.
+
+`KeyboardFocused` and `MouseFocus` describe focus at the end of the
+frame. Losing focus clears held keys and buttons without reporting
+release edges, so a focus change cannot fabricate a press, and
+regaining focus does not invent one. A frame that contains a focus
+loss is cleared as a whole and reports `FocusLostDuringFrame` even if
+focus returned before the snapshot was read, so an action can rely on
+that flag instead of guessing where in the poll the loss happened.
+Actions consume edges (`WasKeyPressed`, `WasMouseButtonPressed`)
+rather than held state; that is what keeps a click that both starts
+and ends inside one poll, and what keeps a held button from repeating.
+Relative mouse mode is available
+through `TrySetRelativeMouseMode`, `IsRelativeMouseModeEnabled`, and
+`DiscardRelativeMotion`, but the platform never captures the pointer
+on its own: the application decides when capture is appropriate.
+While the window is captured, `RelativeMotion` carries the
+pointer-locked delta an FPS camera should consume. It is zero in the
+frame that starts capture, so the first captured frame cannot jump the
+view. See [src/Volt.Platform/Input/README.md](../../src/Volt.Platform/Input/README.md).
+
 ## Depth attachment
 
 The render pass has a color attachment and a depth attachment. Each
@@ -751,9 +824,11 @@ later far blue quad. That is the depth-test proof; see
   and mouse sensitivity, and produces the view matrix and
   allocation-free movement/look updates. Its initial position is
   supplied by the sample. `CameraScript` drives it deterministically
-  for headless runs. `CameraInput` samples SDL keyboard and mouse
-  state and owns relative mouse capture; it is created and disposed
-  by `Program`. `CameraCaptureController` holds the click and release
+  for headless runs. `CameraInput` maps the engine's per-window input
+  snapshot onto `CameraMovementInput` and the gameplay command, owns
+  relative mouse capture policy, and calls no SDL function; it is
+  created and disposed by `Program`. `CameraCaptureController` holds
+  the click and release
   state machine behind a small injectable seam, so capture, release,
   failed native transitions, and shutdown are tested without a
   desktop. The controller has no SDL, window, or Vulkan dependency.

@@ -13,4 +13,9 @@
     <PackageReference Include="SDL3-CS.Windows" Version="3.4.18" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Volt.Platform.Tests" />
+    <InternalsVisibleTo Include="Volt.VulkanMeshDemo.Tests" />
+  </ItemGroup>
+
 </Project>

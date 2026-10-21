@@ -1,6 +1,7 @@
 
 using SDL3;
 using Volt.Platform.Events;
+using Volt.Platform.Input;
 using Volt.Platform.Internal;
 
 namespace Volt.Platform.Windows;
@@ -15,215 +16,278 @@ namespace Volt.Platform.Windows;
 /// </remarks>
 public sealed class Window : IDisposable
 {
-    private readonly Queue<WindowEvent> _events = [];
-    private readonly uint _windowId;
+	private readonly Queue<WindowEvent> _events = [];
+	private readonly WindowInput _input;
+	private readonly uint _windowId;
 
-    private IntPtr _handle;
-    private bool _disposed;
+	private IntPtr _handle;
+	private bool _disposed;
 
-    public bool ShouldClose { get; private set; }
+	public bool ShouldClose { get; private set; }
 
-    /// <summary>
-    /// Gets the borrowed native SDL window handle.
-    /// </summary>
-    /// <remarks>
-    /// This handle is owned by the Window instance and must not
-    /// be destroyed by callers.
-    ///
-    /// It becomes invalid when the window is disposed.
-    /// Native operations must be performed on the main thread.
-    /// </remarks>
-    public IntPtr NativeHandle
-    {
-        get
-        {
-            ThrowIfDisposed();
-            return _handle;
-        }
-    }
+	/// <summary>
+	/// Gets the borrowed native SDL window handle.
+	/// </summary>
+	/// <remarks>
+	/// This handle is owned by the Window instance and must not
+	/// be destroyed by callers.
+	///
+	/// It becomes invalid when the window is disposed.
+	/// Native operations must be performed on the main thread.
+	/// </remarks>
+	public IntPtr NativeHandle
+	{
+		get
+		{
+			ThrowIfDisposed();
+			return _handle;
+		}
+	}
 
-    /// <summary>
-    /// Gets the client area dimensions in logical window coordinates.
-    /// </summary>
-    public WindowSize Size
-    {
-        get
-        {
-            ThrowIfDisposed();
+	/// <summary>
+	/// Gets the client area dimensions in logical window coordinates.
+	/// </summary>
+	public WindowSize Size
+	{
+		get
+		{
+			ThrowIfDisposed();
 
-            if (!SDL.GetWindowSize(
-                _handle,
-                out int width,
-                out int height))
-            {
-                throw new InvalidOperationException(
-                    $"Unable to query window size: {SDL.GetError()}");
-            }
+			if (!SDL.GetWindowSize(
+				_handle,
+				out int width,
+				out int height))
+			{
+				throw new InvalidOperationException(
+					$"Unable to query window size: {SDL.GetError()}");
+			}
 
-            return new WindowSize(width, height);
-        }
-    }
+			return new WindowSize(width, height);
+		}
+	}
 
-    /// <summary>
-    /// Gets the framebuffer dimensions in physical pixels.
-    /// These can be zero while minimized and need not match Size.
-    /// </summary>
-    public WindowSize PixelSize
-    {
-        get
-        {
-            ThrowIfDisposed();
+	/// <summary>
+	/// Gets the framebuffer dimensions in physical pixels.
+	/// These can be zero while minimized and need not match Size.
+	/// </summary>
+	public WindowSize PixelSize
+	{
+		get
+		{
+			ThrowIfDisposed();
 
-            if (!SDL.GetWindowSizeInPixels(
-                _handle,
-                out int width,
-                out int height))
-            {
-                throw new InvalidOperationException(
-                    $"Unable to query window pixel size: {SDL.GetError()}");
-            }
+			if (!SDL.GetWindowSizeInPixels(
+				_handle,
+				out int width,
+				out int height))
+			{
+				throw new InvalidOperationException(
+					$"Unable to query window pixel size: {SDL.GetError()}");
+			}
 
-            return new WindowSize(width, height);
-        }
-    }
+			return new WindowSize(width, height);
+		}
+	}
 
-    public Window(WindowDescription description)
-    {
-        description.Validate();
-        SdlLifetime.Acquire();
+	/// <summary>
+	/// Gets this window's keyboard and mouse input.
+	/// </summary>
+	/// <remarks>
+	/// The input state has the same lifetime as the window and is
+	/// updated by <see cref="PollEvents"/>. Polling any VOLT window
+	/// starts a new input frame for every registered window and
+	/// delivers each native event to the window it belongs to, so two
+	/// windows never share keyboard or mouse state.
+	/// </remarks>
+	public WindowInput Input
+	{
+		get
+		{
+			ThrowIfDisposed();
+			return _input;
+		}
+	}
 
-        try
-        {
-            SDL.WindowFlags flags = 0;
+	public Window(WindowDescription description)
+	{
+		description.Validate();
+		SdlLifetime.Acquire();
 
-            if (description.Resizable)
-            {
-                flags |= SDL.WindowFlags.Resizable;
-            }
+		try
+		{
+			SDL.WindowFlags flags = 0;
 
-            if (description.HighPixelDensity)
-            {
-                flags |= SDL.WindowFlags.HighPixelDensity;
-            }
+			if (description.Resizable)
+			{
+				flags |= SDL.WindowFlags.Resizable;
+			}
 
-            if (description.VulkanCompatible)
-            {
-                flags |= SDL.WindowFlags.Vulkan;
-            }
+			if (description.HighPixelDensity)
+			{
+				flags |= SDL.WindowFlags.HighPixelDensity;
+			}
 
-            _handle = SDL.CreateWindow(
-                description.Title,
-                description.Size.Width,
-                description.Size.Height,
-                flags);
+			if (description.VulkanCompatible)
+			{
+				flags |= SDL.WindowFlags.Vulkan;
+			}
 
-            if (_handle == IntPtr.Zero)
-            {
-                throw new InvalidOperationException(
-                    $"SDL could not create the window: {SDL.GetError()}");
-            }
+			_handle = SDL.CreateWindow(
+				description.Title,
+				description.Size.Width,
+				description.Size.Height,
+				flags);
 
-            _windowId = SDL.GetWindowID(_handle);
+			if (_handle == IntPtr.Zero)
+			{
+				throw new InvalidOperationException(
+					$"SDL could not create the window: {SDL.GetError()}");
+			}
 
-            if (_windowId == 0)
-            {
-                throw new InvalidOperationException(
-                    $"SDL could not identify the window: {SDL.GetError()}");
-            }
+			_windowId = SDL.GetWindowID(_handle);
 
-            SdlLifetime.RegisterWindow(_windowId, this);
-        }
+			if (_windowId == 0)
+			{
+				throw new InvalidOperationException(
+					$"SDL could not identify the window: {SDL.GetError()}");
+			}
 
-        catch
-        {
-            if (_handle != IntPtr.Zero)
-            {
-                SDL.DestroyWindow(_handle);
-                _handle = IntPtr.Zero;
-            }
+			_input = new WindowInput(
+				_handle,
+				enabled => SDL.SetWindowRelativeMouseMode(_handle, enabled),
+				() => SDL.GetWindowRelativeMouseMode(_handle),
+				DiscardRelativeMotion);
 
-            SdlLifetime.Release();
-            throw;
-        }
-    }
+			SdlLifetime.RegisterWindow(_windowId, this);
+		}
 
-    /// <summary>
-    /// Polls the global SDL event queue, delivering events to every VOLT window.
-    /// </summary>
-    public void PollEvents()
-    {
-        ThrowIfDisposed();
-        SdlLifetime.PollEvents();
-    }
+		catch
+		{
+			if (_handle != IntPtr.Zero)
+			{
+				SDL.DestroyWindow(_handle);
+				_handle = IntPtr.Zero;
+			}
 
-    /// <summary>
-    /// Retrieves the next queued event for this window.
-    /// </summary>
-    public bool TryDequeueEvent(out WindowEvent windowEvent)
-    {
-        ThrowIfDisposed();
-        return _events.TryDequeue(out windowEvent);
-    }
+			SdlLifetime.Release();
+			throw;
+		}
+	}
 
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
+	/// <summary>
+	/// Polls the global SDL event queue, delivering events to every VOLT window.
+	/// </summary>
+	/// <remarks>
+	/// One call is one input frame: every registered window starts a
+	/// new frame, each native input event is applied to the window it
+	/// belongs to, and every window freezes a completed
+	/// <see cref="InputSnapshot"/>. Call this once per application
+	/// frame from the main thread and read <see cref="Input"/> after
+	/// it returns.
+	/// </remarks>
+	public void PollEvents()
+	{
+		ThrowIfDisposed();
+		SdlLifetime.PollEvents();
+	}
 
-        SdlLifetime.UnregisterWindow(_windowId);
-        SDL.DestroyWindow(_handle);
+	/// <summary>
+	/// Retrieves the next queued event for this window.
+	/// </summary>
+	public bool TryDequeueEvent(out WindowEvent windowEvent)
+	{
+		ThrowIfDisposed();
+		return _events.TryDequeue(out windowEvent);
+	}
 
-        _handle = IntPtr.Zero;
-        _disposed = true;
+	public void Dispose()
+	{
+		if (_disposed)
+		{
+			return;
+		}
 
-        SdlLifetime.Release();
-    }
+		// Unregister first so a poll can no longer deliver events
+		// while the input state and the native window go away.
+		SdlLifetime.UnregisterWindow(_windowId);
+		_input.Dispose();
+		SDL.DestroyWindow(_handle);
 
-    internal void ReceiveCloseRequest()
-    {
-        if (ShouldClose)
-        {
-            return;
-        }
+		_handle = IntPtr.Zero;
+		_disposed = true;
 
-        ShouldClose = true;
+		SdlLifetime.Release();
+	}
 
-        _events.Enqueue(
-            new WindowEvent(WindowEventType.CloseRequested));
-    }
+	internal void ReceiveCloseRequest()
+	{
+		if (ShouldClose)
+		{
+			return;
+		}
 
-    internal void ReceiveNativeEvent(SDL.Event nativeEvent)
-    {
-        switch ((SDL.EventType)nativeEvent.Type)
-        {
-            case SDL.EventType.WindowCloseRequested:
-                ReceiveCloseRequest();
-                break;
+		ShouldClose = true;
 
-            case SDL.EventType.WindowResized:
-                _events.Enqueue(
-                    new WindowEvent(
-                        WindowEventType.Resized,
-                        new WindowSize(
-                            nativeEvent.Window.Data1,
-                            nativeEvent.Window.Data2)));
-                break;
+		_events.Enqueue(
+			new WindowEvent(WindowEventType.CloseRequested));
+	}
 
-            case SDL.EventType.WindowPixelSizeChanged:
-                _events.Enqueue(
-                    new WindowEvent(
-                        WindowEventType.PixelSizeChanged,
-                        new WindowSize(
-                            nativeEvent.Window.Data1,
-                            nativeEvent.Window.Data2)));
-                break;
-        }
-    }
+	internal void BeginInputFrame()
+	{
+		_input.BeginFrame();
+	}
 
-    private void ThrowIfDisposed()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-    }
+	internal void CompleteInputFrame(
+		IntPtr keyboardFocus,
+		IntPtr mouseFocus)
+	{
+		// The window flag is checked in addition to the focused-window
+		// handle so a stale focus pointer cannot report focus a window
+		// no longer has.
+		bool keyboardFocused =
+			keyboardFocus == _handle &&
+			(SDL.GetWindowFlags(_handle) & SDL.WindowFlags.InputFocus) != 0;
+
+		_input.CompleteFrame(keyboardFocused, mouseFocus);
+	}
+
+	internal void ReceiveNativeEvent(SDL.Event nativeEvent)
+	{
+		_input.ReceiveEvent(nativeEvent);
+
+		switch ((SDL.EventType)nativeEvent.Type)
+		{
+			case SDL.EventType.WindowCloseRequested:
+				ReceiveCloseRequest();
+				break;
+
+			case SDL.EventType.WindowResized:
+				_events.Enqueue(
+					new WindowEvent(
+						WindowEventType.Resized,
+						new WindowSize(
+							nativeEvent.Window.Data1,
+							nativeEvent.Window.Data2)));
+				break;
+
+			case SDL.EventType.WindowPixelSizeChanged:
+				_events.Enqueue(
+					new WindowEvent(
+						WindowEventType.PixelSizeChanged,
+						new WindowSize(
+							nativeEvent.Window.Data1,
+							nativeEvent.Window.Data2)));
+				break;
+		}
+	}
+
+	private static void DiscardRelativeMotion()
+	{
+		SDL.GetRelativeMouseState(out _, out _);
+	}
+
+	private void ThrowIfDisposed()
+	{
+		ObjectDisposedException.ThrowIf(_disposed, this);
+	}
 }

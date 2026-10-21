@@ -1,4 +1,5 @@
-using SDL3;
+using System.Numerics;
+using Volt.Platform.Input;
 using Volt.Platform.Windows;
 using Volt.Rendering.Cameras;
 
@@ -15,10 +16,10 @@ namespace Volt.VulkanMeshDemo;
 /// movement that was requested.
 /// </para>
 /// <para>
-/// Both edges are computed from raw sampled state, including samples
-/// taken while the window is unfocused. Holding a button in another
-/// application and then focusing this one therefore cannot fabricate a
-/// press: the held state has already been observed.
+/// Both edges come from the engine's input snapshot. The platform
+/// clears held state and suppresses edges when the window is
+/// unfocused, so holding a key or button in another application and
+/// then focusing this one cannot fabricate a press.
 /// </para>
 /// <para>
 /// The type is a value type with no managed references, so returning
@@ -32,44 +33,63 @@ internal readonly record struct CameraInputSnapshot(
 	CameraMovementInput Movement);
 
 /// <summary>
-/// Samples the sample window's keyboard and mouse state and feeds it
-/// to the camera controller.
+/// Maps the engine's per-window input snapshot onto the sample's
+/// camera and target-range commands.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Input is read with SDL's state queries on the main thread, which
-/// is the same thread that pumps the existing event queue. No global
-/// hook is registered, no other window is touched, and no synthetic
-/// events are generated.
+/// The platform samples the keyboard, mouse, and focus state; this
+/// adapter only translates it into <see cref="CameraMovementInput"/>
+/// and the one-shot edges gameplay consumes. It contains no SDL call,
+/// no state query, and no edge tracking of its own.
 /// </para>
 /// <para>
 /// Relative mouse mode is never enabled automatically. It is entered
 /// only by a left click in the sample window while that window owns
-/// both keyboard focus and the pointer. SDL reports a null mouse-focus
-/// window when no window owns the pointer; such a click cannot be
-/// attributed to this window, so it never starts capture. Mouse mode
-/// is released by Escape, by losing keyboard focus, by another window
-/// taking the pointer, or by disposal.
+/// both keyboard focus and the pointer. SDL reports a null
+/// mouse-focus window when no window owns the pointer; such a click
+/// cannot be attributed to this window, so it never starts capture.
+/// Mouse mode is released by Escape, by losing keyboard focus, by
+/// another window taking the pointer, or by disposal. A focus loss
+/// releases even when focus returns before the frame is read.
 /// </para>
 /// <para>
-/// A release is only recorded once SDL confirms the native state, so a
+/// <see cref="CameraCaptureController"/> remains the single owner of
+/// capture policy and of the left-button edge decision: the platform
+/// supplies its press edge, and the controller decides whether that
+/// press captures or fires. Gameplay never reads a button edge
+/// directly, so the capture click cannot also fire. Passing the edge
+/// rather than the held state is also what preserves a short click
+/// that begins and ends between two polls.
+/// </para>
+/// <para>
+/// A frame in which the window lost keyboard focus is cleared by the
+/// platform and additionally releases capture through
+/// <see cref="InputSnapshot.FocusLostDuringFrame"/>, so a focus loss
+/// that was repaired before the frame was read cannot leave the
+/// pointer captured or rotate the camera.
+/// </para>
+/// <para>
+/// A release is only recorded once the native state is confirmed, so a
 /// failing disable keeps the camera frozen and is retried on the next
 /// update and at shutdown instead of silently reporting success.
 /// </para>
 /// <para>
-/// The controller is only updated while the window has focus, so
-/// background windows cannot move the camera. Regaining focus starts
-/// from the retained orientation and position; the camera does not
-/// jump because mouse look resumes only after a fresh click.
+/// Camera look consumes <see cref="InputSnapshot.RelativeMotion"/>,
+/// which is nonzero only while relative mouse mode was enabled at the
+/// end of the frame. The frame that starts capture therefore reports
+/// no relative motion, so the first captured frame cannot jump the
+/// view. The camera is only moved while the window has keyboard
+/// focus, and regaining focus starts from the retained pose because
+/// mouse look resumes only after a fresh click.
 /// </para>
 /// </remarks>
 internal sealed class CameraInput : IDisposable
 {
-	private readonly Window _window;
+	private readonly WindowInput _input;
 	private readonly CameraCaptureController _capture;
 
 	private bool _releaseFailureReported;
-	private bool _restartWasDown;
 	private bool _disposed;
 
 	/// <summary>
@@ -78,19 +98,33 @@ internal sealed class CameraInput : IDisposable
 	public bool IsCaptured => _capture.IsCaptured;
 
 	public CameraInput(Window window)
+		: this(window.Input)
 	{
-		ArgumentNullException.ThrowIfNull(window);
-		_window = window;
-
-		_capture = new CameraCaptureController(
-			SetRelativeMouseMode,
-			IsRelativeMouseModeEnabled,
-			DiscardPendingMotion);
 	}
 
 	/// <summary>
-	/// Samples input, integrates it into the camera, and reports the
-	/// frame's gameplay edges.
+	/// Creates an adapter over an existing engine input.
+	/// </summary>
+	/// <remarks>
+	/// The window owns the input, so this adapter never disposes it.
+	/// The overload exists so the mapping and capture policy can be
+	/// exercised with a synthetic input that needs no native window.
+	/// </remarks>
+	internal CameraInput(WindowInput input)
+	{
+		ArgumentNullException.ThrowIfNull(input);
+
+		_input = input;
+
+		_capture = new CameraCaptureController(
+			input.TrySetRelativeMouseMode,
+			() => input.IsRelativeMouseModeEnabled,
+			input.DiscardRelativeMotion);
+	}
+
+	/// <summary>
+	/// Reads the completed input frame, integrates it into the camera,
+	/// and reports the frame's gameplay edges.
 	/// </summary>
 	/// <param name="camera">The camera to update.</param>
 	/// <param name="deltaSeconds">
@@ -101,6 +135,10 @@ internal sealed class CameraInput : IDisposable
 	/// The frame's focus state, one-shot fire and restart edges, and
 	/// the movement that was applied.
 	/// </returns>
+	/// <remarks>
+	/// Read once per polled frame: a later poll starts a new frame and
+	/// replaces the snapshot.
+	/// </remarks>
 	public CameraInputSnapshot Update(
 		CameraController camera,
 		float deltaSeconds)
@@ -108,24 +146,15 @@ internal sealed class CameraInput : IDisposable
 		ArgumentNullException.ThrowIfNull(camera);
 		ObjectDisposedException.ThrowIf(_disposed, this);
 
-		IntPtr handle = _window.NativeHandle;
-
-		bool keyboardFocused =
-			SDL.GetKeyboardFocus() == handle &&
-			(SDL.GetWindowFlags(handle) & SDL.WindowFlags.InputFocus) != 0;
-
-		ReadOnlySpan<bool> keys = SDL.GetKeyboardState(out _);
+		InputSnapshot snapshot = _input.Snapshot;
 
 		CameraInputSample sample = new(
-			KeyboardFocused: keyboardFocused,
-			PointerFocus: ClassifyPointerFocus(
-				SDL.GetMouseFocus(),
-				handle),
-			LeftButtonDown:
-				(SDL.GetMouseState(out _, out _) &
-					SDL.MouseButtonFlags.Left) != 0,
-			EscapeDown: keyboardFocused &&
-				IsDown(keys, SDL.Scancode.Escape));
+			KeyboardFocused: snapshot.KeyboardFocused,
+			PointerFocus: ToPointerFocus(snapshot.MouseFocus),
+			LeftButtonPressed:
+				snapshot.WasMouseButtonPressed(MouseButton.Left),
+			EscapeDown: snapshot.IsKeyDown(KeyCode.Escape),
+			FocusLostDuringFrame: snapshot.FocusLostDuringFrame);
 
 		CameraCaptureTransition transition = _capture.Update(sample);
 
@@ -133,35 +162,24 @@ internal sealed class CameraInput : IDisposable
 
 		if (_capture.IsLookActive)
 		{
-			SDL.GetRelativeMouseState(out float lookX, out float lookY);
+			Vector2 look = snapshot.RelativeMotion;
 
-			if (lookX != 0.0f || lookY != 0.0f)
+			if (look.X != 0.0f || look.Y != 0.0f)
 			{
-				camera.ApplyLook(lookX, lookY);
+				camera.ApplyLook(look.X, look.Y);
 			}
 		}
 
-		CameraMovementInput movement = keyboardFocused
-			? SampleMovement(keys)
+		CameraMovementInput movement = snapshot.KeyboardFocused
+			? SampleMovement(snapshot)
 			: CameraMovementInput.None;
 
 		camera.Move(movement, deltaSeconds);
 
-		// The raw key state is tracked even without focus so a key that
-		// was already held when the window regained focus is not a new
-		// press. The edge itself is only reported while focused.
-		bool restartDown = IsDown(keys, SDL.Scancode.R);
-		bool restartRequested =
-			keyboardFocused &&
-			restartDown &&
-			!_restartWasDown;
-
-		_restartWasDown = restartDown;
-
 		return new CameraInputSnapshot(
-			KeyboardFocused: keyboardFocused,
+			KeyboardFocused: snapshot.KeyboardFocused,
 			FireRequested: transition.FireRequested,
-			RestartRequested: restartRequested,
+			RestartRequested: snapshot.WasKeyPressed(KeyCode.R),
 			Movement: movement);
 	}
 
@@ -169,8 +187,10 @@ internal sealed class CameraInput : IDisposable
 	/// Releases relative mouse mode and restores the cursor.
 	/// </summary>
 	/// <remarks>
-	/// Safe to call more than once. A release that SDL does not confirm
-	/// is reported on stderr rather than silently treated as success.
+	/// Safe to call more than once. A release that the windowing
+	/// backend does not confirm is reported on stderr rather than
+	/// silently treated as success. The engine input belongs to the
+	/// window and is disposed with it.
 	/// </remarks>
 	public void Dispose()
 	{
@@ -185,60 +205,32 @@ internal sealed class CameraInput : IDisposable
 		{
 			Console.Error.WriteLine(
 				"Relative mouse mode could not be disabled during " +
-				"disposal; the cursor may remain captured: " +
-				$"{SDL.GetError()}");
+				"disposal; the cursor may remain captured.");
 		}
 	}
 
 	private static CameraMovementInput SampleMovement(
-		ReadOnlySpan<bool> keys)
+		in InputSnapshot snapshot)
 	{
 		return new CameraMovementInput(
-			Forward: IsDown(keys, SDL.Scancode.W),
-			Backward: IsDown(keys, SDL.Scancode.S),
-			StrafeLeft: IsDown(keys, SDL.Scancode.A),
-			StrafeRight: IsDown(keys, SDL.Scancode.D),
-			Up: IsDown(keys, SDL.Scancode.Space),
-			Down: IsDown(keys, SDL.Scancode.LCtrl),
-			Sprint: IsDown(keys, SDL.Scancode.LShift));
+			Forward: snapshot.IsKeyDown(KeyCode.W),
+			Backward: snapshot.IsKeyDown(KeyCode.S),
+			StrafeLeft: snapshot.IsKeyDown(KeyCode.A),
+			StrafeRight: snapshot.IsKeyDown(KeyCode.D),
+			Up: snapshot.IsKeyDown(KeyCode.Space),
+			Down: snapshot.IsKeyDown(KeyCode.LeftControl),
+			Sprint: snapshot.IsKeyDown(KeyCode.LeftShift));
 	}
 
-	private static bool IsDown(ReadOnlySpan<bool> keys, SDL.Scancode code)
+	private static CameraPointerFocus ToPointerFocus(
+		MouseFocusState focus)
 	{
-		int index = (int)code;
-
-		return (uint)index < (uint)keys.Length && keys[index];
-	}
-
-	private static CameraPointerFocus ClassifyPointerFocus(
-		IntPtr mouseFocus,
-		IntPtr handle)
-	{
-		if (mouseFocus == IntPtr.Zero)
+		return focus switch
 		{
-			return CameraPointerFocus.None;
-		}
-
-		return mouseFocus == handle
-			? CameraPointerFocus.OwnWindow
-			: CameraPointerFocus.OtherWindow;
-	}
-
-	private bool SetRelativeMouseMode(bool enabled)
-	{
-		return SDL.SetWindowRelativeMouseMode(
-			_window.NativeHandle,
-			enabled);
-	}
-
-	private bool IsRelativeMouseModeEnabled()
-	{
-		return SDL.GetWindowRelativeMouseMode(_window.NativeHandle);
-	}
-
-	private static void DiscardPendingMotion()
-	{
-		SDL.GetRelativeMouseState(out _, out _);
+			MouseFocusState.OwnWindow => CameraPointerFocus.OwnWindow,
+			MouseFocusState.OtherWindow => CameraPointerFocus.OtherWindow,
+			_ => CameraPointerFocus.None
+		};
 	}
 
 	private void ReportFailures(CameraCaptureTransition transition)
@@ -246,8 +238,7 @@ internal sealed class CameraInput : IDisposable
 		if (transition.CaptureFailed)
 		{
 			Console.Error.WriteLine(
-				$"Relative mouse mode could not be enabled: " +
-				$"{SDL.GetError()}");
+				"Relative mouse mode could not be enabled.");
 		}
 
 		if (!transition.ReleaseFailed)
@@ -264,7 +255,6 @@ internal sealed class CameraInput : IDisposable
 		_releaseFailureReported = true;
 
 		Console.Error.WriteLine(
-			$"Relative mouse mode could not be disabled; retrying: " +
-			$"{SDL.GetError()}");
+			"Relative mouse mode could not be disabled; retrying.");
 	}
 }
