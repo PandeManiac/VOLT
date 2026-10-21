@@ -390,6 +390,123 @@ the sharper camera probe. Comparing the two screenshots leaves about
 `x = 430..866` to `x = 554..814`: triangle A moved right, triangle B
 moved left.
 
+## Simulation timing
+
+`--timing-demo` uses the ECS scene to exercise the engine loop in
+`Volt.Core.Timing`. It is accepted only with `--scene ecs-scene` and
+is rejected together with `--ecs-script`, because both mutate the same
+entities. Without the argument the scene is byte-for-byte unchanged.
+
+The demonstration registers real engine work instead of checking
+`Stopwatch` or a frame counter:
+
+| Work | Registration | Effect |
+| --- | --- | --- |
+| Pulse | `RegisterFixedUpdate` | Triangle A ramps to `x = 0.15`, holds 30 steps, returns through the rest pose to `x = -1.65`, and holds 30 steps |
+| In-place rotation | `Schedule.EveryHz(10, ...)` | Triangle B rotates 15° per tick, so a 60 Hz simulation runs it every 6 steps |
+| Two-second event | `Schedule.Every(2s, ...)` | The hexagon shifts by `-0.35` on world X and back |
+| One-shot event | `Schedule.After(5s, ...)` | The hexagon grows from scale `0.30` to `0.45` once |
+
+Every mutation is an in-place component write before render
+extraction. No entity is created or destroyed, and no GPU resource is
+touched from a callback.
+
+The interactive path uses `MonotonicClock.Shared` and real elapsed
+time; it is never driven by presentation counts. `--timing-script` is
+the deterministic test-only mode. It injects exactly one 60 Hz frame of
+fake elapsed time after each **accepted** presentation, so a dropped
+frame or a swapchain recreation cannot add or skip simulation steps.
+It also pauses at accepted frame 360, requests one single step at frame
+370, resumes at frame 380, and verifies the final counters at the end.
+It requires at least 600 bounded frames.
+
+```bash
+dotnet run \
+  --project samples/Volt.VulkanMeshDemo \
+  -c Release -- \
+  --validation \
+  --frames 600 \
+  --scene ecs-scene \
+  --timing-demo \
+  --timing-script
+```
+
+```
+Timing demo 10 Hz tick 1 at step 6: triangleB.degrees=15.
+Timing demo pulse at maximum (step 30): triangleA.x=0.150.
+Timing demo pulse at minimum (step 90): triangleA.x=-1.650.
+Timing demo two-second event 1 at step 120: hexagon.x=-1.950.
+Timing demo paused at accepted frame 360: step 360, alpha=0.000000.
+Timing demo single step requested at accepted frame 370: pending=True, step 360.
+Timing demo resumed at accepted frame 380: step 361, alpha=0.000000.
+Timing demo final: steps=581, pulses=581, tenHz=96, twoSecond=4, oneShot=1, alpha=0.000004, dropped=0.000ms, triangleA.x=-1.650.
+```
+
+The twenty paused frames lose nineteen simulation steps (one is
+restored by the single step), so ten simulated seconds become 581
+steps. The 10 Hz callback runs 96 times, the two-second event 4 times,
+and the five-second one-shot once. `dropped=0.000ms` proves no frame
+was clamped and no backlog was discarded; `alpha=0.000004` is the exact
+integer remainder after resume, not a wall-clock approximation.
+
+### Headless timing verification
+
+Pixel probes are derived from the same projection the scene uses. The
+pulse holds its extreme for 30 steps, so the screenshot taken after a
+checkpoint sees a stable image:
+
+```bash
+# Pulse at maximum: the probe over the quad turns red.
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots \
+  --sample-arg=--scene --sample-arg ecs-scene \
+  --sample-arg=--timing-demo --sample-arg=--timing-script \
+  --screenshot-after-line "Timing demo pulse at maximum (step 30)" \
+  --expect-pixel-class 671,298,red \
+  --expect-pixel-class 640,360,blue
+
+# Pulse at minimum: the same probe returns to the quad's blue.
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots \
+  --sample-arg=--scene --sample-arg ecs-scene \
+  --sample-arg=--timing-demo --sample-arg=--timing-script \
+  --screenshot-after-line "Timing demo pulse at minimum (step 90)" \
+  --expect-pixel-class 671,298,blue \
+  --expect-pixel-class 297,298,red
+```
+
+At 1280x720 the pulse's rest centre is `(484, 287)`. Moving it `+0.9`
+world units with the camera fixed projects to `(671, 298)`, and `-0.9`
+to `(297, 298)`; the quad spans `x = 435..845, y = 246..474`. Unit
+tests recompute every probe from the extracted model matrix and the
+camera entity, require at least 5 pixels of clearance from the pulse
+silhouette, and fail if geometry moves a probe onto an edge.
+
+A resized run uses the same deterministic clock. The resize trigger is
+frame 200; the post-recreation checkpoint is 30 accepted frames later,
+still inside a minimum hold, so the probes scale by exactly 0.75:
+
+```bash
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots \
+  --weston-shell desktop \
+  --sample-arg=--scene --sample-arg ecs-scene \
+  --sample-arg=--timing-demo --sample-arg=--timing-script \
+  --sample-arg=--resize-at-frame --sample-arg 200 \
+  --sample-arg=--resize-to --sample-arg 960x540 \
+  --screenshot-after-line "Timing demo state stable after recreation" \
+  --expect-pixel-class 223,224,red \
+  --expect-pixel-class 503,224,blue
+```
+
+The run reports `Timing demo state stable after recreation: steps=230,
+pulses=230, tenHz=38, ...` and finishes with `steps=581`, proving the
+simulation clock kept advancing across the new swapchain generation
+without restarting or replaying work.
+
 ## Target range
 
 `--scene target-range` is a small, complete first-person round. It
@@ -1152,3 +1269,21 @@ blocking capture and fire for as long as it stays down, focus loss,
 another window's click, a pending release, failed capture, and restart
 precedence. `CameraControllerTests` covers the new `SetPose` reset,
 including pitch clamping and rejection of non-finite values.
+
+`TimingDemoTests` covers the pulse ramp and both holds, the scripted
+counters (581 steps, 96 ten-hertz ticks, 4 two-second events, 1
+one-shot, zero dropped time, exact alpha), pause and exactly one
+single step, determinism, and that the interactive mode selects the
+shared monotonic clock. `TimingProbeTests` recomputes the maximum,
+minimum, and resized screenshot probes from the extracted model and
+camera matrices and requires clearance from every silhouette.
+`SampleFrameDriverTests` proves a short capture click and a keyboard
+restart edge are consumed once per input frame even when that frame
+executes five fixed steps, and that quiet frames do not replay them.
+
+The timing foundation itself is tested in
+`tests/Volt.Core.Tests/Timing`: lifecycle order, 30/60/144/240 FPS
+render rates, a one-million-frame drift run, clamps and backlog
+dropping, alpha, pause/resume/single-step, 1/7/10/20/60 Hz and 750 ms
+scheduling, missed deadlines, cancellation and stale handles,
+registration during dispatch, and warmed-up zero-allocation frames.

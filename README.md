@@ -28,6 +28,14 @@ The job scheduler supports parallel batch execution using the .NET ThreadPool an
 
 Core utilities provide native-memory arenas and buffers for workloads that benefit from explicit allocation and lifetime management.
 
+### Simulation timing
+
+`Volt.Core.Timing` provides the deterministic clock an application runs on: one `Update` per frame, zero or more 60 Hz `FixedUpdate` steps, and scheduled simulation work at absolute fixed-step deadlines. Fixed time is accumulated in exact integer units, so a 60 Hz simulation does not drift from repeatedly adding an approximate 1/60 second.
+
+The loop clamps long frames, caps catch-up steps, drops excess simulation debt instead of building a backlog, supports pause and single-step, and exposes an interpolation alpha in `[0, 1)`. Scheduled callbacks run synchronously on the game thread, never through a timer or a hidden task. The subsystem has no SDL, Vulkan, ECS, or job-scheduler dependency, and its steady-state frames allocate nothing.
+
+See [src/Volt.Core/Timing/README.md](src/Volt.Core/Timing/README.md) for the execution order, frequency semantics, missed-deadline policy, and interpolation ownership rules.
+
 ### Platform and graphics
 
 Platform integration uses SDL3 for native windows, events, and Vulkan-compatible presentation surfaces.
@@ -44,7 +52,7 @@ See the [Vulkan surface demo README](samples/Volt.VulkanSurfaceDemo/README.md) f
 
 | Project | Purpose |
 | --- | --- |
-| `Volt.Core` | Native memory arenas and buffers |
+| `Volt.Core` | Native memory arenas and buffers, and the deterministic game-loop timing foundation |
 | `Volt.Ecs` | Entities, components, archetypes, queries, and chunk storage |
 | `Volt.Jobs` | Job scheduling and parallel batch execution |
 | `Volt.Graphics` | Graphics device abstractions |
@@ -113,7 +121,7 @@ The demo displays a color-interpolated triangle against a dark background for a 
 
 VOLT uses [BenchmarkDotNet](https://github.com/dotnet/BenchmarkDotNet) to measure performance-sensitive operations.
 
-The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration.
+The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration, plus empty, fixed-step, idle-scheduled, and due-scheduled game-loop frames.
 
 Benchmark results are intended to inform implementation decisions, not merely to maximize reported throughput. Results should be evaluated alongside correctness, memory consumption, and workload characteristics.
 

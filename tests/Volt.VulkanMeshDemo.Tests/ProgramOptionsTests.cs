@@ -1126,6 +1126,202 @@ public sealed class ProgramOptionsTests
 		Assert.Equal(DemoScene.Gallery, options.Scene);
 	}
 
+	[Fact]
+	public void TryParseOptions_ParsesTimingDemo()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--timing-demo"
+				],
+				out SampleOptions options,
+				out _));
+
+		Assert.Equal(DemoScene.EcsScene, options.Scene);
+		Assert.True(options.TimingDemo);
+		Assert.False(options.TimingScript);
+	}
+
+	[Fact]
+	public void TryParseOptions_ParsesTimingScript()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--timing-demo",
+					"--timing-script",
+					"--frames", "600"
+				],
+				out SampleOptions options,
+				out _));
+
+		Assert.True(options.TimingDemo);
+		Assert.True(options.TimingScript);
+	}
+
+	[Theory]
+	[InlineData("gallery")]
+	[InlineData("camera-transforms")]
+	[InlineData("target-range")]
+	public void TryParseOptions_TimingDemoOutsideEcsScene_Fails(string scene)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--scene", scene, "--timing-demo"],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene ecs-scene", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_TimingDemoWithoutScene_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--timing-demo"],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --scene ecs-scene", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_TimingScriptWithoutDemo_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--timing-script",
+					"--frames", "600"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("requires --timing-demo", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_TimingScriptWithoutFrameLimit_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--timing-demo",
+					"--timing-script"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("bounded --frames", error);
+	}
+
+	[Theory]
+	[InlineData("1")]
+	[InlineData("599")]
+	public void TryParseOptions_TimingScriptTooShort_Fails(string frames)
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--timing-demo",
+					"--timing-script",
+					"--frames", frames
+				],
+				out _,
+				out string error));
+
+		Assert.Contains(
+			$"at least {TimingDemo.MinimumScriptedFrames}",
+			error);
+	}
+
+	[Fact]
+	public void TryParseOptions_TimingScriptAtMinimumFrames_Parses()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--timing-demo",
+					"--timing-script",
+					"--frames", "600"
+				],
+				out SampleOptions options,
+				out _));
+
+		Assert.True(options.TimingScript);
+	}
+
+	[Fact]
+	public void TryParseOptions_TimingDemoWithEcsScript_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--timing-demo",
+					"--ecs-script",
+					"--frames", "600"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("cannot be combined", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DuplicateTimingDemo_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--timing-demo",
+					"--timing-demo"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("twice", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DuplicateTimingScript_Fails()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--timing-demo",
+					"--timing-script",
+					"--timing-script",
+					"--frames", "600"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("twice", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_DefaultRunHasNoTimingDemo()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				["--frames", "120"],
+				out SampleOptions options,
+				out _));
+
+		Assert.False(options.TimingDemo);
+		Assert.False(options.TimingScript);
+	}
+
 	private static SampleOptions ResizeOptions(int frame)
 	{
 		return new SampleOptions(

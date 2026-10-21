@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Numerics;
 using SDL3;
 using Silk.NET.Vulkan;
+using Volt.Core.Timing;
 using Volt.Graphics.Vulkan.Commands;
 using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
@@ -30,6 +31,8 @@ internal static class Program
 	private const string CameraScriptArgument = "--camera-script";
 	private const string EcsScriptArgument = "--ecs-script";
 	private const string RangeScriptArgument = "--range-script";
+	private const string TimingDemoArgument = "--timing-demo";
+	private const string TimingScriptArgument = "--timing-script";
 	private const string GallerySceneName = "gallery";
 	private const string DepthOcclusionSceneName = "depth-occlusion";
 	private const string CameraTransformsSceneName = "camera-transforms";
@@ -84,6 +87,7 @@ internal static class Program
 				"[--scene gallery|depth-occlusion|camera-transforms|" +
 				"ecs-scene|target-range] [--camera-script] " +
 				"[--ecs-script] [--range-script] " +
+				"[--timing-demo [--timing-script]] " +
 				"[--disable-depth-test] " +
 				"[--resize-at-frame N --resize-to WIDTHxHEIGHT]");
 
@@ -318,6 +322,13 @@ internal static class Program
 			? new TargetRangeScript()
 			: null;
 
+		TimingDemo? timingDemo = options.TimingDemo
+			? new TimingDemo(
+				ecsScene ?? throw new InvalidOperationException(
+					"The timing demo requires the ECS scene."),
+				options.TimingScript)
+			: null;
+
 		string shaderDirectory = Path.Combine(
 			AppContext.BaseDirectory,
 			"Shaders");
@@ -349,6 +360,16 @@ internal static class Program
 					? "Camera: interactive (wasd, space/ctrl, mouse " +
 						"after click, escape releases, shift sprints)."
 					: "Camera: scripted deterministic flight.");
+		}
+
+		if (timingDemo is not null)
+		{
+			Console.WriteLine(
+				timingDemo.IsScripted
+					? "Timing demo: scripted deterministic 60 Hz " +
+						"simulation with fake elapsed time."
+					: "Timing demo: interactive 60 Hz simulation with " +
+						"the monotonic clock.");
 		}
 
 		if (options.Scene == DemoScene.EcsScene)
@@ -417,6 +438,7 @@ internal static class Program
 			targetRangeScene,
 			targetRangeController,
 			targetRangeScript,
+			timingDemo,
 			options,
 			Path.Combine(shaderDirectory, "mesh.vert.spv"),
 			Path.Combine(shaderDirectory, "mesh.frag.spv"));
@@ -440,6 +462,7 @@ internal static class Program
 		TargetRangeScene? targetRangeScene,
 		TargetRangeController? targetRangeController,
 		TargetRangeScript? targetRangeScript,
+		TimingDemo? timingDemo,
 		SampleOptions options,
 		string vertexShaderPath,
 		string fragmentShaderPath)
@@ -448,7 +471,6 @@ internal static class Program
 
 		Stopwatch statisticsClock = Stopwatch.StartNew();
 		Stopwatch stallClock = Stopwatch.StartNew();
-		Stopwatch frameClock = Stopwatch.StartNew();
 
 		bool interactiveCamera =
 			options.Scene == DemoScene.CameraTransforms &&
@@ -457,6 +479,31 @@ internal static class Program
 		bool interactiveTargetRange =
 			targetRangeScene is not null &&
 			targetRangeScript is null;
+
+		// The whole sample runs through the engine loop. The timing
+		// demo, when enabled, owns the loop and registers its fixed
+		// and scheduled work; the frame driver samples input exactly
+		// once per application frame, whatever the fixed-step count.
+		GameLoop loop = timingDemo?.Loop ?? new GameLoop();
+
+		TimingScript? timingScript =
+			timingDemo is not null && options.TimingScript
+				? new TimingScript(
+					timingDemo,
+					options.FrameLimit ??
+						TimingDemo.MinimumScriptedFrames)
+				: null;
+
+		SampleFrameDriver frameDriver = new(
+			camera,
+			cameraInput,
+			interactiveCamera,
+			interactiveTargetRange ? targetRangeController : null);
+
+		if (interactiveCamera || interactiveTargetRange)
+		{
+			loop.RegisterUpdate(frameDriver.Update);
+		}
 
 		IEcsRenderScene? renderScene = targetRangeScene is not null
 			? targetRangeScene
@@ -499,28 +546,15 @@ internal static class Program
 					}
 				}
 
-				float deltaSeconds =
-					(float)frameClock.Elapsed.TotalSeconds;
+				// Sample elapsed time, run due fixed simulation work and
+				// scheduled callbacks, then run the frame update. Input
+				// edges are consumed by that single update, never once
+				// per fixed step.
+				loop.Advance();
 
-				frameClock.Restart();
-
-				if (interactiveCamera)
-				{
-					cameraInput.Update(camera, deltaSeconds);
-				}
-				else if (interactiveTargetRange &&
+				if (interactiveTargetRange &&
 					targetRangeController is not null)
 				{
-					// The same sampler drives the camera, then gameplay
-					// consumes only the one-shot edges it reports. A click
-					// that captures the mouse never also fires.
-					CameraInputSnapshot snapshot =
-						cameraInput.Update(camera, deltaSeconds);
-
-					targetRangeController.Update(
-						TargetRangeCommand.FromInput(snapshot),
-						camera);
-
 					UpdateTargetRangeTitle(
 						window,
 						targetRangeController,
@@ -710,6 +744,15 @@ internal static class Program
 						ref titleFailureReported);
 				}
 
+				if (timingScript is not null)
+				{
+					// Test-only: inject one frame of fake elapsed time and
+					// drive pause, single-step, and resume from accepted
+					// presentations, so the scripted run is independent
+					// of presentation speed.
+					timingScript.Advance(presentedFrames);
+				}
+
 				if (ShouldRequestResize(
 						presentedFrames,
 						options,
@@ -787,6 +830,18 @@ internal static class Program
 						$"{presentedFrames - resizeRecreationFrame} " +
 						$"accepted frames in generation " +
 						$"{swapchainGeneration}.");
+				}
+
+				if (timingDemo is not null &&
+					resizeObserved &&
+					!postRecreationCheckpointLogged &&
+					presentedFrames - resizeRecreationFrame >=
+						PostRecreationCheckpointFrames)
+				{
+					postRecreationCheckpointLogged = true;
+
+					timingDemo.WriteSummary(
+						"Timing demo state stable after recreation");
 				}
 
 				if (statisticsClock.Elapsed.TotalSeconds >= 1.0)
@@ -892,6 +947,11 @@ internal static class Program
 				Console.WriteLine(
 					$"Target range final state: " +
 					$"{FormatTargetRangeState(targetRangeController, targetRangeScene)}.");
+			}
+
+			if (timingDemo is not null && !timingDemo.IsScripted)
+			{
+				timingDemo.WriteSummary("Timing demo summary");
 			}
 
 			Console.WriteLine(
@@ -1316,6 +1376,8 @@ internal static class Program
 		bool cameraScript = false;
 		bool ecsScript = false;
 		bool rangeScript = false;
+		bool timingDemo = false;
+		bool timingScript = false;
 
 		for (int index = 0; index < args.Length; index++)
 		{
@@ -1509,6 +1571,32 @@ internal static class Program
 					cameraScript = true;
 					break;
 
+				case TimingDemoArgument:
+					if (timingDemo)
+					{
+						options = default;
+						error =
+							"The --timing-demo argument was supplied " +
+							"twice.";
+						return false;
+					}
+
+					timingDemo = true;
+					break;
+
+				case TimingScriptArgument:
+					if (timingScript)
+					{
+						options = default;
+						error =
+							"The --timing-script argument was supplied " +
+							"twice.";
+						return false;
+					}
+
+					timingScript = true;
+					break;
+
 				case DisableDepthTestArgument:
 					if (depthTestDisabled)
 					{
@@ -1647,6 +1735,46 @@ internal static class Program
 			return false;
 		}
 
+		if (timingDemo && selectedScene != DemoScene.EcsScene)
+		{
+			options = default;
+			error =
+				"The --timing-demo argument requires " +
+				$"--scene {EcsSceneName}.";
+			return false;
+		}
+
+		if (timingDemo && ecsScript)
+		{
+			options = default;
+			error =
+				"The --timing-demo and --ecs-script arguments " +
+				"both mutate the same entities and cannot be " +
+				"combined.";
+			return false;
+		}
+
+		if (timingScript && !timingDemo)
+		{
+			options = default;
+			error =
+				"The --timing-script argument requires " +
+				"--timing-demo.";
+			return false;
+		}
+
+		if (timingScript &&
+			(!frameLimit.HasValue ||
+				frameLimit.Value < TimingDemo.MinimumScriptedFrames))
+		{
+			options = default;
+			error =
+				"The --timing-script run requires a bounded " +
+				$"--frames of at least " +
+				$"{TimingDemo.MinimumScriptedFrames}.";
+			return false;
+		}
+
 		options = new SampleOptions(
 			validation,
 			frameLimit,
@@ -1656,7 +1784,9 @@ internal static class Program
 			depthTestDisabled,
 			cameraScript,
 			ecsScript,
-			rangeScript);
+			rangeScript,
+			timingDemo,
+			timingScript);
 
 		error = string.Empty;
 		return true;
@@ -1806,4 +1936,6 @@ internal readonly record struct SampleOptions(
 	bool DepthTestDisabled,
 	bool CameraScript = false,
 	bool EcsScript = false,
-	bool RangeScript = false);
+	bool RangeScript = false,
+	bool TimingDemo = false,
+	bool TimingScript = false);

@@ -243,6 +243,73 @@ internal sealed class EcsDemoScene : IEcsRenderScene, IDisposable
 	}
 
 	/// <summary>
+	/// Sets a mesh entity's world position in place.
+	/// </summary>
+	/// <remarks>
+	/// No structural change occurs, so an active query or extraction
+	/// stays valid. Callers must run on the application thread and
+	/// outside a render extraction.
+	/// </remarks>
+	public void SetPosition(Entity entity, Vector3 position)
+	{
+		ref PositionComponent component =
+			ref _world.GetComponent<PositionComponent>(entity);
+
+		component.Value = position;
+	}
+
+	/// <summary>
+	/// Sets a mesh entity's rotation in place.
+	/// </summary>
+	/// <remarks>
+	/// The rotation is stored exactly as supplied; the caller owns
+	/// normalization, like every other
+	/// <see cref="RotationComponent"/> writer.
+	/// </remarks>
+	public void SetRotation(Entity entity, Quaternion rotation)
+	{
+		ref RotationComponent component =
+			ref _world.GetComponent<RotationComponent>(entity);
+
+		component.Value = rotation;
+	}
+
+	/// <summary>
+	/// Sets a mesh entity's scale in place.
+	/// </summary>
+	public void SetScale(Entity entity, Vector3 scale)
+	{
+		ref ScaleComponent component =
+			ref _world.GetComponent<ScaleComponent>(entity);
+
+		component.Value = scale;
+	}
+
+	/// <summary>
+	/// Gets a mesh entity's current world position.
+	/// </summary>
+	public Vector3 GetPosition(Entity entity)
+	{
+		return _world.GetComponent<PositionComponent>(entity).Value;
+	}
+
+	/// <summary>
+	/// Gets a mesh entity's current rotation.
+	/// </summary>
+	public Quaternion GetRotation(Entity entity)
+	{
+		return _world.GetComponent<RotationComponent>(entity).Value;
+	}
+
+	/// <summary>
+	/// Gets a mesh entity's current scale.
+	/// </summary>
+	public Vector3 GetScale(Entity entity)
+	{
+		return _world.GetComponent<ScaleComponent>(entity).Value;
+	}
+
+	/// <summary>
 	/// Applies the deterministic scripted component changes.
 	/// </summary>
 	/// <remarks>
