@@ -11,68 +11,68 @@ namespace Volt.Ecs.Component;
 /// </remarks>
 public readonly struct ComponentType(uint id) : IEquatable<ComponentType>, IComparable<ComponentType>
 {
-    /// <summary>
-    /// Gets the numeric identifier of this component type.
-    /// </summary>
-    public uint Id { get; } = id;
+	/// <summary>
+	/// Gets the numeric identifier of this component type.
+	/// </summary>
+	public uint Id { get; } = id;
 
-    /// <summary>
-    /// Gets whether this identifier is valid.
-    /// </summary>
-    public bool IsValid => Id != 0;
+	/// <summary>
+	/// Gets whether this identifier is valid.
+	/// </summary>
+	public bool IsValid => Id != 0;
 
-    public bool Equals(ComponentType other)
-    {
-        return Id == other.Id;
-    }
+	public bool Equals(ComponentType other)
+	{
+		return Id == other.Id;
+	}
 
-    public override bool Equals(object? obj)
-    {
-        return obj is ComponentType other && Equals(other);
-    }
+	public override bool Equals(object? obj)
+	{
+		return obj is ComponentType other && Equals(other);
+	}
 
-    public override int GetHashCode()
-    {
-        return Id.GetHashCode();
-    }
+	public override int GetHashCode()
+	{
+		return Id.GetHashCode();
+	}
 
-    public int CompareTo(ComponentType other)
-    {
-        return Id.CompareTo(other.Id);
-    }
+	public int CompareTo(ComponentType other)
+	{
+		return Id.CompareTo(other.Id);
+	}
 
-    public override string ToString()
-    {
-        return $"ComponentType({Id})";
-    }
+	public override string ToString()
+	{
+		return $"ComponentType({Id})";
+	}
 
-    public static bool operator ==(ComponentType left, ComponentType right)
-    {
-        return left.Equals(right);
-    }
+	public static bool operator ==(ComponentType left, ComponentType right)
+	{
+		return left.Equals(right);
+	}
 
-    public static bool operator !=(ComponentType left, ComponentType right)
-    {
-        return !left.Equals(right);
-    }
+	public static bool operator !=(ComponentType left, ComponentType right)
+	{
+		return !left.Equals(right);
+	}
 
-    public static bool operator <(ComponentType left, ComponentType right)
-    {
-        return left.CompareTo(right) < 0;
-    }
+	public static bool operator <(ComponentType left, ComponentType right)
+	{
+		return left.CompareTo(right) < 0;
+	}
 
-    public static bool operator <=(ComponentType left, ComponentType right)
-    {
-        return left.CompareTo(right) <= 0;
-    }
+	public static bool operator <=(ComponentType left, ComponentType right)
+	{
+		return left.CompareTo(right) <= 0;
+	}
 
-    public static bool operator >(ComponentType left, ComponentType right)
-    {
-        return left.CompareTo(right) > 0;
-    }
+	public static bool operator >(ComponentType left, ComponentType right)
+	{
+		return left.CompareTo(right) > 0;
+	}
 
-    public static bool operator >=(ComponentType left, ComponentType right)
-    {
-        return left.CompareTo(right) >= 0;
-    }
+	public static bool operator >=(ComponentType left, ComponentType right)
+	{
+		return left.CompareTo(right) >= 0;
+	}
 }

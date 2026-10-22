@@ -507,6 +507,117 @@ pulses=230, tenHz=38, ...` and finishes with `steps=581`, proving the
 simulation clock kept advancing across the new swapchain generation
 without restarting or replaying work.
 
+## Interpolated transforms and time scaling
+
+`--interpolation-demo` extends the ECS scene with real transform
+interpolation and simulation time scaling. It is accepted only with
+`--scene ecs-scene` and cannot be combined with `--timing-demo` or
+`--ecs-script`, because those mutate the same entities.
+
+The demonstration registers ordinary engine work:
+
+| Work | Registration | Effect |
+| --- | --- | --- |
+| Continuous motion | `RegisterFixedUpdate` | Triangle A moves `0.3` world units per step on a 12-step ping-pong path |
+| Scheduled mutation | `Schedule.Every(500ms, ...)` | Triangle B rotates 30° per simulation half-second |
+| History capture | `RegisterPostFixedUpdate` | `TransformHistory.Capture()` runs after every completed step |
+
+History is captured in the post-fixed phase, so the scheduled rotation
+is part of the committed pose. Rendering uses
+`InterpolatedRenderExtractor`, so the uploaded model matrices are the
+interpolated poses, not the raw components. The components themselves
+are never written by the render path.
+
+The interactive path uses `MonotonicClock.Shared` and real elapsed
+time. `--interpolation-script` is the deterministic test-only mode:
+
+* Frames 1-120 inject one 60 Hz interval each.
+* Frames 121, 132, 143, and 154 land on alpha `0.25`, `0.5`, `0.75`,
+  and `0.999999` with exactly one step.
+* Frames 167 and 168 complete no step while alpha advances.
+* Frame 169 completes three steps in one outer frame.
+* Frame 181 switches to `0.5x`, frame 271 to `2.0x`, frame 331 back to
+  `1.0x` and pauses, frame 351 requests one step, frame 361 resumes.
+* Frames 363 onward confirm the resumed pose does not snap backward.
+
+The script is driven by the loop's completed frame index, not by
+accepted presentations, so a rejected present cannot shift a
+checkpoint; its accumulator arithmetic is exact regardless of
+presentation speed. It requires at least 600 bounded frames.
+
+```bash
+dotnet run \
+  --project samples/Volt.VulkanMeshDemo \
+  -c Release -- \
+  --validation \
+  --frames 600 \
+  --scene ecs-scene \
+  --interpolation-demo \
+  --interpolation-script
+```
+
+```
+Interpolation checkpoint alpha=0.250000 frame=121 step=121 previous.x=-0.600000 current.x=-0.900000 interpolated.x=-0.675000.
+Interpolation checkpoint alpha=0.500000 frame=132 step=122 previous.x=-0.900000 current.x=-0.600000 interpolated.x=-0.750000.
+Interpolation checkpoint alpha=0.750000 frame=143 step=123 previous.x=-0.600000 current.x=-0.300000 interpolated.x=-0.375000.
+Interpolation checkpoint alpha=0.999999 frame=154 step=124 previous.x=-0.300000 current.x=0.000000 interpolated.x=-0.000000.
+Interpolation zero-step checkpoint: frame=167 steps=0 totalSteps=125 alpha=0.700000 scale=1.000000 paused=False.
+Interpolation multi-step checkpoint: frame=169 steps=3 totalSteps=128 alpha=0.500000 scale=1.000000 paused=False.
+Interpolation half speed: frame=271 steps=0 totalSteps=173 alpha=0.500001 scale=0.500000 paused=False.
+Interpolation double speed: frame=331 steps=2 totalSteps=293 alpha=0.500003 scale=2.000000 paused=False.
+Interpolation resumed: frame=363 steps=1 totalSteps=295 alpha=0.000000 scale=1.000000 paused=False.
+Interpolation demo final: steps=532, scale=1.00, paused=False, rotations=17, alpha=0.000005, triangleA.x=0.000, dropped=0.000ms.
+```
+
+The fractional checkpoints hold for several frames, so the rendered
+pose is stable long enough to capture. Fifty real seconds at `0.5x`
+produce 45 steps instead of 90, and the same real interval at `2.0x`
+produces 120 instead of 60; `dropped=0.000ms` proves the cap was never
+hit and no backlog was discarded.
+
+### Headless interpolation verification
+
+`--interpolation-probe` runs a shorter deterministic proof: it reaches
+the alpha `0.25` state at frame 121 and then injects no further time,
+so the accumulator, the history, and the rendered pose stay identical
+for the remaining frames. That makes the screenshot independent of
+capture latency, which the freely running script is not.
+
+At 1280x720 the moving triangle's committed poses are `previous.x =
+-0.6` and `current.x = -0.9`. Its interpolated pose is `x = -0.675`,
+which projects to `(500, 287)`; the previous pose projects to
+`(515, 287)` and the current pose to `(453, 287)`. The triangle is
+small (about 24x20 pixels), so the probes distinguish the three
+positions directly:
+
+```bash
+./tools/test-vulkan-headless.sh \
+  --project samples/Volt.VulkanMeshDemo \
+  --frames 600 --validation --screenshots \
+  --sample-arg=--scene --sample-arg ecs-scene \
+  --sample-arg=--interpolation-demo --sample-arg=--interpolation-probe \
+  --screenshot-after-line "Frames presented: 183" \
+  --expect-pixel-class 500,287,red \
+  --expect-pixel-class 515,287,blue \
+  --expect-pixel-class 453,287,blue
+```
+
+```
+IMAGE_PIXEL=500,287,expected=red,actual=249,89,97,class=red,PASS
+IMAGE_PIXEL=515,287,expected=blue,actual=80,137,249,class=blue,PASS
+IMAGE_PIXEL=453,287,expected=blue,actual=80,137,249,class=blue,PASS
+```
+
+The probe prints its final line on the last frame, immediately before
+the application exits, so the screenshot wait targets a later
+presentation-progress line instead; the pose has been held since frame
+121, so any frame after that shows the same image.
+
+The interpolated position is drawn red while both committed endpoint
+positions stay on the blue quad: the GPU is displaying the
+interpolated matrix. The probe run also asserts that the authoritative
+ECS position still equals `-0.9` before and after extraction.
+
 ## Target range
 
 `--scene target-range` is a small, complete first-person round. It

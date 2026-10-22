@@ -59,12 +59,21 @@ public sealed class GameLoop
 	private int _updateCount;
 	private int _fixedUpdateCount;
 
+	private PostFixedUpdateCallback[] _postFixedUpdates =
+		new PostFixedUpdateCallback[InitialCallbackCapacity];
+
+	private int _postFixedUpdateCount;
+
 	private FixedStepAccumulator _accumulator;
 	private Int128 _nanosecondCarry;
+	private Int128 _scaleCarry;
+	private TimeScale _requestedTimeScale = TimeScale.Normal;
+	private TimeScale _effectiveTimeScale = TimeScale.Normal;
 	private long _lastTimestamp;
 	private long _frameIndex;
 	private long _totalFixedSteps;
 	private long _totalDroppedNanoseconds;
+	private long _totalDroppedSimulationNanoseconds;
 	private bool _paused;
 	private bool _singleStepPending;
 	private bool _advancing;
@@ -117,12 +126,15 @@ public sealed class GameLoop
 		_lastFrame = new FrameTiming(
 			frameIndex: 0,
 			realDelta: TimeSpan.Zero,
+			scaledDelta: TimeSpan.Zero,
 			droppedTime: TimeSpan.Zero,
+			droppedSimulationTime: TimeSpan.Zero,
 			fixedSteps: 0,
 			totalFixedSteps: 0,
 			simulationDeltaSeconds: 0.0,
 			accumulatedRemainderSeconds: 0.0,
 			interpolationAlpha: 0.0f,
+			timeScale: TimeScale.Normal,
 			isPaused: false);
 
 		Schedule = new SimulationScheduler(
@@ -138,6 +150,61 @@ public sealed class GameLoop
 	/// Gets the scheduler for simulation-time work.
 	/// </summary>
 	public SimulationScheduler Schedule { get; }
+
+	/// <summary>
+	/// Gets or sets the requested simulation time scale.
+	/// </summary>
+	/// <remarks>
+	/// <para>
+	/// The scale multiplies accepted real elapsed time before it
+	/// reaches the fixed-step accumulator. <c>1.0x</c> is normal,
+	/// <c>0.5x</c> is half speed, and <c>0.0x</c> freezes simulation
+	/// time without pausing the loop. Negative and non-finite values
+	/// are rejected when the value is constructed.
+	/// </para>
+	/// <para>
+	/// A change made between frames applies to the next
+	/// <see cref="Advance"/>. A change made by a callback applies to
+	/// the next frame, never to the fixed steps already planned for
+	/// the current one. Sub-nanosecond scaled time accumulated under
+	/// the previous scale is discarded, which is at most one
+	/// nanosecond per change.
+	/// </para>
+	/// <para>
+	/// An uninitialized <c>default(TimeScale)</c> is rejected instead
+	/// of being treated as frozen time: it has no denominator and
+	/// cannot be used in the loop's rational arithmetic. Assign
+	/// <see cref="TimeScale.Zero"/> to freeze simulation time.
+	/// </para>
+	/// </remarks>
+	/// <exception cref="ArgumentException">
+	/// The assigned value is <c>default(TimeScale)</c> rather than a
+	/// constructed scale.
+	/// </exception>
+	public TimeScale TimeScale
+	{
+		get => _requestedTimeScale;
+		set
+		{
+			if (!value.IsInitialized)
+			{
+				throw new ArgumentException(
+					"A time scale must be initialized. " +
+					"default(TimeScale) has no denominator and is not " +
+					"zero; assign TimeScale.Zero to freeze simulation " +
+					"time.",
+					nameof(value));
+			}
+
+			_requestedTimeScale = value;
+		}
+	}
+
+	/// <summary>
+	/// Gets the time scale that the most recent
+	/// <see cref="Advance"/> used.
+	/// </summary>
+	public TimeScale EffectiveTimeScale => _effectiveTimeScale;
 
 	/// <summary>
 	/// Gets whether the simulation is paused.
@@ -163,11 +230,31 @@ public sealed class GameLoop
 	public long TotalFixedSteps => _totalFixedSteps;
 
 	/// <summary>
+	/// Gets the total real time discarded by the elapsed-time clamp,
+	/// the fixed-step cap, or a pause requested during a frame.
+	/// </summary>
+	/// <remarks>
+	/// The value is measured on the real-time clock, so it can be
+	/// compared directly with the clock and with
+	/// <see cref="FrameTiming.RealDelta"/>. At <c>2.0x</c>, one
+	/// dropped simulation second corresponds to half a second here.
+	/// </remarks>
+	public TimeSpan TotalDroppedTime =>
+		TimeSpan.FromTicks(_totalDroppedNanoseconds / 100);
+
+	/// <summary>
 	/// Gets the total simulation time discarded by the elapsed-time
 	/// clamp, the fixed-step cap, or a pause requested during a frame.
 	/// </summary>
-	public TimeSpan TotalDroppedTime =>
-		TimeSpan.FromTicks(_totalDroppedNanoseconds / 100);
+	/// <remarks>
+	/// The value is measured in simulation seconds. At <c>1.0x</c> it
+	/// equals <see cref="TotalDroppedTime"/>; at <c>2.0x</c> it is
+	/// twice as large, because a dropped real second represents two
+	/// dropped simulation seconds.
+	/// </remarks>
+	public TimeSpan TotalDroppedSimulationTime =>
+		TimeSpan.FromTicks(
+			_totalDroppedSimulationNanoseconds / 100);
 
 	/// <summary>
 	/// Gets the simulation time, in seconds, at the end of the last
@@ -221,6 +308,22 @@ public sealed class GameLoop
 		}
 
 
+		// The scale is captured once per outer frame. A callback that
+		// changes it affects the next frame, never the batch of fixed
+		// steps that is already being planned.
+		TimeScale timeScale = _requestedTimeScale;
+
+		if (!timeScale.Equals(_effectiveTimeScale))
+		{
+			_effectiveTimeScale = timeScale;
+
+			// The carry is a fraction of a nanosecond of scaled time
+			// denominated in the previous scale, so reinterpreting it
+			// would be wrong. At most one nanosecond of scaled time
+			// is discarded, once per change.
+			_scaleCarry = Int128.Zero;
+		}
+
 		long timestamp = _clock.Timestamp;
 		long elapsedTicks = timestamp - _lastTimestamp;
 
@@ -238,11 +341,15 @@ public sealed class GameLoop
 		long acceptedNanoseconds = Math.Min(
 			elapsedNanoseconds,
 			_maximumFrameDeltaNanoseconds);
-		long droppedNanoseconds =
+		long droppedRealNanoseconds =
 			elapsedNanoseconds - acceptedNanoseconds;
+		long droppedSimulationNanoseconds =
+			ScaleWithoutCarry(droppedRealNanoseconds, timeScale);
 
 		bool wasPaused = _paused;
 		int fixedSteps = 0;
+		long scaledNanoseconds = 0;
+		double simulationDeltaSeconds = 0.0;
 
 		_frameIndex++;
 		_advancing = true;
@@ -261,8 +368,12 @@ public sealed class GameLoop
 			}
 			else
 			{
-				long dueSteps = _accumulator.Accumulate(
+				scaledNanoseconds = ApplyScale(
 					acceptedNanoseconds,
+					timeScale);
+
+				long dueSteps = _accumulator.Accumulate(
+					scaledNanoseconds,
 					_settings.FixedUpdatesPerSecond);
 
 				if (dueSteps > _settings.MaxFixedStepsPerFrame)
@@ -272,10 +383,11 @@ public sealed class GameLoop
 
 					// Dropping whole steps keeps the sub-step
 					// remainder, which belongs to the next step.
-					droppedNanoseconds = SaturatingAdd(
-						droppedNanoseconds,
-						(excessSteps * FixedStepAccumulator.UnitsPerStep) /
-						_settings.FixedUpdatesPerSecond);
+					AccumulateDroppedSteps(
+						excessSteps,
+						timeScale,
+						ref droppedRealNanoseconds,
+						ref droppedSimulationNanoseconds);
 
 					dueSteps = _settings.MaxFixedStepsPerFrame;
 				}
@@ -293,14 +405,11 @@ public sealed class GameLoop
 						// the rest of this frame's steps do not run.
 						// Pause() already reset the accumulator, so
 						// the remaining debt cannot burst later.
-						long remainingSteps =
-							dueSteps - executedSteps;
-
-						droppedNanoseconds = SaturatingAdd(
-							droppedNanoseconds,
-							(remainingSteps *
-								FixedStepAccumulator.UnitsPerStep) /
-							_settings.FixedUpdatesPerSecond);
+						AccumulateDroppedSteps(
+							dueSteps - executedSteps,
+							timeScale,
+							ref droppedRealNanoseconds,
+							ref droppedSimulationNanoseconds);
 
 						break;
 					}
@@ -309,15 +418,14 @@ public sealed class GameLoop
 				fixedSteps = (int)executedSteps;
 			}
 
-			TimeSpan realDelta = NanosecondsToTimeSpan(
-				acceptedNanoseconds);
-
-			double simulationDeltaSeconds =
+			simulationDeltaSeconds =
 				fixedSteps / (double)_settings.FixedUpdatesPerSecond;
 
 			UpdateContext context = new(
 				_frameIndex,
-				realDelta,
+				NanosecondsToTimeSpan(acceptedNanoseconds),
+				NanosecondsToTimeSpan(scaledNanoseconds),
+				timeScale,
 				fixedSteps,
 				simulationDeltaSeconds,
 				ToAlpha(_accumulator.Alpha),
@@ -335,17 +443,24 @@ public sealed class GameLoop
 
 		_totalDroppedNanoseconds = SaturatingAdd(
 			_totalDroppedNanoseconds,
-			droppedNanoseconds);
+			droppedRealNanoseconds);
+
+		_totalDroppedSimulationNanoseconds = SaturatingAdd(
+			_totalDroppedSimulationNanoseconds,
+			droppedSimulationNanoseconds);
 
 		_lastFrame = new FrameTiming(
 			_frameIndex,
 			NanosecondsToTimeSpan(acceptedNanoseconds),
-			NanosecondsToTimeSpan(droppedNanoseconds),
+			NanosecondsToTimeSpan(scaledNanoseconds),
+			NanosecondsToTimeSpan(droppedRealNanoseconds),
+			NanosecondsToTimeSpan(droppedSimulationNanoseconds),
 			fixedSteps,
 			_totalFixedSteps,
-			fixedSteps / (double)_settings.FixedUpdatesPerSecond,
+			simulationDeltaSeconds,
 			_accumulator.Alpha / _settings.FixedUpdatesPerSecond,
 			ToAlpha(_accumulator.Alpha),
+			timeScale,
 			wasPaused);
 
 		return _lastFrame;
@@ -460,6 +575,77 @@ public sealed class GameLoop
 	}
 
 	/// <summary>
+	/// Registers a callback that runs once per completed fixed step,
+	/// after all of that step's work.
+	/// </summary>
+	/// <param name="callback">The callback to run.</param>
+	/// <remarks>
+	/// <para>
+	/// The callback runs after the step's fixed-update callbacks and
+	/// after every scheduled callback due on that step, so it sees the
+	/// complete state the step committed. It runs once per executed
+	/// step, including a step requested by <see cref="StepOnce"/>,
+	/// and never for a step that did not run.
+	/// </para>
+	/// <para>
+	/// Registration belongs to initialization and preserves order.
+	/// Like the other callback lists it cannot be changed from inside
+	/// <see cref="Advance"/>, because a frame whose callback set
+	/// changes part-way through would be nondeterministic.
+	/// </para>
+	/// </remarks>
+	public void RegisterPostFixedUpdate(PostFixedUpdateCallback callback)
+	{
+		ArgumentNullException.ThrowIfNull(callback);
+		ThrowIfAdvancing();
+
+		if (_postFixedUpdateCount == _postFixedUpdates.Length)
+		{
+			Array.Resize(
+				ref _postFixedUpdates,
+				_postFixedUpdates.Length * 2);
+		}
+
+		_postFixedUpdates[_postFixedUpdateCount++] = callback;
+	}
+
+	/// <summary>
+	/// Removes a previously registered post-fixed-update callback.
+	/// </summary>
+	/// <param name="callback">
+	/// The delegate passed to <see cref="RegisterPostFixedUpdate"/>.
+	/// </param>
+	/// <returns>
+	/// <c>true</c> when a registration was removed; otherwise
+	/// <c>false</c>.
+	/// </returns>
+	public bool UnregisterPostFixedUpdate(
+		PostFixedUpdateCallback callback)
+	{
+		ArgumentNullException.ThrowIfNull(callback);
+		ThrowIfAdvancing();
+
+		for (int index = 0; index < _postFixedUpdateCount; index++)
+		{
+			if (!_postFixedUpdates[index].Equals(callback))
+			{
+				continue;
+			}
+
+			RemoveAt(
+				_postFixedUpdates,
+				index,
+				_postFixedUpdateCount);
+
+			_postFixedUpdateCount--;
+
+			return true;
+		}
+
+		return false;
+	}
+
+	/// <summary>
 	/// Pauses simulation progression.
 	/// </summary>
 	/// <remarks>
@@ -483,6 +669,7 @@ public sealed class GameLoop
 		_paused = true;
 		_singleStepPending = false;
 		_accumulator.Reset();
+		_scaleCarry = Int128.Zero;
 		_lastTimestamp = _clock.Timestamp;
 	}
 
@@ -499,6 +686,7 @@ public sealed class GameLoop
 		_paused = false;
 		_singleStepPending = false;
 		_accumulator.Reset();
+		_scaleCarry = Int128.Zero;
 		_lastTimestamp = _clock.Timestamp;
 	}
 
@@ -539,6 +727,7 @@ public sealed class GameLoop
 	public void ResetTiming()
 	{
 		_accumulator.Reset();
+		_scaleCarry = Int128.Zero;
 		_singleStepPending = false;
 		_lastTimestamp = _clock.Timestamp;
 	}
@@ -565,6 +754,107 @@ public sealed class GameLoop
 		}
 
 		Schedule.Advance(_totalFixedSteps);
+
+		// Post-fixed work observes the complete committed step, so
+		// it runs after the linked scheduler callbacks that can
+		// still mutate simulation state.
+		if (_postFixedUpdateCount > 0)
+		{
+			PostFixedUpdateContext postContext = new(
+				_totalFixedSteps,
+				_totalFixedSteps / (double)_settings.FixedUpdatesPerSecond,
+				isPaused);
+
+			for (int index = 0; index < _postFixedUpdateCount; index++)
+			{
+				_postFixedUpdates[index](in postContext);
+			}
+		}
+	}
+
+	private long ApplyScale(
+		long nanoseconds,
+		in TimeScale scale)
+	{
+		if (scale.IsZero)
+		{
+			_scaleCarry = Int128.Zero;
+			return 0;
+		}
+
+		// The remainder is carried in denominator units, so a scale
+		// such as 1/3 loses no time over any number of frames.
+		Int128 scaled =
+			((Int128)nanoseconds * scale.Numerator) + _scaleCarry;
+		Int128 result = scaled / scale.Denominator;
+
+		_scaleCarry = scaled % scale.Denominator;
+
+		return result > long.MaxValue
+			? long.MaxValue
+			: (long)result;
+	}
+
+	private static long ScaleWithoutCarry(
+		long nanoseconds,
+		in TimeScale scale)
+	{
+		if (nanoseconds <= 0 || scale.IsZero)
+		{
+			return 0;
+		}
+
+		Int128 scaled =
+			(Int128)nanoseconds * scale.Numerator / scale.Denominator;
+
+		return scaled > long.MaxValue
+			? long.MaxValue
+			: (long)scaled;
+	}
+
+	private static long SimulationNanosecondsToReal(
+		long simulationNanoseconds,
+		in TimeScale scale)
+	{
+		if (simulationNanoseconds <= 0 || scale.IsZero)
+		{
+			return 0;
+		}
+
+		Int128 real = (Int128)simulationNanoseconds *
+			scale.Denominator / scale.Numerator;
+
+		return real > long.MaxValue
+			? long.MaxValue
+			: (long)real;
+	}
+
+	private void AccumulateDroppedSteps(
+		long steps,
+		in TimeScale scale,
+		ref long realNanoseconds,
+		ref long simulationNanoseconds)
+	{
+		if (steps <= 0)
+		{
+			return;
+		}
+
+		Int128 simulation =
+			((Int128)steps * FixedStepAccumulator.UnitsPerStep) /
+			_settings.FixedUpdatesPerSecond;
+
+		long dropped = simulation > long.MaxValue
+			? long.MaxValue
+			: (long)simulation;
+
+		simulationNanoseconds = SaturatingAdd(
+			simulationNanoseconds,
+			dropped);
+
+		realNanoseconds = SaturatingAdd(
+			realNanoseconds,
+			SimulationNanosecondsToReal(dropped, scale));
 	}
 
 	private void ThrowIfAdvancing()

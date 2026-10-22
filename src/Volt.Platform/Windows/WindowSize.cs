@@ -9,8 +9,8 @@ namespace Volt.Platform.Windows;
 /// </remarks>
 public readonly record struct WindowSize(int Width, int Height)
 {
-    /// <summary>
-    /// Gets whether both dimensions are positive.
-    /// </summary>
-    public bool IsPositive => Width > 0 && Height > 0;
+	/// <summary>
+	/// Gets whether both dimensions are positive.
+	/// </summary>
+	public bool IsPositive => Width > 0 && Height > 0;
 }

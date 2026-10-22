@@ -16,144 +16,144 @@ namespace Volt.Graphics.Vulkan.Devices;
 /// </remarks>
 public static unsafe class VulkanPhysicalDeviceInspector
 {
-    /// <summary>
-    /// Inspects a Vulkan physical device.
-    /// </summary>
-    /// <param name="instance">
-    /// The live Vulkan instance that owns the physical device.
-    /// </param>
-    /// <param name="device">
-    /// A physical-device handle enumerated from the instance.
-    /// </param>
-    /// <returns>
-    /// A managed snapshot containing the device's reported
-    /// properties, features, and graphics queue information.
-    /// </returns>
-    public static VulkanPhysicalDeviceInfo Inspect(
-        VulkanInstance instance,
-        PhysicalDevice device)
-    {
-        ArgumentNullException.ThrowIfNull(instance);
-        Vk api = instance.Api;
+	/// <summary>
+	/// Inspects a Vulkan physical device.
+	/// </summary>
+	/// <param name="instance">
+	/// The live Vulkan instance that owns the physical device.
+	/// </param>
+	/// <param name="device">
+	/// A physical-device handle enumerated from the instance.
+	/// </param>
+	/// <returns>
+	/// A managed snapshot containing the device's reported
+	/// properties, features, and graphics queue information.
+	/// </returns>
+	public static VulkanPhysicalDeviceInfo Inspect(
+		VulkanInstance instance,
+		PhysicalDevice device)
+	{
+		ArgumentNullException.ThrowIfNull(instance);
+		Vk api = instance.Api;
 
-        if (device.Handle == 0)
-        {
-            throw new ArgumentException(
-                "A valid Vulkan physical-device handle is required.",
-                nameof(device));
-        }
+		if (device.Handle == 0)
+		{
+			throw new ArgumentException(
+				"A valid Vulkan physical-device handle is required.",
+				nameof(device));
+		}
 
-        api.GetPhysicalDeviceProperties(
-            device,
-            out PhysicalDeviceProperties properties);
+		api.GetPhysicalDeviceProperties(
+			device,
+			out PhysicalDeviceProperties properties);
 
-        api.GetPhysicalDeviceFeatures(
-            device,
-            out PhysicalDeviceFeatures features);
+		api.GetPhysicalDeviceFeatures(
+			device,
+			out PhysicalDeviceFeatures features);
 
-        QueueFamilyProperties[] queueFamilies =
-            EnumerateQueueFamilies(api, device);
+		QueueFamilyProperties[] queueFamilies =
+			EnumerateQueueFamilies(api, device);
 
-        uint? graphicsQueueFamilyIndex =
-            FindGraphicsQueueFamily(queueFamilies);
+		uint? graphicsQueueFamilyIndex =
+			FindGraphicsQueueFamily(queueFamilies);
 
-        bool supportsTimestampQueries =
-            graphicsQueueFamilyIndex.HasValue &&
-            queueFamilies[checked((int)graphicsQueueFamilyIndex.Value)]
-                .TimestampValidBits > 0;
+		bool supportsTimestampQueries =
+			graphicsQueueFamilyIndex.HasValue &&
+			queueFamilies[checked((int)graphicsQueueFamilyIndex.Value)]
+				.TimestampValidBits > 0;
 
-        string name = Marshal.PtrToStringUTF8(
-            (nint)properties.DeviceName) ?? string.Empty;
+		string name = Marshal.PtrToStringUTF8(
+			(nint)properties.DeviceName) ?? string.Empty;
 
-        VulkanPhysicalDeviceInfo information = new(
-            Name: name,
-            DeviceType: properties.DeviceType,
-            VendorId: properties.VendorID,
-            DeviceId: properties.DeviceID,
-            ApiVersion: properties.ApiVersion,
-            GraphicsQueueFamilyIndex: graphicsQueueFamilyIndex,
+		VulkanPhysicalDeviceInfo information = new(
+			Name: name,
+			DeviceType: properties.DeviceType,
+			VendorId: properties.VendorID,
+			DeviceId: properties.DeviceID,
+			ApiVersion: properties.ApiVersion,
+			GraphicsQueueFamilyIndex: graphicsQueueFamilyIndex,
 
-            MaxTexture2DDimension:
-                properties.Limits.MaxImageDimension2D,
+			MaxTexture2DDimension:
+				properties.Limits.MaxImageDimension2D,
 
-            MaxColorAttachments:
-                properties.Limits.MaxColorAttachments,
+			MaxColorAttachments:
+				properties.Limits.MaxColorAttachments,
 
-            SupportsWireframe: features.FillModeNonSolid,
-            SupportsTimestampQueries: supportsTimestampQueries);
+			SupportsWireframe: features.FillModeNonSolid,
+			SupportsTimestampQueries: supportsTimestampQueries);
 
-        information.Validate();
-        return information;
-    }
+		information.Validate();
+		return information;
+	}
 
-    /// <summary>
-    /// Finds the first queue family that supports graphics commands
-    /// and exposes at least one queue.
-    /// </summary>
-    /// <remarks>
-    /// Queue family indices are specific to their physical device.
-    ///
-    /// Graphics capability alone does not guarantee presentation
-    /// support for a particular window surface.
-    /// </remarks>
-    public static uint? FindGraphicsQueueFamily(
-        ReadOnlySpan<QueueFamilyProperties> queueFamilies)
-    {
-        for (int index = 0; index < queueFamilies.Length; index++)
-        {
-            ref readonly QueueFamilyProperties family =
-                ref queueFamilies[index];
+	/// <summary>
+	/// Finds the first queue family that supports graphics commands
+	/// and exposes at least one queue.
+	/// </summary>
+	/// <remarks>
+	/// Queue family indices are specific to their physical device.
+	///
+	/// Graphics capability alone does not guarantee presentation
+	/// support for a particular window surface.
+	/// </remarks>
+	public static uint? FindGraphicsQueueFamily(
+		ReadOnlySpan<QueueFamilyProperties> queueFamilies)
+	{
+		for (int index = 0; index < queueFamilies.Length; index++)
+		{
+			ref readonly QueueFamilyProperties family =
+				ref queueFamilies[index];
 
-            if (family.QueueCount == 0)
-            {
-                continue;
-            }
+			if (family.QueueCount == 0)
+			{
+				continue;
+			}
 
-            if ((family.QueueFlags & QueueFlags.GraphicsBit) == 0)
-            {
-                continue;
-            }
+			if ((family.QueueFlags & QueueFlags.GraphicsBit) == 0)
+			{
+				continue;
+			}
 
-            return (uint)index;
-        }
+			return (uint)index;
+		}
 
-        return null;
-    }
+		return null;
+	}
 
-    private static QueueFamilyProperties[] EnumerateQueueFamilies(
-        Vk api,
-        PhysicalDevice device)
-    {
-        uint count = 0;
+	private static QueueFamilyProperties[] EnumerateQueueFamilies(
+		Vk api,
+		PhysicalDevice device)
+	{
+		uint count = 0;
 
-        api.GetPhysicalDeviceQueueFamilyProperties(
-            device,
-            ref count,
-            null);
+		api.GetPhysicalDeviceQueueFamilyProperties(
+			device,
+			ref count,
+			null);
 
-        if (count == 0)
-        {
-            return [];
-        }
+		if (count == 0)
+		{
+			return [];
+		}
 
-        QueueFamilyProperties[] families =
-            new QueueFamilyProperties[checked((int)count)];
+		QueueFamilyProperties[] families =
+			new QueueFamilyProperties[checked((int)count)];
 
-        fixed (QueueFamilyProperties* pointer = families)
-        {
-            api.GetPhysicalDeviceQueueFamilyProperties(
-                device,
-                ref count,
-                pointer);
-        }
+		fixed (QueueFamilyProperties* pointer = families)
+		{
+			api.GetPhysicalDeviceQueueFamilyProperties(
+				device,
+				ref count,
+				pointer);
+		}
 
-        if (count < families.Length)
-        {
-            Array.Resize(
-                ref families,
-                checked((int)count));
-        }
+		if (count < families.Length)
+		{
+			Array.Resize(
+				ref families,
+				checked((int)count));
+		}
 
-        return families;
-    }
+		return families;
+	}
 }

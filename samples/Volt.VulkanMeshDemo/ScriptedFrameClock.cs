@@ -47,4 +47,29 @@ internal sealed class ScriptedFrameClock : IMonotonicClock
 	{
 		Timestamp += FrameTicks;
 	}
+
+	/// <summary>
+	/// Injects an exact elapsed interval for the next
+	/// <see cref="GameLoop.Advance"/>.
+	/// </summary>
+	/// <param name="nanoseconds">
+	/// The interval, in nanoseconds. It must not be negative.
+	/// </param>
+	/// <remarks>
+	/// The interpolation demonstration uses this to place the
+	/// accumulator at exact fractional alphas, including multiple
+	/// steps in one application frame.
+	/// </remarks>
+	public void AdvanceNanoseconds(long nanoseconds)
+	{
+		if (nanoseconds < 0)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(nanoseconds),
+				nanoseconds,
+				"Injected elapsed time cannot be negative.");
+		}
+
+		Timestamp += nanoseconds;
+	}
 }

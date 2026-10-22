@@ -22,6 +22,8 @@ public readonly struct UpdateContext
 	internal UpdateContext(
 		long frameIndex,
 		TimeSpan realDelta,
+		TimeSpan scaledDelta,
+		TimeScale timeScale,
 		int fixedSteps,
 		double simulationDeltaSeconds,
 		float interpolationAlpha,
@@ -30,6 +32,9 @@ public readonly struct UpdateContext
 		FrameIndex = frameIndex;
 		RealDelta = realDelta;
 		DeltaSeconds = (float)realDelta.TotalSeconds;
+		ScaledDelta = scaledDelta;
+		ScaledDeltaSeconds = (float)scaledDelta.TotalSeconds;
+		TimeScale = timeScale;
 		FixedSteps = fixedSteps;
 		SimulationDeltaSeconds = simulationDeltaSeconds;
 		InterpolationAlpha = interpolationAlpha;
@@ -50,6 +55,31 @@ public readonly struct UpdateContext
 	/// Gets the real elapsed interval in seconds.
 	/// </summary>
 	public float DeltaSeconds { get; }
+
+	/// <summary>
+	/// Gets the simulation time offered to the fixed-step
+	/// accumulator, after clamping and scaling.
+	/// </summary>
+	/// <remarks>
+	/// Zero while paused or at a zero time scale. Part of this value
+	/// can be discarded by the fixed-step cap; see
+	/// <see cref="GameLoop.TotalDroppedSimulationTime"/>.
+	/// </remarks>
+	public TimeSpan ScaledDelta { get; }
+
+	/// <summary>
+	/// Gets <see cref="ScaledDelta"/> in seconds.
+	/// </summary>
+	public float ScaledDeltaSeconds { get; }
+
+	/// <summary>
+	/// Gets the time scale that was effective for this frame.
+	/// </summary>
+	/// <remarks>
+	/// Changing <see cref="GameLoop.TimeScale"/> here affects the next
+	/// frame, not the fixed steps already planned for this one.
+	/// </remarks>
+	public TimeScale TimeScale { get; }
 
 	/// <summary>
 	/// Gets the fixed steps this frame executed.

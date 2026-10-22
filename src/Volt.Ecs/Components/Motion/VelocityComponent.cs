@@ -12,10 +12,10 @@ namespace Volt.Ecs.Components.Motion;
 /// </remarks>
 public struct VelocityComponent(Vector3 value)
 {
-    public Vector3 Value = value;
+	public Vector3 Value = value;
 
-    /// <summary>
-    /// Gets a component representing zero linear velocity.
-    /// </summary>
-    public static VelocityComponent Zero => new(Vector3.Zero);
+	/// <summary>
+	/// Gets a component representing zero linear velocity.
+	/// </summary>
+	public static VelocityComponent Zero => new(Vector3.Zero);
 }

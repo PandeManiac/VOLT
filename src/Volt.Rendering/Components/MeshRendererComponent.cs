@@ -15,9 +15,9 @@ namespace Volt.Rendering.Components;
 /// A default component contains invalid resource handles.
 /// </remarks>
 public struct MeshRendererComponent(
-    MeshHandle mesh,
-    MaterialHandle material)
+	MeshHandle mesh,
+	MaterialHandle material)
 {
-    public MeshHandle Mesh = mesh;
-    public MaterialHandle Material = material;
+	public MeshHandle Mesh = mesh;
+	public MaterialHandle Material = material;
 }

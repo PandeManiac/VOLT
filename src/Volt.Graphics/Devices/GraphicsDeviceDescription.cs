@@ -13,24 +13,24 @@ namespace Volt.Graphics.Devices;
 /// for optional features are checked during device creation.
 /// </remarks>
 public readonly record struct GraphicsDeviceDescription(
-    GraphicsBackend Backend,
-    bool EnableValidation = false)
+	GraphicsBackend Backend,
+	bool EnableValidation = false)
 {
-    /// <summary>
-    /// Validates the backend selection.
-    /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">
-    /// The backend is unknown or undefined.
-    /// </exception>
-    public void Validate()
-    {
-        if (Backend == GraphicsBackend.Unknown
-            || !Enum.IsDefined(Backend))
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(Backend),
-                Backend,
-                "A defined graphics backend must be selected.");
-        }
-    }
+	/// <summary>
+	/// Validates the backend selection.
+	/// </summary>
+	/// <exception cref="ArgumentOutOfRangeException">
+	/// The backend is unknown or undefined.
+	/// </exception>
+	public void Validate()
+	{
+		if (Backend == GraphicsBackend.Unknown
+			|| !Enum.IsDefined(Backend))
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(Backend),
+				Backend,
+				"A defined graphics backend must be selected.");
+		}
+	}
 }

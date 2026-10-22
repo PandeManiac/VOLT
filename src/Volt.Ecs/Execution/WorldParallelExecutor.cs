@@ -32,144 +32,144 @@ namespace Volt.Ecs;
 /// </remarks>
 public sealed class WorldParallelExecutor
 {
-    private const int ReusableChunkBufferEntityThreshold = 1_000_000;
+	private const int ReusableChunkBufferEntityThreshold = 1_000_000;
 
-    private static readonly ConditionalWeakTable<World, SemaphoreSlim>
-        s_executionGates = [];
+	private static readonly ConditionalWeakTable<World, SemaphoreSlim>
+		s_executionGates = [];
 
-    private static readonly ConditionalWeakTable<World, List<WorldQueryChunk>>
-        s_reusableChunkBuffers = [];
+	private static readonly ConditionalWeakTable<World, List<WorldQueryChunk>>
+		s_reusableChunkBuffers = [];
 
-    private readonly JobScheduler _scheduler;
+	private readonly JobScheduler _scheduler;
 
-    /// <summary>
-    /// Gets the number of consecutive chunks assigned to
-    /// each scheduled batch.
-    /// </summary>
-    public int ChunksPerBatch { get; }
+	/// <summary>
+	/// Gets the number of consecutive chunks assigned to
+	/// each scheduled batch.
+	/// </summary>
+	public int ChunksPerBatch { get; }
 
-    /// <summary>
-    /// Creates a parallel ECS executor.
-    /// </summary>
-    /// <param name="scheduler">
-    /// The general-purpose job scheduler used for execution.
-    /// </param>
-    /// <param name="chunksPerBatch">
-    /// The number of chunks processed in each batch.
-    /// Must be greater than zero.
-    /// </param>
-    public WorldParallelExecutor(
-        JobScheduler scheduler,
-        int chunksPerBatch = 1)
-    {
-        ArgumentNullException.ThrowIfNull(scheduler);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
-            chunksPerBatch);
+	/// <summary>
+	/// Creates a parallel ECS executor.
+	/// </summary>
+	/// <param name="scheduler">
+	/// The general-purpose job scheduler used for execution.
+	/// </param>
+	/// <param name="chunksPerBatch">
+	/// The number of chunks processed in each batch.
+	/// Must be greater than zero.
+	/// </param>
+	public WorldParallelExecutor(
+		JobScheduler scheduler,
+		int chunksPerBatch = 1)
+	{
+		ArgumentNullException.ThrowIfNull(scheduler);
+		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+			chunksPerBatch);
 
-        _scheduler = scheduler;
-        ChunksPerBatch = chunksPerBatch;
-    }
+		_scheduler = scheduler;
+		ChunksPerBatch = chunksPerBatch;
+	}
 
-    /// <summary>
-    /// Executes a callback once for each nonempty chunk
-    /// matching the supplied component query.
-    /// </summary>
-    /// <remarks>
-    /// Different chunk callbacks may execute concurrently
-    /// and in any order.
-    ///
-    /// The world's structure is frozen before matching chunks
-    /// are collected and remains frozen until all scheduled
-    /// work completes.
-    ///
-    /// Calls targeting the same world are serialized to avoid
-    /// overlapping executor-managed component access.
-    ///
-    /// This method does not make arbitrary direct World
-    /// component access thread-safe.
-    ///
-    /// Cancellation is cooperative. A callback already
-    /// executing is allowed to finish.
-    /// </remarks>
-    public Task ExecuteAsync(
-        World world,
-        ComponentQuery query,
-        Action<WorldQueryChunk> executeChunk,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(world);
-        ArgumentNullException.ThrowIfNull(query);
-        ArgumentNullException.ThrowIfNull(executeChunk);
+	/// <summary>
+	/// Executes a callback once for each nonempty chunk
+	/// matching the supplied component query.
+	/// </summary>
+	/// <remarks>
+	/// Different chunk callbacks may execute concurrently
+	/// and in any order.
+	///
+	/// The world's structure is frozen before matching chunks
+	/// are collected and remains frozen until all scheduled
+	/// work completes.
+	///
+	/// Calls targeting the same world are serialized to avoid
+	/// overlapping executor-managed component access.
+	///
+	/// This method does not make arbitrary direct World
+	/// component access thread-safe.
+	///
+	/// Cancellation is cooperative. A callback already
+	/// executing is allowed to finish.
+	/// </remarks>
+	public Task ExecuteAsync(
+		World world,
+		ComponentQuery query,
+		Action<WorldQueryChunk> executeChunk,
+		CancellationToken cancellationToken = default)
+	{
+		ArgumentNullException.ThrowIfNull(world);
+		ArgumentNullException.ThrowIfNull(query);
+		ArgumentNullException.ThrowIfNull(executeChunk);
 
-        return ExecuteCoreAsync(
-            world,
-            query,
-            executeChunk,
-            cancellationToken);
-    }
+		return ExecuteCoreAsync(
+			world,
+			query,
+			executeChunk,
+			cancellationToken);
+	}
 
-    private async Task ExecuteCoreAsync(
-        World world,
-        ComponentQuery query,
-        Action<WorldQueryChunk> executeChunk,
-        CancellationToken cancellationToken)
-    {
-        SemaphoreSlim executionGate = s_executionGates.GetValue(
-            world,
-            static _ => new SemaphoreSlim(1, 1));
+	private async Task ExecuteCoreAsync(
+		World world,
+		ComponentQuery query,
+		Action<WorldQueryChunk> executeChunk,
+		CancellationToken cancellationToken)
+	{
+		SemaphoreSlim executionGate = s_executionGates.GetValue(
+			world,
+			static _ => new SemaphoreSlim(1, 1));
 
-        await executionGate.WaitAsync(cancellationToken)
-            .ConfigureAwait(false);
+		await executionGate.WaitAsync(cancellationToken)
+			.ConfigureAwait(false);
 
-        try
-        {
-            using World.StructuralFreezeScope freeze =
-                world.FreezeStructure();
+		try
+		{
+			using World.StructuralFreezeScope freeze =
+				world.FreezeStructure();
 
-            bool reuseChunks =
-                world.Count >= ReusableChunkBufferEntityThreshold;
+			bool reuseChunks =
+				world.Count >= ReusableChunkBufferEntityThreshold;
 
-            List<WorldQueryChunk> chunks = reuseChunks
-                ? s_reusableChunkBuffers.GetValue(
-                    world,
-                    static _ => [])
-                : [];
+			List<WorldQueryChunk> chunks = reuseChunks
+				? s_reusableChunkBuffers.GetValue(
+					world,
+					static _ => [])
+				: [];
 
-            try
-            {
-                foreach (WorldQueryChunk chunk in world.Query(query))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
+			try
+			{
+				foreach (WorldQueryChunk chunk in world.Query(query))
+				{
+					cancellationToken.ThrowIfCancellationRequested();
 
-                    chunks.Add(chunk);
-                }
+					chunks.Add(chunk);
+				}
 
-                await _scheduler.ScheduleBatches(
-                    chunks.Count,
-                    ChunksPerBatch,
-                    (start, end) =>
-                    {
-                        for (int i = start; i < end; i++)
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
+				await _scheduler.ScheduleBatches(
+					chunks.Count,
+					ChunksPerBatch,
+					(start, end) =>
+					{
+						for (int i = start; i < end; i++)
+						{
+							cancellationToken.ThrowIfCancellationRequested();
 
-                            executeChunk(chunks[i]);
-                        }
-                    },
-                    cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                if (reuseChunks)
-                {
-                    chunks.Clear();
-                }
-            }
-        }
+							executeChunk(chunks[i]);
+						}
+					},
+					cancellationToken).ConfigureAwait(false);
+			}
+			finally
+			{
+				if (reuseChunks)
+				{
+					chunks.Clear();
+				}
+			}
+		}
 
-        finally
-        {
-            executionGate.Release();
-        }
-    }
+		finally
+		{
+			executionGate.Release();
+		}
+	}
 }

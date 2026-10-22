@@ -45,6 +45,71 @@ public sealed class TimingAllocationTests
 		AssertZeroAllocations(loop, clock, MeasuredFrames);
 	}
 
+	[Theory]
+	[InlineData(0.5f)]
+	[InlineData(1.5f)]
+	[InlineData(2.0f)]
+	[InlineData(4.0f)]
+	public void ScaledFrames_AllocateNothing(float scale)
+	{
+		GameLoop loop = CreateLoop(out FakeMonotonicClock clock);
+
+		loop.TimeScale = scale;
+		loop.RegisterUpdate(static (in UpdateContext _) => { });
+		loop.RegisterFixedUpdate(static (in FixedUpdateContext _) => { });
+
+		AssertZeroAllocations(loop, clock, MeasuredFrames);
+	}
+
+	[Fact]
+	public void PostFixedCallbacks_AllocateNothing()
+	{
+		GameLoop loop = CreateLoop(out FakeMonotonicClock clock);
+
+		loop.RegisterFixedUpdate(static (in FixedUpdateContext _) => { });
+		loop.RegisterPostFixedUpdate(
+			static (in PostFixedUpdateContext _) => { });
+
+		AssertZeroAllocations(loop, clock, MeasuredFrames);
+	}
+
+	[Fact]
+	public void AlternatingScaleChanges_AllocateNothing()
+	{
+		GameLoop loop = CreateLoop(out FakeMonotonicClock clock);
+
+		for (int index = 0; index < WarmupFrames; index++)
+		{
+			loop.TimeScale = (index & 1) == 0 ? 0.5f : 2.0f;
+			clock.AdvanceNanoseconds(16_666_667);
+			loop.Advance();
+		}
+
+		long before = GC.GetAllocatedBytesForCurrentThread();
+
+		for (int index = 0; index < MeasuredFrames; index++)
+		{
+			loop.TimeScale = (index & 1) == 0 ? 0.5f : 2.0f;
+			clock.AdvanceNanoseconds(16_666_667);
+			loop.Advance();
+		}
+
+		long after = GC.GetAllocatedBytesForCurrentThread();
+
+		Assert.Equal(before, after);
+	}
+
+	[Fact]
+	public void FrozenSimulation_AllocatesNothing()
+	{
+		GameLoop loop = CreateLoop(out FakeMonotonicClock clock);
+
+		loop.TimeScale = 0.0f;
+		loop.RegisterUpdate(static (in UpdateContext _) => { });
+
+		AssertZeroAllocations(loop, clock, MeasuredFrames);
+	}
+
 	[Fact]
 	public void MultipleRepeatingTasks_AllocateNothing()
 	{

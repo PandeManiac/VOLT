@@ -19,96 +19,96 @@ namespace Volt.Graphics.Vulkan.Commands;
 /// </remarks>
 public static class VulkanCommandRecording
 {
-    private const CommandBufferUsageFlags AllowedFlags =
-        CommandBufferUsageFlags.OneTimeSubmitBit |
-        CommandBufferUsageFlags.SimultaneousUseBit;
+	private const CommandBufferUsageFlags AllowedFlags =
+		CommandBufferUsageFlags.OneTimeSubmitBit |
+		CommandBufferUsageFlags.SimultaneousUseBit;
 
-    /// <summary>
-    /// Begins recording a primary Vulkan command buffer.
-    /// </summary>
-    public static void Begin(
-        VulkanInstance instance,
-        CommandBuffer buffer,
-        CommandBufferUsageFlags flags =
-            CommandBufferUsageFlags.OneTimeSubmitBit)
-    {
-        ArgumentNullException.ThrowIfNull(instance);
-        ValidateBuffer(buffer);
+	/// <summary>
+	/// Begins recording a primary Vulkan command buffer.
+	/// </summary>
+	public static void Begin(
+		VulkanInstance instance,
+		CommandBuffer buffer,
+		CommandBufferUsageFlags flags =
+			CommandBufferUsageFlags.OneTimeSubmitBit)
+	{
+		ArgumentNullException.ThrowIfNull(instance);
+		ValidateBuffer(buffer);
 
-        CommandBufferBeginInfo beginInfo =
-            CreateBeginDescription(flags);
+		CommandBufferBeginInfo beginInfo =
+			CreateBeginDescription(flags);
 
-        Result result = instance.Api.BeginCommandBuffer(
-            buffer,
-            in beginInfo);
+		Result result = instance.Api.BeginCommandBuffer(
+			buffer,
+			in beginInfo);
 
-        EnsureSuccess(
-            result,
-            "Begin Vulkan command buffer recording");
-    }
+		EnsureSuccess(
+			result,
+			"Begin Vulkan command buffer recording");
+	}
 
-    /// <summary>
-    /// Ends recording a primary Vulkan command buffer.
-    /// </summary>
-    public static void End(
-        VulkanInstance instance,
-        CommandBuffer buffer)
-    {
-        ArgumentNullException.ThrowIfNull(instance);
+	/// <summary>
+	/// Ends recording a primary Vulkan command buffer.
+	/// </summary>
+	public static void End(
+		VulkanInstance instance,
+		CommandBuffer buffer)
+	{
+		ArgumentNullException.ThrowIfNull(instance);
 
-        ValidateBuffer(buffer);
-        Result result = instance.Api.EndCommandBuffer(buffer);
+		ValidateBuffer(buffer);
+		Result result = instance.Api.EndCommandBuffer(buffer);
 
-        EnsureSuccess(
-            result,
-            "End Vulkan command buffer recording");
-    }
+		EnsureSuccess(
+			result,
+			"End Vulkan command buffer recording");
+	}
 
-    /// <summary>
-    /// Creates a command buffer begin description without
-    /// accessing the Vulkan driver.
-    /// </summary>
-    /// <remarks>
-    /// RenderPassContinueBit is intentionally unsupported.
-    /// This helper is designed for primary command buffers.
-    /// </remarks>
-    internal static CommandBufferBeginInfo CreateBeginDescription(
-        CommandBufferUsageFlags flags =
-            CommandBufferUsageFlags.OneTimeSubmitBit)
-    {
-        if ((flags & ~AllowedFlags) != 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(flags),
-                flags,
-                "Unsupported primary command buffer usage flags.");
-        }
+	/// <summary>
+	/// Creates a command buffer begin description without
+	/// accessing the Vulkan driver.
+	/// </summary>
+	/// <remarks>
+	/// RenderPassContinueBit is intentionally unsupported.
+	/// This helper is designed for primary command buffers.
+	/// </remarks>
+	internal static CommandBufferBeginInfo CreateBeginDescription(
+		CommandBufferUsageFlags flags =
+			CommandBufferUsageFlags.OneTimeSubmitBit)
+	{
+		if ((flags & ~AllowedFlags) != 0)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(flags),
+				flags,
+				"Unsupported primary command buffer usage flags.");
+		}
 
-        return new CommandBufferBeginInfo
-        {
-            SType = StructureType.CommandBufferBeginInfo,
-            Flags = flags
-        };
-    }
+		return new CommandBufferBeginInfo
+		{
+			SType = StructureType.CommandBufferBeginInfo,
+			Flags = flags
+		};
+	}
 
-    private static void ValidateBuffer(CommandBuffer buffer)
-    {
-        if (buffer.Handle == 0)
-        {
-            throw new ArgumentException(
-                "A valid Vulkan command buffer handle is required.",
-                nameof(buffer));
-        }
-    }
+	private static void ValidateBuffer(CommandBuffer buffer)
+	{
+		if (buffer.Handle == 0)
+		{
+			throw new ArgumentException(
+				"A valid Vulkan command buffer handle is required.",
+				nameof(buffer));
+		}
+	}
 
-    private static void EnsureSuccess(
-        Result result,
-        string operation)
-    {
-        if (result != Result.Success)
-        {
-            throw new InvalidOperationException(
-                $"{operation} failed: {result}.");
-        }
-    }
+	private static void EnsureSuccess(
+		Result result,
+		string operation)
+	{
+		if (result != Result.Success)
+		{
+			throw new InvalidOperationException(
+				$"{operation} failed: {result}.");
+		}
+	}
 }

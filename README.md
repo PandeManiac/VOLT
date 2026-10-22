@@ -32,9 +32,11 @@ Core utilities provide native-memory arenas and buffers for workloads that benef
 
 `Volt.Core.Timing` provides the deterministic clock an application runs on: one `Update` per frame, zero or more 60 Hz `FixedUpdate` steps, and scheduled simulation work at absolute fixed-step deadlines. Fixed time is accumulated in exact integer units, so a 60 Hz simulation does not drift from repeatedly adding an approximate 1/60 second.
 
-The loop clamps long frames, caps catch-up steps, drops excess simulation debt instead of building a backlog, supports pause and single-step, and exposes an interpolation alpha in `[0, 1)`. Scheduled callbacks run synchronously on the game thread, never through a timer or a hidden task. The subsystem has no SDL, Vulkan, ECS, or job-scheduler dependency, and its steady-state frames allocate nothing.
+The loop clamps long frames, caps catch-up steps, drops excess simulation debt instead of building a backlog, supports pause and single-step, and exposes an interpolation alpha in `[0, 1)`. Simulation time is scalable from `0x` (frozen) to `4x` through an exact rational factor with carried fractional remainders, so slow motion and fast-forward do not drift or change the fixed timestep. Scheduled callbacks run synchronously on the game thread, never through a timer or a hidden task. The subsystem has no SDL, Vulkan, ECS, or job-scheduler dependency, and its steady-state frames allocate nothing.
 
-See [src/Volt.Core/Timing/README.md](src/Volt.Core/Timing/README.md) for the execution order, frequency semantics, missed-deadline policy, and interpolation ownership rules.
+`Volt.Rendering.Transforms` builds on that loop to interpolate real ECS transform components: `TransformHistory` captures the committed pose after every fixed step, `InterpolatedRenderExtractor` derives interpolated model matrices for rendering, and `InterpolationWeight` keeps a paused game showing its latest committed pose instead of snapping back one step. History drops entities that stop being renderable, so an entity that disappears and returns starts from a held pose instead of sweeping from its stale one. The ECS components remain the only authoritative simulation state.
+
+See [src/Volt.Core/Timing/README.md](src/Volt.Core/Timing/README.md) for the execution order, frequency semantics, missed-deadline policy, and time-scale precision, and [src/Volt.Rendering/Transforms/README.md](src/Volt.Rendering/Transforms/README.md) for the interpolation and history rules.
 
 ### Platform and graphics
 
@@ -58,7 +60,7 @@ See the [Vulkan surface demo README](samples/Volt.VulkanSurfaceDemo/README.md) f
 | `Volt.Graphics` | Graphics device abstractions |
 | `Volt.Graphics.Vulkan` | Vulkan graphics backend and native resource management |
 | `Volt.Platform` | SDL3 windowing, events, and platform integration |
-| `Volt.Rendering` | Early rendering abstractions and components |
+| `Volt.Rendering` | Camera and extraction abstractions, render components, and interpolated transform history |
 | `Volt.*.Tests` | Automated tests for the corresponding engine subsystems |
 | `Volt.Benchmarks` | BenchmarkDotNet performance benchmarks |
 
@@ -121,7 +123,7 @@ The demo displays a color-interpolated triangle against a dark background for a 
 
 VOLT uses [BenchmarkDotNet](https://github.com/dotnet/BenchmarkDotNet) to measure performance-sensitive operations.
 
-The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration, plus empty, fixed-step, idle-scheduled, and due-scheduled game-loop frames.
+The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration, plus empty, fixed-step, idle-scheduled, and due-scheduled game-loop frames, time-scaled frames at `1.0x`, `0.5x`, and `2.0x`, and the separate costs of capturing transform history, interpolating poses, extracting interpolated render instances, and capturing under entity churn.
 
 Benchmark results are intended to inform implementation decisions, not merely to maximize reported throughput. Results should be evaluated alongside correctness, memory consumption, and workload characteristics.
 

@@ -13,8 +13,8 @@ namespace Volt.Rendering.Resources;
 /// </remarks>
 public readonly record struct MaterialHandle(uint Index, uint Generation)
 {
-    /// <summary>
-    /// Gets whether the handle has a nonzero generation.
-    /// </summary>
-    public bool IsValid => Generation != 0;
+	/// <summary>
+	/// Gets whether the handle has a nonzero generation.
+	/// </summary>
+	public bool IsValid => Generation != 0;
 }

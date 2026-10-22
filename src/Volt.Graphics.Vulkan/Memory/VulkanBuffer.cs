@@ -24,756 +24,756 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// </remarks>
 public sealed unsafe class VulkanBuffer : IDisposable
 {
-    private readonly VulkanInstance _instance;
-    private readonly VulkanLogicalDevice _device;
-    private readonly Vk _api;
-    private readonly VulkanSharedBufferMemory? _sharedMemory;
-
-    private VkBuffer _buffer;
-    private DeviceMemory _memory;
-
-    private bool _disposed;
-
-    public ulong Size { get; }
-
-    public BufferUsageFlags Usage { get; }
-
-    public MemoryPropertyFlags MemoryProperties { get; }
-
-    internal bool UsesSharedAllocation =>
-        _sharedMemory is not null;
-
-    internal ulong BindingOffset { get; }
-
-    internal DeviceMemory BoundMemory
-    {
-        get
-        {
-            ThrowIfDisposed();
-            return _memory;
-        }
-    }
-
-    public VkBuffer Handle
-    {
-        get
-        {
-            ThrowIfDisposed();
-            return _buffer;
-        }
-    }
-
-    public VulkanBuffer(
-        VulkanInstance instance,
-        VulkanLogicalDevice device,
-        PhysicalDevice physicalDevice,
-        ulong size,
-        BufferUsageFlags usage,
-        MemoryPropertyFlags requiredMemoryProperties,
-        MemoryPropertyFlags preferredMemoryProperties =
-            MemoryPropertyFlags.None)
-    {
-        ArgumentNullException.ThrowIfNull(instance);
-        ArgumentNullException.ThrowIfNull(device);
-
-        if (physicalDevice.Handle == 0)
-        {
-            throw new ArgumentException(
-                "A valid physical device is required.",
-                nameof(physicalDevice));
-        }
-
-        if (size == 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(size),
-                "Vulkan buffers must have a positive size.");
-        }
-
-        if (usage == BufferUsageFlags.None)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(usage),
-                "At least one buffer usage flag is required.");
-        }
-
-        _instance = instance;
-        _device = device;
-        _api = instance.Api;
-
-        Device deviceHandle = device.Handle;
-
-        VkBuffer buffer = default;
-        DeviceMemory memory = default;
-        MemoryPropertyFlags selectedProperties = default;
-
-        try
-        {
-            BufferCreateInfo bufferDescription = new()
-            {
-                SType = StructureType.BufferCreateInfo,
-                Size = size,
-                Usage = usage,
-                SharingMode = SharingMode.Exclusive
-            };
-
-            EnsureSuccess(
-                _api.CreateBuffer(
-                    deviceHandle,
-                    in bufferDescription,
-                    null,
-                    out buffer),
-                "Create Vulkan buffer");
-
-            if (buffer.Handle == 0)
-            {
-                throw new InvalidOperationException(
-                    "Vulkan returned a null buffer handle.");
-            }
-
-
-            BufferMemoryRequirementsInfo2 requirementsInfo = new()
-            {
-                SType =
-                    StructureType.BufferMemoryRequirementsInfo2,
-                Buffer = buffer
-            };
-
-            MemoryDedicatedRequirements dedicatedRequirements = new()
-            {
-                SType =
-                    StructureType.MemoryDedicatedRequirements
-            };
-
-            MemoryRequirements2 requirementsResult = new()
-            {
-                SType = StructureType.MemoryRequirements2,
-                PNext = &dedicatedRequirements
-            };
-
-            _api.GetBufferMemoryRequirements2(
-                deviceHandle,
-                &requirementsInfo,
-                &requirementsResult);
-
-            MemoryRequirements requirements =
-                requirementsResult.MemoryRequirements;
-
-            ReadOnlySpan<MemoryPropertyFlags> availableProperties =
-                device.GetMemoryTypeFlags(physicalDevice);
-
-            int memoryIndex = SelectMemoryType(
-                requirements.MemoryTypeBits,
-                availableProperties,
-                requiredMemoryProperties,
-                preferredMemoryProperties);
-
-            if (memoryIndex < 0)
-            {
-                throw new NotSupportedException(
-                    "No compatible Vulkan memory type satisfies " +
-                    $"the requested properties: {requiredMemoryProperties}.");
-            }
-
-            selectedProperties = availableProperties[memoryIndex];
-
-
-            MemoryDedicatedAllocateInfo dedicatedAllocation = new()
-            {
-                SType = StructureType.MemoryDedicatedAllocateInfo,
-                Buffer = buffer
-            };
-
-            MemoryAllocateInfo allocation = new()
-            {
-                SType = StructureType.MemoryAllocateInfo,
-                PNext = dedicatedRequirements.RequiresDedicatedAllocation
-                    ? &dedicatedAllocation
-                    : null,
-                AllocationSize = requirements.Size,
-                MemoryTypeIndex = checked((uint)memoryIndex)
-            };
-
-            EnsureSuccess(
-                _api.AllocateMemory(
-                    deviceHandle,
-                    in allocation,
-                    null,
-                    out memory),
-                "Allocate Vulkan buffer memory");
-
-            if (memory.Handle == 0)
-            {
-                throw new InvalidOperationException(
-                    "Vulkan returned a null memory allocation.");
-            }
-
-            EnsureSuccess(
-                _api.BindBufferMemory(
-                    deviceHandle,
-                    buffer,
-                    memory,
-                    0),
-                "Bind Vulkan buffer memory");
-        }
-
-        catch
-        {
-            if (buffer.Handle != 0)
-            {
-                _api.DestroyBuffer(deviceHandle, buffer, null);
-            }
-
-            if (memory.Handle != 0)
-            {
-                _api.FreeMemory(deviceHandle, memory, null);
-            }
-
-            throw;
-        }
-
-        _buffer = buffer;
-        _memory = memory;
-
-        Size = size;
-        Usage = usage;
-        MemoryProperties = selectedProperties;
-    }
-
-    /// <summary>
-    /// Adopts a previously created and bound Vulkan buffer whose
-    /// memory is owned by a shared allocation.
-    /// </summary>
-    /// <remarks>
-    /// The caller must transfer ownership of exactly one bound
-    /// buffer. Shared allocations in this initial implementation
-    /// must not be host-visible.
-    /// </remarks>
-    internal VulkanBuffer(
-        VulkanInstance instance,
-        VulkanLogicalDevice device,
-        VkBuffer buffer,
-        DeviceMemory memory,
-        VulkanSharedBufferMemory sharedMemory,
-        ulong bindingOffset,
-        ulong size,
-        BufferUsageFlags usage,
-        MemoryPropertyFlags memoryProperties)
-    {
-        ArgumentNullException.ThrowIfNull(instance);
-        ArgumentNullException.ThrowIfNull(device);
-        ArgumentNullException.ThrowIfNull(sharedMemory);
-
-        if (buffer.Handle == 0 || memory.Handle == 0)
-        {
-            throw new ArgumentException(
-                "Valid native buffer and memory handles are required.");
-        }
-
-        if (size == 0 || usage == BufferUsageFlags.None)
-        {
-            throw new ArgumentException(
-                "A positive buffer size and usage are required.");
-        }
-
-        if ((memoryProperties &
-            MemoryPropertyFlags.HostVisibleBit) != 0)
-        {
-            throw new ArgumentException(
-                "Shared host-visible allocations are not supported.",
-                nameof(memoryProperties));
-        }
-
-        _instance = instance;
-        _device = device;
-        _api = instance.Api;
-        _sharedMemory = sharedMemory;
-        _buffer = buffer;
-        _memory = memory;
-
-        Size = size;
-        Usage = usage;
-        MemoryProperties = memoryProperties;
-        BindingOffset = bindingOffset;
-    }
-
-    /// <summary>
-    /// Copies unmanaged values into host-visible Vulkan memory.
-    /// </summary>
-    public void Write<T>(
-        ReadOnlySpan<T> values,
-        ulong destinationOffset = 0)
-        where T : unmanaged
-    {
-        Write(
-            MemoryMarshal.AsBytes(values),
-            destinationOffset);
-    }
-
-    /// <summary>
-    /// Copies raw bytes into the allocation.
-    /// </summary>
-    /// <remarks>
-    /// This method maps the allocation temporarily.
-    /// For non-coherent memory, the mapped allocation is flushed.
-    ///
-    /// No implicit GPU synchronization is performed.
-    /// Do not call while the GPU may access overlapping data.
-    /// </remarks>
-    public void Write(
-        ReadOnlySpan<byte> data,
-        ulong destinationOffset = 0)
-    {
-        ThrowIfDisposed();
-
-        if ((MemoryProperties &
-            MemoryPropertyFlags.HostVisibleBit) == 0)
-        {
-            throw new InvalidOperationException(
-                "This buffer is not host-visible.");
-        }
-
-        if (destinationOffset > Size ||
-            (ulong)data.Length > Size - destinationOffset)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(destinationOffset),
-                "The upload exceeds the buffer size.");
-        }
-
-        if (data.IsEmpty)
-        {
-            return;
-        }
-
-        if (destinationOffset > long.MaxValue)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(destinationOffset));
-        }
-
-        Device deviceHandle = _device.Handle;
-
-        void* mappedMemory = null;
-
-        EnsureSuccess(
-            _api.MapMemory(
-                deviceHandle,
-                _memory,
-                0,
-                Vk.WholeSize,
-                MemoryMapFlags.None,
-                &mappedMemory),
-            "Map Vulkan buffer memory");
-
-        try
-        {
-            if (mappedMemory == null)
-            {
-                throw new InvalidOperationException(
-                    "Vulkan mapped memory to a null pointer.");
-            }
-
-            byte* destination =
-                (byte*)mappedMemory +
-                checked((long)destinationOffset);
-
-            Span<byte> target = new(
-                destination,
-                data.Length);
-
-            data.CopyTo(target);
-
-            if ((MemoryProperties &
-                MemoryPropertyFlags.HostCoherentBit) == 0)
-            {
-                MappedMemoryRange range = new()
-                {
-                    SType = StructureType.MappedMemoryRange,
-                    Memory = _memory,
-                    Offset = 0,
-                    Size = Vk.WholeSize
-                };
-
-                EnsureSuccess(
-                    _api.FlushMappedMemoryRanges(
-                        deviceHandle,
-                        1,
-                        in range),
-                    "Flush Vulkan buffer memory");
-            }
-        }
-
-        finally
-        {
-            _api.UnmapMemory(
-                deviceHandle,
-                _memory);
-        }
-    }
-
-    /// <summary>
-    /// Copies multiple managed byte-array segments into one
-    /// contiguous host-visible Vulkan allocation.
-    /// </summary>
-    /// <remarks>
-    /// Segments are copied in order, without padding.
-    /// Only the requested number of bytes is written.
-    ///
-    /// The allocation is mapped once for the entire operation.
-    /// Non-coherent memory is flushed once after copying.
-    ///
-    /// This method does not provide GPU synchronization.
-    /// </remarks>
-    internal void WriteSegments(
-        IReadOnlyList<byte[]> segments,
-        int byteCount)
-    {
-        ArgumentNullException.ThrowIfNull(segments);
-        ThrowIfDisposed();
-
-        if ((MemoryProperties
-            & MemoryPropertyFlags.HostVisibleBit) == 0)
-        {
-            throw new InvalidOperationException(
-                "This buffer is not host-visible.");
-        }
-
-        if (byteCount <= 0 ||
-            (ulong)byteCount > Size)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(byteCount),
-                "The segment upload exceeds the buffer size.");
-        }
-
-        int availableBytes = 0;
-
-        foreach (byte[] segment in segments)
-        {
-            ArgumentNullException.ThrowIfNull(segment);
-
-            availableBytes += Math.Min(
-                segment.Length,
-                byteCount - availableBytes);
-
-            if (availableBytes == byteCount)
-            {
-                break;
-            }
-        }
-
-        if (availableBytes != byteCount)
-        {
-            throw new ArgumentException(
-                "The supplied segments do not contain " +
-                "the requested number of bytes.",
-                nameof(segments));
-        }
-
-        Device deviceHandle = _device.Handle;
-        void* mappedMemory = null;
-
-        EnsureSuccess(
-            _api.MapMemory(
-                deviceHandle,
-                _memory,
-                0,
-                Vk.WholeSize,
-                MemoryMapFlags.None,
-                &mappedMemory),
-            "Map Vulkan buffer memory");
-
-        try
-        {
-            if (mappedMemory == null)
-            {
-                throw new InvalidOperationException(
-                    "Vulkan mapped memory to a null pointer.");
-            }
-
-            byte* destination = (byte*)mappedMemory;
-            int written = 0;
-
-            foreach (byte[] segment in segments)
-            {
-                int count = Math.Min(
-                    segment.Length,
-                    byteCount - written);
-
-                if (count == 0)
-                {
-                    if (written == byteCount)
-                    {
-                        break;
-                    }
-
-                    continue;
-                }
-
-                segment.AsSpan(0, count).CopyTo(
-                    new Span<byte>(
-                        destination + written,
-                        count));
-
-                written += count;
-            }
-
-            if ((MemoryProperties
-                & MemoryPropertyFlags.HostCoherentBit) == 0)
-            {
-                MappedMemoryRange range = new()
-                {
-                    SType = StructureType.MappedMemoryRange,
-                    Memory = _memory,
-                    Offset = 0,
-                    Size = Vk.WholeSize
-                };
-
-                EnsureSuccess(
-                    _api.FlushMappedMemoryRanges(
-                        deviceHandle,
-                        1,
-                        in range),
-                    "Flush Vulkan buffer memory");
-            }
-        }
-
-        finally
-        {
-            _api.UnmapMemory(
-                deviceHandle,
-                _memory);
-        }
-    }
-
-    /// <summary>
-    /// Copies bytes from host-visible Vulkan memory into a span.
-    /// </summary>
-    /// <remarks>
-    /// The caller must establish completion and visibility of GPU
-    /// writes before reading the allocation.
-    ///
-    /// Non-coherent mapped memory is invalidated before copying.
-    /// Invalidating the entire allocation avoids partial-range
-    /// nonCoherentAtomSize alignment requirements.
-    ///
-    /// This method does not wait for GPU work or synchronize
-    /// against concurrent GPU or host access.
-    /// </remarks>
-    public void Read(
-        Span<byte> destination,
-        ulong sourceOffset = 0)
-    {
-        ThrowIfDisposed();
-
-        if ((MemoryProperties &
-            MemoryPropertyFlags.HostVisibleBit) == 0)
-        {
-            throw new InvalidOperationException(
-                "This buffer is not host-visible.");
-        }
-
-        if (sourceOffset > Size ||
-            (ulong)destination.Length > Size - sourceOffset)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(sourceOffset),
-                "The read exceeds the buffer size.");
-        }
-
-        if (destination.IsEmpty)
-        {
-            return;
-        }
-
-        if (sourceOffset > long.MaxValue)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(sourceOffset));
-        }
-
-        Device deviceHandle = _device.Handle;
-
-        void* mappedMemory = null;
-
-        EnsureSuccess(
-            _api.MapMemory(
-                deviceHandle,
-                _memory,
-                0,
-                Vk.WholeSize,
-                MemoryMapFlags.None,
-                &mappedMemory),
-            "Map Vulkan buffer memory for reading");
-
-        try
-        {
-            if (mappedMemory == null)
-            {
-                throw new InvalidOperationException(
-                    "Vulkan mapped memory to a null pointer.");
-            }
-
-            if ((MemoryProperties &
-                MemoryPropertyFlags.HostCoherentBit) == 0)
-            {
-                MappedMemoryRange range = new()
-                {
-                    SType = StructureType.MappedMemoryRange,
-                    Memory = _memory,
-                    Offset = 0,
-                    Size = Vk.WholeSize
-                };
-
-                EnsureSuccess(
-                    _api.InvalidateMappedMemoryRanges(
-                        deviceHandle,
-                        1,
-                        in range),
-                    "Invalidate Vulkan buffer memory");
-            }
-
-            byte* source =
-                (byte*)mappedMemory +
-                checked((long)sourceOffset);
-
-            ReadOnlySpan<byte> bytes = new(
-                source,
-                destination.Length);
-
-            bytes.CopyTo(destination);
-        }
-
-        finally
-        {
-            _api.UnmapMemory(
-                deviceHandle,
-                _memory);
-        }
-    }
-
-    /// <summary>
-    /// Releases the owned Vulkan buffer and allocation.
-    /// </summary>
-    /// <remarks>
-    /// Native destruction may be deferred if a previous transfer
-    /// has unresolved execution on the associated logical device.
-    /// </remarks>
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _ = _instance.Handle;
-
-        Device deviceHandle = _device.Handle;
-        VkBuffer buffer = _buffer;
-        DeviceMemory memory = _memory;
-        VulkanSharedBufferMemory? sharedMemory = _sharedMemory;
-
-        bool bufferDestroyed = false;
-        bool memoryFreed = false;
-
-        _buffer = default;
-        _memory = default;
-        _disposed = true;
-
-        _device.ReleaseOrDefer(() =>
-        {
-            if (!bufferDestroyed)
-            {
-                _api.DestroyBuffer(
-                    deviceHandle,
-                    buffer,
-                    null);
-
-                bufferDestroyed = true;
-            }
-
-            if (!memoryFreed)
-            {
-                if (sharedMemory is not null)
-                {
-                    sharedMemory.ReleaseBuffer();
-                }
-
-                else
-                {
-                    _api.FreeMemory(
-                        deviceHandle,
-                        memory,
-                        null);
-                }
-
-                memoryFreed = true;
-            }
-        });
-    }
-
-    /// <summary>
-    /// Selects a compatible memory type without accessing Vulkan.
-    /// Returns -1 when no candidate qualifies.
-    /// </summary>
-    internal static int SelectMemoryType(
-        uint compatibleTypeBits,
-        ReadOnlySpan<MemoryPropertyFlags> memoryTypes,
-        MemoryPropertyFlags required,
-        MemoryPropertyFlags preferred)
-    {
-        if (memoryTypes.Length > 32)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(memoryTypes));
-        }
-
-        int fallback = -1;
-
-        for (int index = 0; index < memoryTypes.Length; index++)
-        {
-            uint typeBit = 1u << index;
-
-            if ((compatibleTypeBits & typeBit) == 0)
-            {
-                continue;
-            }
-
-            MemoryPropertyFlags properties = memoryTypes[index];
-
-            if ((properties & required) != required)
-            {
-                continue;
-            }
-
-            if ((properties & preferred) == preferred)
-            {
-                return index;
-            }
-
-            if (fallback < 0)
-            {
-                fallback = index;
-            }
-        }
-
-        return fallback;
-    }
-
-    private static void EnsureSuccess(
-        Result result,
-        string operation)
-    {
-        if (result != Result.Success)
-        {
-            throw new InvalidOperationException(
-                $"{operation} failed: {result}.");
-        }
-    }
-
-    private void ThrowIfDisposed()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-    }
+	private readonly VulkanInstance _instance;
+	private readonly VulkanLogicalDevice _device;
+	private readonly Vk _api;
+	private readonly VulkanSharedBufferMemory? _sharedMemory;
+
+	private VkBuffer _buffer;
+	private DeviceMemory _memory;
+
+	private bool _disposed;
+
+	public ulong Size { get; }
+
+	public BufferUsageFlags Usage { get; }
+
+	public MemoryPropertyFlags MemoryProperties { get; }
+
+	internal bool UsesSharedAllocation =>
+		_sharedMemory is not null;
+
+	internal ulong BindingOffset { get; }
+
+	internal DeviceMemory BoundMemory
+	{
+		get
+		{
+			ThrowIfDisposed();
+			return _memory;
+		}
+	}
+
+	public VkBuffer Handle
+	{
+		get
+		{
+			ThrowIfDisposed();
+			return _buffer;
+		}
+	}
+
+	public VulkanBuffer(
+		VulkanInstance instance,
+		VulkanLogicalDevice device,
+		PhysicalDevice physicalDevice,
+		ulong size,
+		BufferUsageFlags usage,
+		MemoryPropertyFlags requiredMemoryProperties,
+		MemoryPropertyFlags preferredMemoryProperties =
+			MemoryPropertyFlags.None)
+	{
+		ArgumentNullException.ThrowIfNull(instance);
+		ArgumentNullException.ThrowIfNull(device);
+
+		if (physicalDevice.Handle == 0)
+		{
+			throw new ArgumentException(
+				"A valid physical device is required.",
+				nameof(physicalDevice));
+		}
+
+		if (size == 0)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(size),
+				"Vulkan buffers must have a positive size.");
+		}
+
+		if (usage == BufferUsageFlags.None)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(usage),
+				"At least one buffer usage flag is required.");
+		}
+
+		_instance = instance;
+		_device = device;
+		_api = instance.Api;
+
+		Device deviceHandle = device.Handle;
+
+		VkBuffer buffer = default;
+		DeviceMemory memory = default;
+		MemoryPropertyFlags selectedProperties = default;
+
+		try
+		{
+			BufferCreateInfo bufferDescription = new()
+			{
+				SType = StructureType.BufferCreateInfo,
+				Size = size,
+				Usage = usage,
+				SharingMode = SharingMode.Exclusive
+			};
+
+			EnsureSuccess(
+				_api.CreateBuffer(
+					deviceHandle,
+					in bufferDescription,
+					null,
+					out buffer),
+				"Create Vulkan buffer");
+
+			if (buffer.Handle == 0)
+			{
+				throw new InvalidOperationException(
+					"Vulkan returned a null buffer handle.");
+			}
+
+
+			BufferMemoryRequirementsInfo2 requirementsInfo = new()
+			{
+				SType =
+					StructureType.BufferMemoryRequirementsInfo2,
+				Buffer = buffer
+			};
+
+			MemoryDedicatedRequirements dedicatedRequirements = new()
+			{
+				SType =
+					StructureType.MemoryDedicatedRequirements
+			};
+
+			MemoryRequirements2 requirementsResult = new()
+			{
+				SType = StructureType.MemoryRequirements2,
+				PNext = &dedicatedRequirements
+			};
+
+			_api.GetBufferMemoryRequirements2(
+				deviceHandle,
+				&requirementsInfo,
+				&requirementsResult);
+
+			MemoryRequirements requirements =
+				requirementsResult.MemoryRequirements;
+
+			ReadOnlySpan<MemoryPropertyFlags> availableProperties =
+				device.GetMemoryTypeFlags(physicalDevice);
+
+			int memoryIndex = SelectMemoryType(
+				requirements.MemoryTypeBits,
+				availableProperties,
+				requiredMemoryProperties,
+				preferredMemoryProperties);
+
+			if (memoryIndex < 0)
+			{
+				throw new NotSupportedException(
+					"No compatible Vulkan memory type satisfies " +
+					$"the requested properties: {requiredMemoryProperties}.");
+			}
+
+			selectedProperties = availableProperties[memoryIndex];
+
+
+			MemoryDedicatedAllocateInfo dedicatedAllocation = new()
+			{
+				SType = StructureType.MemoryDedicatedAllocateInfo,
+				Buffer = buffer
+			};
+
+			MemoryAllocateInfo allocation = new()
+			{
+				SType = StructureType.MemoryAllocateInfo,
+				PNext = dedicatedRequirements.RequiresDedicatedAllocation
+					? &dedicatedAllocation
+					: null,
+				AllocationSize = requirements.Size,
+				MemoryTypeIndex = checked((uint)memoryIndex)
+			};
+
+			EnsureSuccess(
+				_api.AllocateMemory(
+					deviceHandle,
+					in allocation,
+					null,
+					out memory),
+				"Allocate Vulkan buffer memory");
+
+			if (memory.Handle == 0)
+			{
+				throw new InvalidOperationException(
+					"Vulkan returned a null memory allocation.");
+			}
+
+			EnsureSuccess(
+				_api.BindBufferMemory(
+					deviceHandle,
+					buffer,
+					memory,
+					0),
+				"Bind Vulkan buffer memory");
+		}
+
+		catch
+		{
+			if (buffer.Handle != 0)
+			{
+				_api.DestroyBuffer(deviceHandle, buffer, null);
+			}
+
+			if (memory.Handle != 0)
+			{
+				_api.FreeMemory(deviceHandle, memory, null);
+			}
+
+			throw;
+		}
+
+		_buffer = buffer;
+		_memory = memory;
+
+		Size = size;
+		Usage = usage;
+		MemoryProperties = selectedProperties;
+	}
+
+	/// <summary>
+	/// Adopts a previously created and bound Vulkan buffer whose
+	/// memory is owned by a shared allocation.
+	/// </summary>
+	/// <remarks>
+	/// The caller must transfer ownership of exactly one bound
+	/// buffer. Shared allocations in this initial implementation
+	/// must not be host-visible.
+	/// </remarks>
+	internal VulkanBuffer(
+		VulkanInstance instance,
+		VulkanLogicalDevice device,
+		VkBuffer buffer,
+		DeviceMemory memory,
+		VulkanSharedBufferMemory sharedMemory,
+		ulong bindingOffset,
+		ulong size,
+		BufferUsageFlags usage,
+		MemoryPropertyFlags memoryProperties)
+	{
+		ArgumentNullException.ThrowIfNull(instance);
+		ArgumentNullException.ThrowIfNull(device);
+		ArgumentNullException.ThrowIfNull(sharedMemory);
+
+		if (buffer.Handle == 0 || memory.Handle == 0)
+		{
+			throw new ArgumentException(
+				"Valid native buffer and memory handles are required.");
+		}
+
+		if (size == 0 || usage == BufferUsageFlags.None)
+		{
+			throw new ArgumentException(
+				"A positive buffer size and usage are required.");
+		}
+
+		if ((memoryProperties &
+			MemoryPropertyFlags.HostVisibleBit) != 0)
+		{
+			throw new ArgumentException(
+				"Shared host-visible allocations are not supported.",
+				nameof(memoryProperties));
+		}
+
+		_instance = instance;
+		_device = device;
+		_api = instance.Api;
+		_sharedMemory = sharedMemory;
+		_buffer = buffer;
+		_memory = memory;
+
+		Size = size;
+		Usage = usage;
+		MemoryProperties = memoryProperties;
+		BindingOffset = bindingOffset;
+	}
+
+	/// <summary>
+	/// Copies unmanaged values into host-visible Vulkan memory.
+	/// </summary>
+	public void Write<T>(
+		ReadOnlySpan<T> values,
+		ulong destinationOffset = 0)
+		where T : unmanaged
+	{
+		Write(
+			MemoryMarshal.AsBytes(values),
+			destinationOffset);
+	}
+
+	/// <summary>
+	/// Copies raw bytes into the allocation.
+	/// </summary>
+	/// <remarks>
+	/// This method maps the allocation temporarily.
+	/// For non-coherent memory, the mapped allocation is flushed.
+	///
+	/// No implicit GPU synchronization is performed.
+	/// Do not call while the GPU may access overlapping data.
+	/// </remarks>
+	public void Write(
+		ReadOnlySpan<byte> data,
+		ulong destinationOffset = 0)
+	{
+		ThrowIfDisposed();
+
+		if ((MemoryProperties &
+			MemoryPropertyFlags.HostVisibleBit) == 0)
+		{
+			throw new InvalidOperationException(
+				"This buffer is not host-visible.");
+		}
+
+		if (destinationOffset > Size ||
+			(ulong)data.Length > Size - destinationOffset)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(destinationOffset),
+				"The upload exceeds the buffer size.");
+		}
+
+		if (data.IsEmpty)
+		{
+			return;
+		}
+
+		if (destinationOffset > long.MaxValue)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(destinationOffset));
+		}
+
+		Device deviceHandle = _device.Handle;
+
+		void* mappedMemory = null;
+
+		EnsureSuccess(
+			_api.MapMemory(
+				deviceHandle,
+				_memory,
+				0,
+				Vk.WholeSize,
+				MemoryMapFlags.None,
+				&mappedMemory),
+			"Map Vulkan buffer memory");
+
+		try
+		{
+			if (mappedMemory == null)
+			{
+				throw new InvalidOperationException(
+					"Vulkan mapped memory to a null pointer.");
+			}
+
+			byte* destination =
+				(byte*)mappedMemory +
+				checked((long)destinationOffset);
+
+			Span<byte> target = new(
+				destination,
+				data.Length);
+
+			data.CopyTo(target);
+
+			if ((MemoryProperties &
+				MemoryPropertyFlags.HostCoherentBit) == 0)
+			{
+				MappedMemoryRange range = new()
+				{
+					SType = StructureType.MappedMemoryRange,
+					Memory = _memory,
+					Offset = 0,
+					Size = Vk.WholeSize
+				};
+
+				EnsureSuccess(
+					_api.FlushMappedMemoryRanges(
+						deviceHandle,
+						1,
+						in range),
+					"Flush Vulkan buffer memory");
+			}
+		}
+
+		finally
+		{
+			_api.UnmapMemory(
+				deviceHandle,
+				_memory);
+		}
+	}
+
+	/// <summary>
+	/// Copies multiple managed byte-array segments into one
+	/// contiguous host-visible Vulkan allocation.
+	/// </summary>
+	/// <remarks>
+	/// Segments are copied in order, without padding.
+	/// Only the requested number of bytes is written.
+	///
+	/// The allocation is mapped once for the entire operation.
+	/// Non-coherent memory is flushed once after copying.
+	///
+	/// This method does not provide GPU synchronization.
+	/// </remarks>
+	internal void WriteSegments(
+		IReadOnlyList<byte[]> segments,
+		int byteCount)
+	{
+		ArgumentNullException.ThrowIfNull(segments);
+		ThrowIfDisposed();
+
+		if ((MemoryProperties
+			& MemoryPropertyFlags.HostVisibleBit) == 0)
+		{
+			throw new InvalidOperationException(
+				"This buffer is not host-visible.");
+		}
+
+		if (byteCount <= 0 ||
+			(ulong)byteCount > Size)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(byteCount),
+				"The segment upload exceeds the buffer size.");
+		}
+
+		int availableBytes = 0;
+
+		foreach (byte[] segment in segments)
+		{
+			ArgumentNullException.ThrowIfNull(segment);
+
+			availableBytes += Math.Min(
+				segment.Length,
+				byteCount - availableBytes);
+
+			if (availableBytes == byteCount)
+			{
+				break;
+			}
+		}
+
+		if (availableBytes != byteCount)
+		{
+			throw new ArgumentException(
+				"The supplied segments do not contain " +
+				"the requested number of bytes.",
+				nameof(segments));
+		}
+
+		Device deviceHandle = _device.Handle;
+		void* mappedMemory = null;
+
+		EnsureSuccess(
+			_api.MapMemory(
+				deviceHandle,
+				_memory,
+				0,
+				Vk.WholeSize,
+				MemoryMapFlags.None,
+				&mappedMemory),
+			"Map Vulkan buffer memory");
+
+		try
+		{
+			if (mappedMemory == null)
+			{
+				throw new InvalidOperationException(
+					"Vulkan mapped memory to a null pointer.");
+			}
+
+			byte* destination = (byte*)mappedMemory;
+			int written = 0;
+
+			foreach (byte[] segment in segments)
+			{
+				int count = Math.Min(
+					segment.Length,
+					byteCount - written);
+
+				if (count == 0)
+				{
+					if (written == byteCount)
+					{
+						break;
+					}
+
+					continue;
+				}
+
+				segment.AsSpan(0, count).CopyTo(
+					new Span<byte>(
+						destination + written,
+						count));
+
+				written += count;
+			}
+
+			if ((MemoryProperties
+				& MemoryPropertyFlags.HostCoherentBit) == 0)
+			{
+				MappedMemoryRange range = new()
+				{
+					SType = StructureType.MappedMemoryRange,
+					Memory = _memory,
+					Offset = 0,
+					Size = Vk.WholeSize
+				};
+
+				EnsureSuccess(
+					_api.FlushMappedMemoryRanges(
+						deviceHandle,
+						1,
+						in range),
+					"Flush Vulkan buffer memory");
+			}
+		}
+
+		finally
+		{
+			_api.UnmapMemory(
+				deviceHandle,
+				_memory);
+		}
+	}
+
+	/// <summary>
+	/// Copies bytes from host-visible Vulkan memory into a span.
+	/// </summary>
+	/// <remarks>
+	/// The caller must establish completion and visibility of GPU
+	/// writes before reading the allocation.
+	///
+	/// Non-coherent mapped memory is invalidated before copying.
+	/// Invalidating the entire allocation avoids partial-range
+	/// nonCoherentAtomSize alignment requirements.
+	///
+	/// This method does not wait for GPU work or synchronize
+	/// against concurrent GPU or host access.
+	/// </remarks>
+	public void Read(
+		Span<byte> destination,
+		ulong sourceOffset = 0)
+	{
+		ThrowIfDisposed();
+
+		if ((MemoryProperties &
+			MemoryPropertyFlags.HostVisibleBit) == 0)
+		{
+			throw new InvalidOperationException(
+				"This buffer is not host-visible.");
+		}
+
+		if (sourceOffset > Size ||
+			(ulong)destination.Length > Size - sourceOffset)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(sourceOffset),
+				"The read exceeds the buffer size.");
+		}
+
+		if (destination.IsEmpty)
+		{
+			return;
+		}
+
+		if (sourceOffset > long.MaxValue)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(sourceOffset));
+		}
+
+		Device deviceHandle = _device.Handle;
+
+		void* mappedMemory = null;
+
+		EnsureSuccess(
+			_api.MapMemory(
+				deviceHandle,
+				_memory,
+				0,
+				Vk.WholeSize,
+				MemoryMapFlags.None,
+				&mappedMemory),
+			"Map Vulkan buffer memory for reading");
+
+		try
+		{
+			if (mappedMemory == null)
+			{
+				throw new InvalidOperationException(
+					"Vulkan mapped memory to a null pointer.");
+			}
+
+			if ((MemoryProperties &
+				MemoryPropertyFlags.HostCoherentBit) == 0)
+			{
+				MappedMemoryRange range = new()
+				{
+					SType = StructureType.MappedMemoryRange,
+					Memory = _memory,
+					Offset = 0,
+					Size = Vk.WholeSize
+				};
+
+				EnsureSuccess(
+					_api.InvalidateMappedMemoryRanges(
+						deviceHandle,
+						1,
+						in range),
+					"Invalidate Vulkan buffer memory");
+			}
+
+			byte* source =
+				(byte*)mappedMemory +
+				checked((long)sourceOffset);
+
+			ReadOnlySpan<byte> bytes = new(
+				source,
+				destination.Length);
+
+			bytes.CopyTo(destination);
+		}
+
+		finally
+		{
+			_api.UnmapMemory(
+				deviceHandle,
+				_memory);
+		}
+	}
+
+	/// <summary>
+	/// Releases the owned Vulkan buffer and allocation.
+	/// </summary>
+	/// <remarks>
+	/// Native destruction may be deferred if a previous transfer
+	/// has unresolved execution on the associated logical device.
+	/// </remarks>
+	public void Dispose()
+	{
+		if (_disposed)
+		{
+			return;
+		}
+
+		_ = _instance.Handle;
+
+		Device deviceHandle = _device.Handle;
+		VkBuffer buffer = _buffer;
+		DeviceMemory memory = _memory;
+		VulkanSharedBufferMemory? sharedMemory = _sharedMemory;
+
+		bool bufferDestroyed = false;
+		bool memoryFreed = false;
+
+		_buffer = default;
+		_memory = default;
+		_disposed = true;
+
+		_device.ReleaseOrDefer(() =>
+		{
+			if (!bufferDestroyed)
+			{
+				_api.DestroyBuffer(
+					deviceHandle,
+					buffer,
+					null);
+
+				bufferDestroyed = true;
+			}
+
+			if (!memoryFreed)
+			{
+				if (sharedMemory is not null)
+				{
+					sharedMemory.ReleaseBuffer();
+				}
+
+				else
+				{
+					_api.FreeMemory(
+						deviceHandle,
+						memory,
+						null);
+				}
+
+				memoryFreed = true;
+			}
+		});
+	}
+
+	/// <summary>
+	/// Selects a compatible memory type without accessing Vulkan.
+	/// Returns -1 when no candidate qualifies.
+	/// </summary>
+	internal static int SelectMemoryType(
+		uint compatibleTypeBits,
+		ReadOnlySpan<MemoryPropertyFlags> memoryTypes,
+		MemoryPropertyFlags required,
+		MemoryPropertyFlags preferred)
+	{
+		if (memoryTypes.Length > 32)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(memoryTypes));
+		}
+
+		int fallback = -1;
+
+		for (int index = 0; index < memoryTypes.Length; index++)
+		{
+			uint typeBit = 1u << index;
+
+			if ((compatibleTypeBits & typeBit) == 0)
+			{
+				continue;
+			}
+
+			MemoryPropertyFlags properties = memoryTypes[index];
+
+			if ((properties & required) != required)
+			{
+				continue;
+			}
+
+			if ((properties & preferred) == preferred)
+			{
+				return index;
+			}
+
+			if (fallback < 0)
+			{
+				fallback = index;
+			}
+		}
+
+		return fallback;
+	}
+
+	private static void EnsureSuccess(
+		Result result,
+		string operation)
+	{
+		if (result != Result.Success)
+		{
+			throw new InvalidOperationException(
+				$"{operation} failed: {result}.");
+		}
+	}
+
+	private void ThrowIfDisposed()
+	{
+		ObjectDisposedException.ThrowIf(_disposed, this);
+	}
 }

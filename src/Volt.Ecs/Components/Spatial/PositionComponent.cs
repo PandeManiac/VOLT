@@ -15,5 +15,5 @@ namespace Volt.Ecs.Components.Spatial;
 /// </remarks>
 public struct PositionComponent(Vector3 value)
 {
-    public Vector3 Value = value;
+	public Vector3 Value = value;
 }

@@ -1354,4 +1354,92 @@ public sealed class ProgramOptionsTests
 			extension,
 			Program.RequireSwapchainMaintenance1Extension(extension));
 	}
+
+	[Fact]
+	public void TryParseOptions_ParsesInterpolationScript()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--interpolation-demo",
+					"--interpolation-script",
+					"--frames", "600"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.True(options.InterpolationDemo);
+		Assert.True(options.InterpolationScript);
+		Assert.False(options.InterpolationProbe);
+		Assert.Equal(600, options.FrameLimit);
+	}
+
+	[Fact]
+	public void TryParseOptions_ParsesInterpolationProbe()
+	{
+		Assert.True(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--interpolation-demo",
+					"--interpolation-probe",
+					"--frames", "600"
+				],
+				out SampleOptions options,
+				out string error));
+
+		Assert.Empty(error);
+		Assert.True(options.InterpolationDemo);
+		Assert.False(options.InterpolationScript);
+		Assert.True(options.InterpolationProbe);
+	}
+
+	[Fact]
+	public void TryParseOptions_InterpolationProbeRequiresDemo()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				["--interpolation-probe", "--frames", "600"],
+				out _,
+				out string error));
+
+		Assert.Contains("--interpolation-demo", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_InterpolationProbeConflictsWithScript()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--interpolation-demo",
+					"--interpolation-script",
+					"--interpolation-probe",
+					"--frames", "600"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("cannot be combined", error);
+	}
+
+	[Fact]
+	public void TryParseOptions_InterpolationProbeRequiresBoundedFrames()
+	{
+		Assert.False(
+			Program.TryParseOptions(
+				[
+					"--scene", "ecs-scene",
+					"--interpolation-demo",
+					"--interpolation-probe",
+					"--frames", "120"
+				],
+				out _,
+				out string error));
+
+		Assert.Contains("--frames", error);
+	}
 }

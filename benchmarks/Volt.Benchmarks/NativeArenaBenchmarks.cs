@@ -8,99 +8,99 @@ namespace Volt.Benchmarks;
 [MemoryDiagnoser]
 public unsafe class NativeArenaBenchmarks
 {
-    private NativeArena _arena = null!;
-    private byte* _native;
+	private NativeArena _arena = null!;
+	private byte* _native;
 
-    [Params(16, 64, 256, 4096)]
-    public int Bytes { get; set; }
+	[Params(16, 64, 256, 4096)]
+	public int Bytes { get; set; }
 
-    [GlobalSetup]
-    public void Setup()
-    {
-        _arena = new NativeArena(1024 * 1024);
-        _native = (byte*)NativeMemory.AlignedAlloc((nuint)Bytes, 64);
+	[GlobalSetup]
+	public void Setup()
+	{
+		_arena = new NativeArena(1024 * 1024);
+		_native = (byte*)NativeMemory.AlignedAlloc((nuint)Bytes, 64);
 
-        if (_native == null)
-        {
-            throw new OutOfMemoryException();
-        }
-    }
+		if (_native == null)
+		{
+			throw new OutOfMemoryException();
+		}
+	}
 
-    [GlobalCleanup]
-    public void Cleanup()
-    {
-        _arena.Dispose();
-        NativeMemory.AlignedFree(_native);
-    }
+	[GlobalCleanup]
+	public void Cleanup()
+	{
+		_arena.Dispose();
+		NativeMemory.AlignedFree(_native);
+	}
 
-    [Benchmark(Baseline = true)]
-    public byte ArenaAllocate()
-    {
-        _arena.Reset();
-        Span<byte> span = _arena.Allocate<byte>(Bytes);
-        span[0] = 42;
-        return span[0];
-    }
+	[Benchmark(Baseline = true)]
+	public byte ArenaAllocate()
+	{
+		_arena.Reset();
+		Span<byte> span = _arena.Allocate<byte>(Bytes);
+		span[0] = 42;
+		return span[0];
+	}
 
-    [Benchmark]
-    public byte ArenaTryAllocate()
-    {
-        _arena.Reset();
+	[Benchmark]
+	public byte ArenaTryAllocate()
+	{
+		_arena.Reset();
 
-        if (!_arena.TryAllocate<byte>(Bytes, out Span<byte> span))
-        {
-            throw new InvalidOperationException();
-        }
+		if (!_arena.TryAllocate<byte>(Bytes, out Span<byte> span))
+		{
+			throw new InvalidOperationException();
+		}
 
-        span[0] = 42;
-        return span[0];
-    }
+		span[0] = 42;
+		return span[0];
+	}
 
-    [Benchmark]
-    public byte ArenaMarkRewind()
-    {
-        _arena.Reset();
+	[Benchmark]
+	public byte ArenaMarkRewind()
+	{
+		_arena.Reset();
 
-        NativeArenaMark mark = _arena.Mark();
-        Span<byte> span = _arena.Allocate<byte>(Bytes);
+		NativeArenaMark mark = _arena.Mark();
+		Span<byte> span = _arena.Allocate<byte>(Bytes);
 
-        span[0] = 42;
-        byte value = span[0];
+		span[0] = 42;
+		byte value = span[0];
 
-        _arena.Rewind(mark);
-        return value;
-    }
+		_arena.Rewind(mark);
+		return value;
+	}
 
-    [Benchmark]
-    public byte NativeMemoryAllocateFree()
-    {
-        byte* ptr = (byte*)NativeMemory.AlignedAlloc((nuint)Bytes, 64);
+	[Benchmark]
+	public byte NativeMemoryAllocateFree()
+	{
+		byte* ptr = (byte*)NativeMemory.AlignedAlloc((nuint)Bytes, 64);
 
-        if (ptr == null)
-        {
-            throw new OutOfMemoryException();
-        }
+		if (ptr == null)
+		{
+			throw new OutOfMemoryException();
+		}
 
-        ptr[0] = 42;
-        byte value = ptr[0];
+		ptr[0] = 42;
+		byte value = ptr[0];
 
-        NativeMemory.AlignedFree(ptr);
-        return value;
-    }
+		NativeMemory.AlignedFree(ptr);
+		return value;
+	}
 
-    [Benchmark]
-    public byte NativeBufferAllocateDispose()
-    {
-        using var buffer = new NativeBuffer<byte>(Bytes);
-        buffer[0] = 42;
-        return buffer[0];
-    }
+	[Benchmark]
+	public byte NativeBufferAllocateDispose()
+	{
+		using var buffer = new NativeBuffer<byte>(Bytes);
+		buffer[0] = 42;
+		return buffer[0];
+	}
 
-    [Benchmark]
-    public byte[] ManagedArrayAllocate()
-    {
-        byte[] bytes = new byte[Bytes];
-        bytes[0] = 42;
-        return bytes;
-    }
+	[Benchmark]
+	public byte[] ManagedArrayAllocate()
+	{
+		byte[] bytes = new byte[Bytes];
+		bytes[0] = 42;
+		return bytes;
+	}
 }

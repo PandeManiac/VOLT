@@ -14,10 +14,10 @@ namespace Volt.Ecs.Components.Spatial;
 /// </remarks>
 public struct RotationComponent(Quaternion value)
 {
-    public Quaternion Value = value;
+	public Quaternion Value = value;
 
-    /// <summary>
-    /// Gets a rotation with no angular displacement.
-    /// </summary>
-    public static RotationComponent Identity => new(Quaternion.Identity);
+	/// <summary>
+	/// Gets a rotation with no angular displacement.
+	/// </summary>
+	public static RotationComponent Identity => new(Quaternion.Identity);
 }

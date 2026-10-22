@@ -20,238 +20,238 @@ namespace Volt.Jobs;
 /// </remarks>
 public sealed class JobScheduler
 {
-    /// <summary>
-    /// Gets the maximum number of workers permitted within
-    /// an individual parallel batch execution.
-    /// </summary>
-    public int MaxDegreeOfParallelism { get; }
+	/// <summary>
+	/// Gets the maximum number of workers permitted within
+	/// an individual parallel batch execution.
+	/// </summary>
+	public int MaxDegreeOfParallelism { get; }
 
-    /// <summary>
-    /// Creates a scheduler with a configurable parallelism limit.
-    /// Zero selects the processor count reported by the runtime.
-    /// </summary>
-    public JobScheduler(int maxDegreeOfParallelism = 0)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(
-            maxDegreeOfParallelism);
+	/// <summary>
+	/// Creates a scheduler with a configurable parallelism limit.
+	/// Zero selects the processor count reported by the runtime.
+	/// </summary>
+	public JobScheduler(int maxDegreeOfParallelism = 0)
+	{
+		ArgumentOutOfRangeException.ThrowIfNegative(
+			maxDegreeOfParallelism);
 
-        MaxDegreeOfParallelism = maxDegreeOfParallelism == 0
-            ? Math.Max(1, Environment.ProcessorCount)
-            : maxDegreeOfParallelism;
-    }
+		MaxDegreeOfParallelism = maxDegreeOfParallelism == 0
+			? Math.Max(1, Environment.ProcessorCount)
+			: maxDegreeOfParallelism;
+	}
 
-    /// <summary>
-    /// Schedules an individual job on the ThreadPool.
-    /// </summary>
-    /// <remarks>
-    /// Cancellation prevents execution if the job has not
-    /// started. Running jobs must cooperate with cancellation
-    /// themselves.
-    /// </remarks>
-    public Task Schedule(
-        Action job,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(job);
+	/// <summary>
+	/// Schedules an individual job on the ThreadPool.
+	/// </summary>
+	/// <remarks>
+	/// Cancellation prevents execution if the job has not
+	/// started. Running jobs must cooperate with cancellation
+	/// themselves.
+	/// </remarks>
+	public Task Schedule(
+		Action job,
+		CancellationToken cancellationToken = default)
+	{
+		ArgumentNullException.ThrowIfNull(job);
 
-        return Task.Run(job, cancellationToken);
-    }
+		return Task.Run(job, cancellationToken);
+	}
 
-    /// <summary>
-    /// Schedules a job after another task completes successfully.
-    /// </summary>
-    /// <remarks>
-    /// A faulted or canceled dependency prevents the dependent
-    /// job from executing.
-    /// </remarks>
-    public Task ScheduleAfter(
-        Task dependency,
-        Action job,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(dependency);
-        ArgumentNullException.ThrowIfNull(job);
+	/// <summary>
+	/// Schedules a job after another task completes successfully.
+	/// </summary>
+	/// <remarks>
+	/// A faulted or canceled dependency prevents the dependent
+	/// job from executing.
+	/// </remarks>
+	public Task ScheduleAfter(
+		Task dependency,
+		Action job,
+		CancellationToken cancellationToken = default)
+	{
+		ArgumentNullException.ThrowIfNull(dependency);
+		ArgumentNullException.ThrowIfNull(job);
 
-        return ScheduleAfterCore(
-            dependency,
-            job,
-            cancellationToken);
-    }
+		return ScheduleAfterCore(
+			dependency,
+			job,
+			cancellationToken);
+	}
 
-    /// <summary>
-    /// Schedules a batched parallel operation on the ThreadPool.
-    /// Each batch receives an exclusive index range [start, end).
-    /// </summary>
-    public Task ScheduleBatches(
-        int itemCount,
-        int batchSize,
-        Action<int, int> executeBatch,
-        CancellationToken cancellationToken = default)
-    {
-        ValidateBatchArguments(
-            itemCount,
-            batchSize,
-            executeBatch);
+	/// <summary>
+	/// Schedules a batched parallel operation on the ThreadPool.
+	/// Each batch receives an exclusive index range [start, end).
+	/// </summary>
+	public Task ScheduleBatches(
+		int itemCount,
+		int batchSize,
+		Action<int, int> executeBatch,
+		CancellationToken cancellationToken = default)
+	{
+		ValidateBatchArguments(
+			itemCount,
+			batchSize,
+			executeBatch);
 
-        if (cancellationToken.IsCancellationRequested)
-        {
-            return Task.FromCanceled(cancellationToken);
-        }
+		if (cancellationToken.IsCancellationRequested)
+		{
+			return Task.FromCanceled(cancellationToken);
+		}
 
-        if (itemCount == 0)
-        {
-            return Task.CompletedTask;
-        }
+		if (itemCount == 0)
+		{
+			return Task.CompletedTask;
+		}
 
-        BatchWork work = new(
-            this,
-            itemCount,
-            batchSize,
-            executeBatch,
-            cancellationToken);
+		BatchWork work = new(
+			this,
+			itemCount,
+			batchSize,
+			executeBatch,
+			cancellationToken);
 
-        // A static callback avoids allocating a captured closure and
-        // delegate for every scheduled batch operation.
-        // Explicitly use the ThreadPool scheduler and DenyChildAttach
-        // to preserve Task.Run's scheduling semantics.
-        return Task.Factory.StartNew(
-            static state => ((BatchWork)state!).Execute(),
-            work,
-            cancellationToken,
-            TaskCreationOptions.DenyChildAttach,
-            TaskScheduler.Default);
-    }
+		// A static callback avoids allocating a captured closure and
+		// delegate for every scheduled batch operation.
+		// Explicitly use the ThreadPool scheduler and DenyChildAttach
+		// to preserve Task.Run's scheduling semantics.
+		return Task.Factory.StartNew(
+			static state => ((BatchWork)state!).Execute(),
+			work,
+			cancellationToken,
+			TaskCreationOptions.DenyChildAttach,
+			TaskScheduler.Default);
+	}
 
-    /// <summary>
-    /// Executes batches in parallel and returns after all
-    /// batches have finished.
-    /// </summary>
-    /// <remarks>
-    /// Batches cover [0, itemCount) without overlap.
-    /// The final batch may contain fewer than batchSize items.
-    ///
-    /// Exceptions from parallel batches are propagated to
-    /// the caller. Cancellation cannot interrupt a batch
-    /// already executing user code.
-    /// </remarks>
-    public void RunBatches(
-        int itemCount,
-        int batchSize,
-        Action<int, int> executeBatch,
-        CancellationToken cancellationToken = default)
-    {
-        ValidateBatchArguments(
-            itemCount,
-            batchSize,
-            executeBatch);
+	/// <summary>
+	/// Executes batches in parallel and returns after all
+	/// batches have finished.
+	/// </summary>
+	/// <remarks>
+	/// Batches cover [0, itemCount) without overlap.
+	/// The final batch may contain fewer than batchSize items.
+	///
+	/// Exceptions from parallel batches are propagated to
+	/// the caller. Cancellation cannot interrupt a batch
+	/// already executing user code.
+	/// </remarks>
+	public void RunBatches(
+		int itemCount,
+		int batchSize,
+		Action<int, int> executeBatch,
+		CancellationToken cancellationToken = default)
+	{
+		ValidateBatchArguments(
+			itemCount,
+			batchSize,
+			executeBatch);
 
-        cancellationToken.ThrowIfCancellationRequested();
+		cancellationToken.ThrowIfCancellationRequested();
 
-        if (itemCount == 0)
-        {
-            return;
-        }
+		if (itemCount == 0)
+		{
+			return;
+		}
 
-        int batchCount = 1 + (itemCount - 1) / batchSize;
+		int batchCount = 1 + (itemCount - 1) / batchSize;
 
-        if (MaxDegreeOfParallelism == 1 || batchCount == 1)
-        {
-            for (int i = 0; i < batchCount; i++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
+		if (MaxDegreeOfParallelism == 1 || batchCount == 1)
+		{
+			for (int i = 0; i < batchCount; i++)
+			{
+				cancellationToken.ThrowIfCancellationRequested();
 
-                ExecuteBatch(
-                    i,
-                    itemCount,
-                    batchSize,
-                    executeBatch);
-            }
+				ExecuteBatch(
+					i,
+					itemCount,
+					batchSize,
+					executeBatch);
+			}
 
-            return;
-        }
+			return;
+		}
 
-        ParallelOptions options = new()
-        {
-            MaxDegreeOfParallelism = MaxDegreeOfParallelism,
-            CancellationToken = cancellationToken
-        };
+		ParallelOptions options = new()
+		{
+			MaxDegreeOfParallelism = MaxDegreeOfParallelism,
+			CancellationToken = cancellationToken
+		};
 
-        Parallel.For(0, batchCount, options, batchIndex =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
+		Parallel.For(0, batchCount, options, batchIndex =>
+		{
+			cancellationToken.ThrowIfCancellationRequested();
 
-            ExecuteBatch(
-                batchIndex,
-                itemCount,
-                batchSize,
-                executeBatch);
-        });
-    }
+			ExecuteBatch(
+				batchIndex,
+				itemCount,
+				batchSize,
+				executeBatch);
+		});
+	}
 
-    private async Task ScheduleAfterCore(
-        Task dependency,
-        Action job,
-        CancellationToken cancellationToken)
-    {
-        await dependency.WaitAsync(cancellationToken)
-            .ConfigureAwait(false);
+	private async Task ScheduleAfterCore(
+		Task dependency,
+		Action job,
+		CancellationToken cancellationToken)
+	{
+		await dependency.WaitAsync(cancellationToken)
+			.ConfigureAwait(false);
 
-        await Schedule(job, cancellationToken)
-            .ConfigureAwait(false);
-    }
+		await Schedule(job, cancellationToken)
+			.ConfigureAwait(false);
+	}
 
-    private static void ExecuteBatch(
-        int batchIndex,
-        int itemCount,
-        int batchSize,
-        Action<int, int> executeBatch)
-    {
-        int start = checked(batchIndex * batchSize);
-        int count = Math.Min(batchSize, itemCount - start);
-        int end = start + count;
+	private static void ExecuteBatch(
+		int batchIndex,
+		int itemCount,
+		int batchSize,
+		Action<int, int> executeBatch)
+	{
+		int start = checked(batchIndex * batchSize);
+		int count = Math.Min(batchSize, itemCount - start);
+		int end = start + count;
 
-        executeBatch(start, end);
-    }
+		executeBatch(start, end);
+	}
 
-    private static void ValidateBatchArguments(
-        int itemCount,
-        int batchSize,
-        Action<int, int> executeBatch)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(itemCount);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
-        ArgumentNullException.ThrowIfNull(executeBatch);
-    }
+	private static void ValidateBatchArguments(
+		int itemCount,
+		int batchSize,
+		Action<int, int> executeBatch)
+	{
+		ArgumentOutOfRangeException.ThrowIfNegative(itemCount);
+		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+		ArgumentNullException.ThrowIfNull(executeBatch);
+	}
 
-    private sealed class BatchWork
-    {
-        private readonly JobScheduler _scheduler;
-        private readonly int _itemCount;
-        private readonly int _batchSize;
-        private readonly Action<int, int> _executeBatch;
-        private readonly CancellationToken _cancellationToken;
+	private sealed class BatchWork
+	{
+		private readonly JobScheduler _scheduler;
+		private readonly int _itemCount;
+		private readonly int _batchSize;
+		private readonly Action<int, int> _executeBatch;
+		private readonly CancellationToken _cancellationToken;
 
-        internal BatchWork(
-            JobScheduler scheduler,
-            int itemCount,
-            int batchSize,
-            Action<int, int> executeBatch,
-            CancellationToken cancellationToken)
-        {
-            _scheduler = scheduler;
-            _itemCount = itemCount;
-            _batchSize = batchSize;
-            _executeBatch = executeBatch;
-            _cancellationToken = cancellationToken;
-        }
+		internal BatchWork(
+			JobScheduler scheduler,
+			int itemCount,
+			int batchSize,
+			Action<int, int> executeBatch,
+			CancellationToken cancellationToken)
+		{
+			_scheduler = scheduler;
+			_itemCount = itemCount;
+			_batchSize = batchSize;
+			_executeBatch = executeBatch;
+			_cancellationToken = cancellationToken;
+		}
 
-        internal void Execute()
-        {
-            _scheduler.RunBatches(
-                _itemCount,
-                _batchSize,
-                _executeBatch,
-                _cancellationToken);
-        }
-    }
+		internal void Execute()
+		{
+			_scheduler.RunBatches(
+				_itemCount,
+				_batchSize,
+				_executeBatch,
+				_cancellationToken);
+		}
+	}
 }

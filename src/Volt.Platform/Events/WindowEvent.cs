@@ -11,5 +11,5 @@ namespace Volt.Platform.Events;
 /// dimensions for PixelSizeChanged events. It is unused for CloseRequested.
 /// </remarks>
 public readonly record struct WindowEvent(
-    WindowEventType Type,
-    WindowSize Size = default);
+	WindowEventType Type,
+	WindowSize Size = default);

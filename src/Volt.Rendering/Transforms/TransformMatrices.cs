@@ -53,6 +53,28 @@ public static class TransformMatrices
 	}
 
 	/// <summary>
+	/// Creates a model matrix from an interpolated pose.
+	/// </summary>
+	/// <param name="pose">
+	/// The pose, which may hold a temporarily degenerate scale.
+	/// </param>
+	/// <returns>
+	/// <c>scale * rotation * translation</c> in row-vector order.
+	/// </returns>
+	/// <remarks>
+	/// This overload delegates to the component overload so the
+	/// interpolation path and the direct extraction path cannot
+	/// disagree about the transform convention.
+	/// </remarks>
+	public static Matrix4x4 CreateModelMatrix(in TransformPose pose)
+	{
+		return CreateModelMatrix(
+			new PositionComponent(pose.Position),
+			new RotationComponent(pose.Rotation),
+			new ScaleComponent(pose.Scale));
+	}
+
+	/// <summary>
 	/// Composes one draw's complete model-view-projection matrix.
 	/// </summary>
 	/// <param name="model">The world-space model matrix.</param>

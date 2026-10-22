@@ -11,86 +11,86 @@ namespace Volt.Core.Memory;
 /// </remarks>
 public sealed unsafe class NativeBuffer<T> : IDisposable where T : unmanaged
 {
-    private T* _pointer;
-    private bool _disposed;
+	private T* _pointer;
+	private bool _disposed;
 
-    public int Length { get; }
-    public nuint Alignment { get; }
-    public bool IsDisposed => _disposed;
+	public int Length { get; }
+	public nuint Alignment { get; }
+	public bool IsDisposed => _disposed;
 
-    public NativeBuffer(int length, nuint alignment = 64)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(length);
+	public NativeBuffer(int length, nuint alignment = 64)
+	{
+		ArgumentOutOfRangeException.ThrowIfNegative(length);
 
-        if (alignment == 0
-            || (alignment & (alignment - 1)) != 0
-            || alignment < (nuint)IntPtr.Size)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(alignment),
-                "Alignment must be a power of two and at least pointer-sized.");
-        }
+		if (alignment == 0
+			|| (alignment & (alignment - 1)) != 0
+			|| alignment < (nuint)IntPtr.Size)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(alignment),
+				"Alignment must be a power of two and at least pointer-sized.");
+		}
 
-        Length = length;
-        Alignment = alignment;
+		Length = length;
+		Alignment = alignment;
 
-        if (length == 0)
-        {
-            return;
-        }
+		if (length == 0)
+		{
+			return;
+		}
 
-        nuint bytes = checked((nuint)length * (nuint)sizeof(T));
-        _pointer = (T*)NativeMemory.AlignedAlloc(bytes, alignment);
+		nuint bytes = checked((nuint)length * (nuint)sizeof(T));
+		_pointer = (T*)NativeMemory.AlignedAlloc(bytes, alignment);
 
-        if (_pointer == null)
-        {
-            throw new OutOfMemoryException();
-        }
-    }
+		if (_pointer == null)
+		{
+			throw new OutOfMemoryException();
+		}
+	}
 
-    public ref T this[int index]
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+	public ref T this[int index]
+	{
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		get
+		{
+			ObjectDisposedException.ThrowIf(_disposed, this);
 
-            if ((uint)index >= (uint)Length)
-            {
-                throw new IndexOutOfRangeException();
-            }
+			if ((uint)index >= (uint)Length)
+			{
+				throw new IndexOutOfRangeException();
+			}
 
-            return ref _pointer[index];
-        }
-    }
+			return ref _pointer[index];
+		}
+	}
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<T> AsSpan()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        return new Span<T>(_pointer, Length);
-    }
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public Span<T> AsSpan()
+	{
+		ObjectDisposedException.ThrowIf(_disposed, this);
+		return new Span<T>(_pointer, Length);
+	}
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Clear()
-    {
-        AsSpan().Clear();
-    }
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public void Clear()
+	{
+		AsSpan().Clear();
+	}
 
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
+	public void Dispose()
+	{
+		if (_disposed)
+		{
+			return;
+		}
 
-        _disposed = true;
-        T* pointer = _pointer;
-        _pointer = null;
+		_disposed = true;
+		T* pointer = _pointer;
+		_pointer = null;
 
-        if (pointer != null)
-        {
-            NativeMemory.AlignedFree(pointer);
-        }
-    }
+		if (pointer != null)
+		{
+			NativeMemory.AlignedFree(pointer);
+		}
+	}
 }

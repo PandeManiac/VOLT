@@ -6,8 +6,8 @@ namespace Volt.Platform.Events;
 /// </summary>
 public enum WindowEventType
 {
-    Unknown = 0,
-    CloseRequested = 1,
-    Resized = 2,
-    PixelSizeChanged = 3
+	Unknown = 0,
+	CloseRequested = 1,
+	Resized = 2,
+	PixelSizeChanged = 3
 }

@@ -12,19 +12,19 @@ namespace Volt.Ecs;
 /// </remarks>
 internal readonly struct EntityLocation
 {
-    public ArchetypeChunk Chunk { get; }
-    public int Row { get; }
+	public ArchetypeChunk Chunk { get; }
+	public int Row { get; }
 
-    public EntityLocation(ArchetypeChunk chunk, int row)
-    {
-        ArgumentNullException.ThrowIfNull(chunk);
+	public EntityLocation(ArchetypeChunk chunk, int row)
+	{
+		ArgumentNullException.ThrowIfNull(chunk);
 
-        if (row < 0 || row >= chunk.Count)
-        {
-            throw new ArgumentOutOfRangeException(nameof(row));
-        }
+		if (row < 0 || row >= chunk.Count)
+		{
+			throw new ArgumentOutOfRangeException(nameof(row));
+		}
 
-        Chunk = chunk;
-        Row = row;
-    }
+		Chunk = chunk;
+		Row = row;
+	}
 }

@@ -33,6 +33,11 @@ internal static class Program
 	private const string RangeScriptArgument = "--range-script";
 	private const string TimingDemoArgument = "--timing-demo";
 	private const string TimingScriptArgument = "--timing-script";
+	private const string InterpolationDemoArgument = "--interpolation-demo";
+	private const string InterpolationScriptArgument =
+		"--interpolation-script";
+	private const string InterpolationProbeArgument =
+		"--interpolation-probe";
 	private const string GallerySceneName = "gallery";
 	private const string DepthOcclusionSceneName = "depth-occlusion";
 	private const string CameraTransformsSceneName = "camera-transforms";
@@ -88,6 +93,8 @@ internal static class Program
 				"ecs-scene|target-range] [--camera-script] " +
 				"[--ecs-script] [--range-script] " +
 				"[--timing-demo [--timing-script]] " +
+				"[--interpolation-demo [--interpolation-script | " +
+				"--interpolation-probe]] " +
 				"[--disable-depth-test] " +
 				"[--resize-at-frame N --resize-to WIDTHxHEIGHT]");
 
@@ -329,6 +336,13 @@ internal static class Program
 				options.TimingScript)
 			: null;
 
+		InterpolationDemo? interpolationDemo = options.InterpolationDemo
+			? new InterpolationDemo(
+				ecsScene ?? throw new InvalidOperationException(
+					"The interpolation demo requires the ECS scene."),
+				options.InterpolationScript || options.InterpolationProbe)
+			: null;
+
 		string shaderDirectory = Path.Combine(
 			AppContext.BaseDirectory,
 			"Shaders");
@@ -370,6 +384,16 @@ internal static class Program
 						"simulation with fake elapsed time."
 					: "Timing demo: interactive 60 Hz simulation with " +
 						"the monotonic clock.");
+		}
+
+		if (interpolationDemo is not null)
+		{
+			Console.WriteLine(
+				interpolationDemo.IsScripted
+					? "Interpolation demo: scripted deterministic " +
+						"time-scale and transform interpolation."
+					: "Interpolation demo: interactive time-scale and " +
+						"transform interpolation.");
 		}
 
 		if (options.Scene == DemoScene.EcsScene)
@@ -439,6 +463,7 @@ internal static class Program
 			targetRangeController,
 			targetRangeScript,
 			timingDemo,
+			interpolationDemo,
 			options,
 			Path.Combine(shaderDirectory, "mesh.vert.spv"),
 			Path.Combine(shaderDirectory, "mesh.frag.spv"));
@@ -463,6 +488,7 @@ internal static class Program
 		TargetRangeController? targetRangeController,
 		TargetRangeScript? targetRangeScript,
 		TimingDemo? timingDemo,
+		InterpolationDemo? interpolationDemo,
 		SampleOptions options,
 		string vertexShaderPath,
 		string fragmentShaderPath)
@@ -484,7 +510,9 @@ internal static class Program
 		// demo, when enabled, owns the loop and registers its fixed
 		// and scheduled work; the frame driver samples input exactly
 		// once per application frame, whatever the fixed-step count.
-		GameLoop loop = timingDemo?.Loop ?? new GameLoop();
+		GameLoop loop = interpolationDemo?.Loop ??
+			timingDemo?.Loop ??
+			new GameLoop();
 
 		TimingScript? timingScript =
 			timingDemo is not null && options.TimingScript
@@ -492,6 +520,16 @@ internal static class Program
 					timingDemo,
 					options.FrameLimit ??
 						TimingDemo.MinimumScriptedFrames)
+				: null;
+
+		InterpolationScript? interpolationScript =
+			interpolationDemo is not null &&
+				(options.InterpolationScript || options.InterpolationProbe)
+				? new InterpolationScript(
+					interpolationDemo,
+					options.FrameLimit ??
+						InterpolationDemo.MinimumScriptedFrames,
+					probe: options.InterpolationProbe)
 				: null;
 
 		SampleFrameDriver frameDriver = new(
@@ -505,9 +543,10 @@ internal static class Program
 			loop.RegisterUpdate(frameDriver.Update);
 		}
 
-		IEcsRenderScene? renderScene = targetRangeScene is not null
-			? targetRangeScene
-			: ecsScene;
+		IEcsRenderScene? renderScene =
+			interpolationDemo?.View ??
+			(IEcsRenderScene?)targetRangeScene ??
+			ecsScene;
 
 		// The window is created with the matching initial title, so the
 		// first update does not rewrite it. A title is only rebuilt when
@@ -676,6 +715,20 @@ internal static class Program
 
 				VulkanSwapchainFrameResult frame =
 					active.Frames.Draw(active.RecordFrame);
+
+				if (interpolationScript is not null)
+				{
+					// Test-only: verify the frame that just completed and
+					// injected interval, then inject the next exact
+					// interval. Frame recording has already extracted the
+					// interpolated instances, so the script sees the weight
+					// that was actually displayed. Driving this per
+					// completed frame instead of per accepted presentation
+					// keeps a rejected present from shifting the
+					// accumulator states the script checks.
+					interpolationScript.Advance(
+						(int)loop.LastFrame.FrameIndex);
+				}
 
 				if (frame.RequiresRecreation)
 				{
@@ -952,6 +1005,13 @@ internal static class Program
 			if (timingDemo is not null && !timingDemo.IsScripted)
 			{
 				timingDemo.WriteSummary("Timing demo summary");
+			}
+
+			if (interpolationDemo is not null &&
+				!interpolationDemo.IsScripted)
+			{
+				interpolationDemo.WriteSummary(
+					"Interpolation demo summary");
 			}
 
 			Console.WriteLine(
@@ -1378,6 +1438,9 @@ internal static class Program
 		bool rangeScript = false;
 		bool timingDemo = false;
 		bool timingScript = false;
+		bool interpolationDemo = false;
+		bool interpolationScript = false;
+		bool interpolationProbe = false;
 
 		for (int index = 0; index < args.Length; index++)
 		{
@@ -1597,6 +1660,45 @@ internal static class Program
 					timingScript = true;
 					break;
 
+				case InterpolationDemoArgument:
+					if (interpolationDemo)
+					{
+						options = default;
+						error =
+							"The --interpolation-demo argument was " +
+							"supplied twice.";
+						return false;
+					}
+
+					interpolationDemo = true;
+					break;
+
+				case InterpolationScriptArgument:
+					if (interpolationScript)
+					{
+						options = default;
+						error =
+							"The --interpolation-script argument was " +
+							"supplied twice.";
+						return false;
+					}
+
+					interpolationScript = true;
+					break;
+
+				case InterpolationProbeArgument:
+					if (interpolationProbe)
+					{
+						options = default;
+						error =
+							"The --interpolation-probe argument was " +
+							"supplied twice.";
+						return false;
+					}
+
+					interpolationProbe = true;
+					break;
+
 				case DisableDepthTestArgument:
 					if (depthTestDisabled)
 					{
@@ -1775,6 +1877,57 @@ internal static class Program
 			return false;
 		}
 
+		if (interpolationDemo && selectedScene != DemoScene.EcsScene)
+		{
+			options = default;
+			error =
+				"The --interpolation-demo argument requires " +
+				$"--scene {EcsSceneName}.";
+			return false;
+		}
+
+		if (interpolationDemo && (timingDemo || ecsScript))
+		{
+			options = default;
+			error =
+				"The --interpolation-demo argument cannot be combined " +
+				"with --timing-demo or --ecs-script, because they " +
+				"register or mutate the same entities.";
+			return false;
+		}
+
+		if (interpolationScript && interpolationProbe)
+		{
+			options = default;
+			error =
+				"The --interpolation-script and --interpolation-probe " +
+				"arguments cannot be combined.";
+			return false;
+		}
+
+		if ((interpolationScript || interpolationProbe) &&
+			!interpolationDemo)
+		{
+			options = default;
+			error =
+				"The --interpolation-script and --interpolation-probe " +
+				"arguments require --interpolation-demo.";
+			return false;
+		}
+
+		if ((interpolationScript || interpolationProbe) &&
+			(!frameLimit.HasValue ||
+				frameLimit.Value <
+					InterpolationDemo.MinimumScriptedFrames))
+		{
+			options = default;
+			error =
+				"A scripted interpolation run requires a bounded " +
+				$"--frames of at least " +
+				$"{InterpolationDemo.MinimumScriptedFrames}.";
+			return false;
+		}
+
 		options = new SampleOptions(
 			validation,
 			frameLimit,
@@ -1786,7 +1939,10 @@ internal static class Program
 			ecsScript,
 			rangeScript,
 			timingDemo,
-			timingScript);
+			timingScript,
+			interpolationDemo,
+			interpolationScript,
+			interpolationProbe);
 
 		error = string.Empty;
 		return true;
@@ -1938,4 +2094,7 @@ internal readonly record struct SampleOptions(
 	bool EcsScript = false,
 	bool RangeScript = false,
 	bool TimingDemo = false,
-	bool TimingScript = false);
+	bool TimingScript = false,
+	bool InterpolationDemo = false,
+	bool InterpolationScript = false,
+	bool InterpolationProbe = false);

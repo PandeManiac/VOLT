@@ -12,10 +12,10 @@ namespace Volt.Ecs.Components.Spatial;
 /// </remarks>
 public struct ScaleComponent(Vector3 value)
 {
-    public Vector3 Value = value;
+	public Vector3 Value = value;
 
-    /// <summary>
-    /// Gets a scale of one along every axis.
-    /// </summary>
-    public static ScaleComponent Identity => new(Vector3.One);
+	/// <summary>
+	/// Gets a scale of one along every axis.
+	/// </summary>
+	public static ScaleComponent Identity => new(Vector3.One);
 }

@@ -17,14 +17,14 @@ namespace Volt.Graphics.Devices;
 /// </remarks>
 public interface IGraphicsDevice : IDisposable
 {
-    /// <summary>
-    /// Gets the graphics API used by this device.
-    /// </summary>
-    GraphicsBackend Backend { get; }
+	/// <summary>
+	/// Gets the graphics API used by this device.
+	/// </summary>
+	GraphicsBackend Backend { get; }
 
-    /// <summary>
-    /// Gets the capabilities of the selected graphics adapter
-    /// and backend implementation.
-    /// </summary>
-    GraphicsDeviceCapabilities Capabilities { get; }
+	/// <summary>
+	/// Gets the capabilities of the selected graphics adapter
+	/// and backend implementation.
+	/// </summary>
+	GraphicsDeviceCapabilities Capabilities { get; }
 }

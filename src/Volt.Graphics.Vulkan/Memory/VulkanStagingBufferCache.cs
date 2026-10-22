@@ -25,202 +25,202 @@ namespace Volt.Graphics.Vulkan.Memory;
 /// </remarks>
 public sealed class VulkanStagingBufferCache : IDisposable
 {
-    private readonly VulkanInstance _instance;
-    private readonly VulkanLogicalDevice _device;
-    private readonly PhysicalDevice _physicalDevice;
-    private readonly object _gate = new();
+	private readonly VulkanInstance _instance;
+	private readonly VulkanLogicalDevice _device;
+	private readonly PhysicalDevice _physicalDevice;
+	private readonly object _gate = new();
 
-    private VulkanBuffer? _buffer;
+	private VulkanBuffer? _buffer;
 
-    private bool _inUse;
-    private bool _disposed;
+	private bool _inUse;
+	private bool _disposed;
 
-    /// <summary>
-    /// Gets the current staging buffer capacity in bytes.
-    /// </summary>
-    public ulong Capacity
-    {
-        get
-        {
-            lock (_gate)
-            {
-                ThrowIfDisposed();
-                return _buffer?.Size ?? 0;
-            }
-        }
-    }
+	/// <summary>
+	/// Gets the current staging buffer capacity in bytes.
+	/// </summary>
+	public ulong Capacity
+	{
+		get
+		{
+			lock (_gate)
+			{
+				ThrowIfDisposed();
+				return _buffer?.Size ?? 0;
+			}
+		}
+	}
 
-    public VulkanStagingBufferCache(
-        VulkanInstance instance,
-        VulkanLogicalDevice device,
-        PhysicalDevice physicalDevice)
-    {
-        ArgumentNullException.ThrowIfNull(instance);
-        ArgumentNullException.ThrowIfNull(device);
+	public VulkanStagingBufferCache(
+		VulkanInstance instance,
+		VulkanLogicalDevice device,
+		PhysicalDevice physicalDevice)
+	{
+		ArgumentNullException.ThrowIfNull(instance);
+		ArgumentNullException.ThrowIfNull(device);
 
-        if (physicalDevice.Handle == 0)
-        {
-            throw new ArgumentException(
-                "A valid physical device is required.",
-                nameof(physicalDevice));
-        }
+		if (physicalDevice.Handle == 0)
+		{
+			throw new ArgumentException(
+				"A valid physical device is required.",
+				nameof(physicalDevice));
+		}
 
-        _instance = instance;
-        _device = device;
-        _physicalDevice = physicalDevice;
-    }
+		_instance = instance;
+		_device = device;
+		_physicalDevice = physicalDevice;
+	}
 
-    public void Dispose()
-    {
-        lock (_gate)
-        {
-            if (_disposed)
-            {
-                return;
-            }
+	public void Dispose()
+	{
+		lock (_gate)
+		{
+			if (_disposed)
+			{
+				return;
+			}
 
-            if (_inUse)
-            {
-                throw new InvalidOperationException(
-                    "Cannot dispose staging storage during " +
-                    "an active upload.");
-            }
+			if (_inUse)
+			{
+				throw new InvalidOperationException(
+					"Cannot dispose staging storage during " +
+					"an active upload.");
+			}
 
-            _buffer?.Dispose();
-            _buffer = null;
+			_buffer?.Dispose();
+			_buffer = null;
 
-            _disposed = true;
-        }
-    }
+			_disposed = true;
+		}
+	}
 
-    /// <summary>
-    /// Acquires the staging buffer for one synchronous upload.
-    /// </summary>
-    /// <remarks>
-    /// The caller must invoke Release after the upload finishes
-    /// or fails. A second acquisition is rejected until then.
-    /// </remarks>
-    internal VulkanBuffer Acquire(
-        VulkanInstance instance,
-        VulkanLogicalDevice device,
-        PhysicalDevice physicalDevice,
-        ulong requiredCapacity)
-    {
-        lock (_gate)
-        {
-            ThrowIfDisposed();
+	/// <summary>
+	/// Acquires the staging buffer for one synchronous upload.
+	/// </summary>
+	/// <remarks>
+	/// The caller must invoke Release after the upload finishes
+	/// or fails. A second acquisition is rejected until then.
+	/// </remarks>
+	internal VulkanBuffer Acquire(
+		VulkanInstance instance,
+		VulkanLogicalDevice device,
+		PhysicalDevice physicalDevice,
+		ulong requiredCapacity)
+	{
+		lock (_gate)
+		{
+			ThrowIfDisposed();
 
-            if (_inUse)
-            {
-                throw new InvalidOperationException(
-                    "The staging buffer is already in use.");
-            }
+			if (_inUse)
+			{
+				throw new InvalidOperationException(
+					"The staging buffer is already in use.");
+			}
 
-            if (!ReferenceEquals(instance, _instance) ||
-                !ReferenceEquals(device, _device) ||
-                physicalDevice.Handle != _physicalDevice.Handle)
-            {
-                throw new ArgumentException(
-                    "The staging cache belongs to a different " +
-                    "Vulkan instance or device.");
-            }
+			if (!ReferenceEquals(instance, _instance) ||
+				!ReferenceEquals(device, _device) ||
+				physicalDevice.Handle != _physicalDevice.Handle)
+			{
+				throw new ArgumentException(
+					"The staging cache belongs to a different " +
+					"Vulkan instance or device.");
+			}
 
-            if (requiredCapacity == 0)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(requiredCapacity));
-            }
+			if (requiredCapacity == 0)
+			{
+				throw new ArgumentOutOfRangeException(
+					nameof(requiredCapacity));
+			}
 
-            _inUse = true;
+			_inUse = true;
 
-            try
-            {
-                if (_buffer is null ||
-                    _buffer.Size < requiredCapacity)
-                {
-                    ulong capacity = SelectCapacity(
-                        _buffer?.Size ?? 0,
-                        requiredCapacity);
+			try
+			{
+				if (_buffer is null ||
+					_buffer.Size < requiredCapacity)
+				{
+					ulong capacity = SelectCapacity(
+						_buffer?.Size ?? 0,
+						requiredCapacity);
 
-                    VulkanBuffer replacement = new(
-                        _instance,
-                        _device,
-                        _physicalDevice,
-                        capacity,
-                        BufferUsageFlags.TransferSrcBit,
-                        MemoryPropertyFlags.HostVisibleBit,
-                        MemoryPropertyFlags.HostCoherentBit);
+					VulkanBuffer replacement = new(
+						_instance,
+						_device,
+						_physicalDevice,
+						capacity,
+						BufferUsageFlags.TransferSrcBit,
+						MemoryPropertyFlags.HostVisibleBit,
+						MemoryPropertyFlags.HostCoherentBit);
 
-                    VulkanBuffer? previous = _buffer;
+					VulkanBuffer? previous = _buffer;
 
-                    _buffer = replacement;
+					_buffer = replacement;
 
-                    previous?.Dispose();
-                }
+					previous?.Dispose();
+				}
 
-                return _buffer;
-            }
+				return _buffer;
+			}
 
-            catch
-            {
-                _inUse = false;
-                throw;
-            }
-        }
-    }
+			catch
+			{
+				_inUse = false;
+				throw;
+			}
+		}
+	}
 
-    /// <summary>
-    /// Releases exclusive access after a synchronous upload.
-    /// </summary>
-    internal void Release()
-    {
-        lock (_gate)
-        {
-            if (!_inUse)
-            {
-                throw new InvalidOperationException(
-                    "The staging buffer is not acquired.");
-            }
+	/// <summary>
+	/// Releases exclusive access after a synchronous upload.
+	/// </summary>
+	internal void Release()
+	{
+		lock (_gate)
+		{
+			if (!_inUse)
+			{
+				throw new InvalidOperationException(
+					"The staging buffer is not acquired.");
+			}
 
-            _inUse = false;
-        }
-    }
+			_inUse = false;
+		}
+	}
 
-    /// <summary>
-    /// Selects the retained staging capacity without allocating.
-    /// </summary>
-    internal static ulong SelectCapacity(
-        ulong currentCapacity,
-        ulong requiredCapacity)
-    {
-        if (requiredCapacity == 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(requiredCapacity));
-        }
+	/// <summary>
+	/// Selects the retained staging capacity without allocating.
+	/// </summary>
+	internal static ulong SelectCapacity(
+		ulong currentCapacity,
+		ulong requiredCapacity)
+	{
+		if (requiredCapacity == 0)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(requiredCapacity));
+		}
 
-        if (currentCapacity >= requiredCapacity)
-        {
-            return currentCapacity;
-        }
+		if (currentCapacity >= requiredCapacity)
+		{
+			return currentCapacity;
+		}
 
-        if (currentCapacity == 0)
-        {
-            return requiredCapacity;
-        }
+		if (currentCapacity == 0)
+		{
+			return requiredCapacity;
+		}
 
-        if (currentCapacity > ulong.MaxValue / 2)
-        {
-            return requiredCapacity;
-        }
+		if (currentCapacity > ulong.MaxValue / 2)
+		{
+			return requiredCapacity;
+		}
 
-        return Math.Max(
-            requiredCapacity,
-            currentCapacity * 2);
-    }
+		return Math.Max(
+			requiredCapacity,
+			currentCapacity * 2);
+	}
 
-    private void ThrowIfDisposed()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-    }
+	private void ThrowIfDisposed()
+	{
+		ObjectDisposedException.ThrowIf(_disposed, this);
+	}
 }
