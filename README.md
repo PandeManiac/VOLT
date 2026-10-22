@@ -48,7 +48,7 @@ It also implements gameplay attributes with registered definitions, base and cur
 
 Gameplay effects are implemented on top of those stores: instant, duration, infinite, and periodic execution, reference-counted granted tags, per-source and per-target stacking with limits and refresh policies, application, ongoing and removal tag requirements, inhibition, and deterministic expiry and ticking from a single due-time heap. Idle effects cost one comparison per simulated step regardless of how many are active, and applying or removing one allocates nothing once warmed up.
 
-Abilities follow in the next milestone. Their behavior, Unreal source references, and intentional differences are tracked in [the gameplay specification](src/Volt.Gameplay/GameplaySpec.md).
+Abilities are implemented on top of effects: definitions with owner and target tag requirements, blocking by active abilities, instant costs checked for affordability, cooldowns that are the tags their effect grants, cancellation by tag or by another ability's asset tags, and grants that are released when their owner is destroyed. Activation is a status, not an exception; a rejected attempt touches nothing. Every ability operation is flat in world size, and a warmed-up activation allocates nothing. Their behavior, Unreal source references, and intentional differences are tracked in [the gameplay specification](src/Volt.Gameplay/GameplaySpec.md).
 
 ### Platform and graphics
 

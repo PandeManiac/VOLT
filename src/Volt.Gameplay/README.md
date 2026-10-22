@@ -213,6 +213,66 @@ non-finite magnitude, an instant effect with a period, a stack limit
 without a stacking type, or an effect that grants a tag its own ongoing
 requirements forbid all throw before reaching gameplay.
 
+## Abilities
+
+```csharp
+using Volt.Gameplay.Abilities;
+
+GameplayEffectDefinition dashCooldown = GameplayEffectDefinition
+    .Create("Ability.Dash.Cooldown")
+    .HasDuration(2f)
+    .GrantTags(tags.Register("Cooldown.Dash"))
+    .Build();
+
+GameplayAbilityDefinition dash = GameplayAbilityDefinition
+    .Create("Ability.Dash")
+    .AssetTags(tags.Register("Ability.Dash"))
+    .Cost(manaCost)          // an instant effect
+    .Cooldown(dashCooldown)
+    .RequireToActivate(GameplayTagRequirements.Ignore(
+        GameplayTagSet.Create(tags.Register("Status.Stunned"))))
+    .Build();
+
+using GameplayAbilitySystem abilities = new(world, tags, effects, attributes);
+
+abilities.Changed += change =>
+    Console.WriteLine($"{change.Kind}: {change.Definition.Name}");
+
+GameplayAbilityHandle dashHandle =
+    abilities.GiveAbility(player, dash, inputId: 1);
+
+GameplayAbilityActivationResult result =
+    abilities.TryActivate(dashHandle);
+
+Debug.Assert(result.Status == GameplayAbilityActivationStatus.ActivatedAndEnded);
+
+// The cost was paid and the cooldown effect now grants its tag.
+Debug.Assert(abilities.IsOnCooldown(player, dash));
+Debug.Assert(!abilities.TryActivate(dashHandle).Succeeded);
+
+// A lasting ability stays active until it is ended or cancelled.
+GameplayAbilityHandle channel = abilities.GiveAbility(player, channelAbility);
+abilities.TryActivate(channel);
+abilities.Cancel(channel);
+```
+
+Activation runs Unreal's checks in order: cooldown, cost, owner tag
+requirements, target tag requirements, blocking by an active ability,
+and finally the already-active rule. Each failure is reported as a
+`GameplayAbilityActivationStatus` and changes nothing. Costs and
+cooldowns are effects, so a cooldown is simply the tags its effect
+grants: an external effect that grants the same tag blocks the ability
+too, and cooldown time is read from the effect instance.
+
+An ability ends on activation by default, because a data definition has
+no tasks to keep it alive; call `EndOnActivate(false)` for one that
+lasts. `CancelOnTags` cancels a lasting ability when the owner gains a
+matching tag, `CancelAbilitiesWithTags` cancels other abilities on
+activation, and `BlockAbilitiesWithTags` blocks matching asset tags
+while active. Grants are validated when built: a non-instant cost, an
+instant cooldown, a cooldown without granted tags, and a cooldown that
+grants the ability's own cancel tag all throw before reaching gameplay.
+
 ## Projects
 
 | Type | Purpose |
@@ -233,6 +293,12 @@ requirements forbid all throw before reaching gameplay.
 | `GameplayTagRequirements` | Required and ignored tag pair used for gating |
 | `ActiveGameplayEffect` | Read-only snapshot of one active instance |
 | `GameplayEffectChange` | Notification payload for every effect transition |
+| `GameplayAbilityDefinition` | Immutable ability: requirements, cost, cooldown, block and cancel tags |
+| `GameplayAbilityDefinitionBuilder` | Fluent, validating authoring path |
+| `GameplayAbilitySystem` | Grants, activation checks, blocking, and cancellation |
+| `GameplayAbilityHandle` | Generation-checked handle to a grant |
+| `GameplayAbilityChange` | Notification payload for every ability transition |
+| `GrantedGameplayAbility` | Read-only snapshot of one grant |
 
 ## Verification
 
@@ -241,11 +307,13 @@ dotnet test tests/Volt.Gameplay.Tests -c Release
 
 cd benchmarks/Volt.Benchmarks
 dotnet run -c Release -- --filter '*GameplayTagBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAbilityBenchmarks*'
 ```
 
 The test suite includes differential tests that reproduce Unreal's own
-tag and query test expectations, effect behavior read from the 5.8.4
-source, lifecycle and invalid-input cases, re-entrancy cases, a
-concurrent-registration test, and allocation guards asserting that
-warmed-up matching, container mutation, effect application, and effect
-ticking allocate zero managed bytes.
+tag and query test expectations, effect and ability behavior read from
+the 5.8.4 source, lifecycle and invalid-input cases, re-entrancy cases,
+a concurrent-registration test, and allocation guards asserting that
+warmed-up matching, container mutation, effect application, effect
+ticking, ability granting, and ability activation allocate zero managed
+bytes.

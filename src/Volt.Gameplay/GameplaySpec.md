@@ -38,6 +38,16 @@ whatever the current implementation happens to do.
   `GameplayTagTest_TagContainerTest`.
 - `Engine/Source/Runtime/GameplayTags/Private/Tests/GameplayTagQueryTests.cpp`
   — `FGameplayTagQueryTest_Empty`.
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/`
+  — `Public/Abilities/GameplayAbility.h` and
+  `Private/Abilities/GameplayAbility.cpp` (`CanActivateAbility`,
+  `CheckCooldown`, `CheckCost`, `ApplyCooldown`, `ApplyCost`,
+  `EndAbility`, `CancelAbility`, `PreActivate`),
+  `Private/AbilitySystemComponent_Abilities.cpp` (`GiveAbility`,
+  `InternalTryActivateAbility`, `CancelAbilities`,
+  `ApplyAbilityBlockAndCancelTags`, `AreAbilityTagsBlocked`), and
+  `Private/GameplayEffect.cpp`
+  (`FActiveGameplayEffectsContainer::CanApplyAttributeModifiers`).
 - Epic, *Using Gameplay Tags in Unreal Engine* (5.8):
   <https://dev.epicgames.com/documentation/en-us/unreal-engine/using-gameplay-tags-in-unreal-engine>
 - Local reference project: `/home/berds/programming/unreal/VoltUnrealReference`.
@@ -1026,9 +1036,242 @@ duplicate benchmark project names.
 
 # Part 4 — Abilities
 
-Not yet implemented. Milestone E will add granting, activation
-requirements, costs, cooldowns, cancellation, and lifecycle on top of
-the effect system.
+Implemented in `Volt.Gameplay.Abilities`.
+
+## 4.1 Definitions and grants
+
+**Rule.** A `GameplayAbilityDefinition` is immutable, shared, and
+validated at construction. A grant stores only the definition, the
+owner, the level, the input binding, the activation target, and whether
+the instance is active. Granting one definition twice creates two
+independent grants.
+
+- `SRC` `UAbilitySystemComponent::GiveAbility` adds a new
+  `FGameplayAbilitySpec` on every call; the `UGameplayAbility` class it
+  points at is shared.
+- `DIFF`: a VOLT definition carries data, not an `ActivateAbility`
+  override. The runtime raises `Activated`, and game code reacts to
+  it. Costs and cooldowns are gameplay effects, as in Unreal.
+- `DIFF`: the definition is validated eagerly. A non-instant cost, an
+  instant cooldown, a cooldown that grants no tags, and a cooldown
+  that grants one of the ability's own cancel tags all throw when the
+  definition is built. Unreal reports the tagless cooldown at runtime
+  with a log warning, and would let the other combinations misbehave.
+- `DIFF`: the level is metadata. Unreal passes it to the cost and
+  cooldown effects so their magnitudes can scale; this milestone's
+  effect definitions have constant magnitudes, so the level is
+  reported on grants and notifications only.
+
+**Rule.** A handle is generation-checked. Revoking a grant or
+destroying its owner retires the handle, and a later grant that reuses
+the slot is not reachable through it.
+
+- `DIFF` Unreal's `FGameplayAbilitySpecHandle` is a slot index plus a
+  serial number allocated from a shared counter. VOLT embeds the owner
+  and a per-slot generation, so a handle from another world can never
+  resolve.
+
+## 4.2 Activation checks
+
+**Rule.** An activation attempt runs, in this order: cooldown, cost,
+owner tag requirements, target tag requirements, blocking by an active
+ability, and finally the already-active rule. A failure changes
+nothing and reports a status; none of these outcomes throws.
+
+- `SRC` `UGameplayAbility::CanActivateAbility` checks
+  `CheckCooldown`, then `CheckCost`, then
+  `DoesAbilitySatisfyTagRequirements`, in that order.
+- `SRC` `UAbilitySystemComponent::InternalTryActivateAbility` calls
+  `CanActivateAbility` first and only then applies the
+  instanced-per-actor already-active rule, so a cooling-down,
+  already-active ability reports the cooldown.
+- `SRC` `DoesAbilitySatisfyTagRequirements` checks blocked tags before
+  required tags and fails when either set fails. Tag matching is
+  non-exact: requiring `Status` accepts `Status.Stunned`.
+- `DIFF` Unreal receives source and target tag containers from the
+  caller and checks four separate requirement pairs
+  (`Source*Tags`/`Target*Tags`). VOLT checks the owner and an optional
+  activation target from the stored definitions.
+- `DIFF` a non-empty target requirement is unmet when the target is
+  absent or dead. Unreal skips the target checks when the caller passes
+  no target tags.
+
+## 4.3 Blocking
+
+**Rule.** While an ability is active, an activation whose asset tags
+match its `BlockAbilitiesWithTags` is rejected with
+`BlockedByActiveAbility`. The requesting grant is excluded, so a
+self-blocking ability reports `AlreadyActive` instead. Blocking ends as
+soon as the blocking ability ends.
+
+- `SRC` `UGameplayAbility::PreActivate` calls
+  `ApplyAbilityBlockAndCancelTags(GetAssetTags(), ...,
+  BlockAbilitiesWithTag, ...)`, and `AreAbilityTagsBlocked` tests the
+  candidate's asset tags against the blocked set with non-exact
+  matching. `EndAbility` removes them again.
+- `DIFF` VOLT derives blocking from the active ability list instead of
+  keeping a per-owner blocked-tag container, so no state has to be
+  reference-counted. As a consequence, effects cannot block abilities
+  through a blocked-ability-tag component in this milestone.
+- `DIFF` excluding the requesting grant is the only behavioral
+  difference; Unreal would report the ability blocked by itself.
+
+## 4.4 Costs
+
+**Rule.** An activation is rejected with `RejectedByCost` when the cost
+effect's own application requirements are unmet, or when an additive
+cost modifier would take the owner's current attribute value below
+zero. Only `AddBase` modifiers are checked. An affordable cost executes
+once against the owner's base value.
+
+- `SRC` `UGameplayAbility::CheckCost` delegates to
+  `FActiveGameplayEffectsContainer::CanApplyAttributeModifiers`, which
+  iterates the cost spec's modifiers, skips every operation except
+  `Additive`, and fails when `CurrentValue + CostValue < 0`.
+- `SRC` `UGameplayAbility::ApplyCost` applies the cost effect to the
+  owner.
+- `DIFF` Unreal's affordability check does not inspect the cost
+  effect's tag requirements; a rejecting cost simply applies nothing
+  and activation continues for free. VOLT treats that as a failed cost
+  so an ability can never activate without paying.
+- `DIFF` Unreal also relies on attribute clamping for the actual
+  payment. VOLT applies the same instant effect, so a cost that lands
+  exactly on zero clamps and stays there.
+
+## 4.5 Cooldowns
+
+**Rule.** Activation applies the cooldown effect to the owner. The
+owner is on cooldown while any of the cooldown effect's granted tags is
+present, whatever granted it. The remaining time is the cooldown
+effect's remaining duration, or infinity for an infinite cooldown.
+
+- `SRC` `UGameplayAbility::GetCooldownTags` returns the cooldown
+  effect's granted tags; `CheckCooldown` calls
+  `HasAnyMatchingGameplayTags` on the owner; `ApplyCooldown` applies
+  the effect to the owner.
+- `SRC` `GetCooldownTimeRemaining` builds
+  `FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(cooldownTags)` and
+  returns the largest remaining duration among matching active
+  effects. `GetActiveEffectsTimeRemaining` does not skip inhibited
+  effects.
+- `DIFF` VOLT looks up its own cooldown effect instance instead of
+  querying by tags. The tags block reactivation, so at most one
+  instance of it can exist; a cooldown that is inhibited reports its
+  remaining time but does not count as "on cooldown", because its
+  tags are withdrawn.
+
+## 4.6 Lifecycle, ending, and cancellation
+
+**Rule.** An ability ends as soon as its activation is committed unless
+its definition keeps it active. `End` reports `Ended`; `Cancel`
+reports `Cancelled`. Revoking an active grant cancels it first. Ending
+or cancelling an inactive ability does nothing and returns `false`.
+
+- `SRC` `UGameplayAbility::EndAbility`, `CancelAbility`, and
+  `UAbilitySystemComponent::ClearAbility`, which cancels the active
+  instance before removing the spec.
+- `DIFF` a data definition has no tasks or input of its own, so ending
+  on activation is the default; Unreal abilities stay active until
+  they call `EndAbility`.
+
+**Rule.** Activation cancels every active ability whose asset tags
+match `CancelAbilitiesWithTags`, except the activating grant, and does
+so before raising its own `Activated` notification.
+
+- `SRC` `PreActivate` calls `ApplyAbilityBlockAndCancelTags` with
+  `bExecuteCancelTags` set, which calls `CancelAbilities` and passes
+  the requesting ability as the ignored instance.
+
+**Rule.** An active ability is cancelled when the owner's tags change
+and any `CancelOnTags` tag is then present. A tag that was already
+present at activation does not cancel by itself; the next tag change
+re-evaluates it.
+
+- `DIFF` Unreal has no automatic cancel-on-tag rule on the ability;
+  game code or a gameplay effect component calls `CancelAbilities`.
+  VOLT drives it from the tag store's `TagsChanged` notification, the
+  same signal the effect system uses for its ongoing requirements.
+- `DIFF` a cooldown effect cannot grant a cancel tag, because the
+  cooldown applies during activation and would cancel the instance
+  that just started.
+
+**Rule.** Notifications are delivered after the change is committed,
+and handlers may grant, revoke, activate, and cancel abilities. An
+activation that is revoked, cancelled, or whose owner is destroyed by
+such a handler reports `EndedDuringActivation`; the attempt did commit,
+but no active ability remains.
+
+- `DIFF` this mirrors the effect system's `Discarded` status. Unreal
+  has no return value for an activation, only the ability's own
+  `IsActive` state.
+
+## 4.7 Determinism
+
+There is no ability clock. Cooldown expiry is an effect deadline, so
+time scaling, pausing, and deterministic ordering are inherited from
+the effect system. Each new grant is pushed onto the front of its
+owner's list, so input activation and `CopyAbilities` walk the newest
+grant first, and cancelling by tags walks the same order.
+
+## 4.8 Edge-case matrix
+
+| Case | Expected | Evidence |
+| --- | --- | --- |
+| Grant to a dead entity | throws | `DIFF` |
+| Level below one | throws | `DIFF` |
+| Two grants of one definition | two independent grants | `SRC` |
+| Revoked handle activation | `NotGranted` | `DIFF` |
+| Cost affordable exactly to zero | activates, value clamps at zero | `SRC` |
+| Cost would go below zero | `RejectedByCost`, nothing spent | `SRC` |
+| Multiplier-only cost at zero | activates; check skips non-additive modifiers | `SRC` |
+| Cost effect requirement unmet | `RejectedByCost` | `DIFF` |
+| Cooldown and missing requirement | `RejectedByCooldown` | `SRC` |
+| Cost and missing requirement | `RejectedByCost` | `SRC` |
+| External effect grants a cooldown tag | activation rejected | `SRC` |
+| Infinite cooldown | never activates again; remaining is infinity | `SRC` |
+| Cooldown effect grants no tags | definition rejected | `DIFF` |
+| Instant cooldown effect | definition rejected | `DIFF` |
+| Cooldown grants an ability cancel tag | definition rejected | `DIFF` |
+| Blocker active | matching asset tags report `BlockedByActiveAbility` | `SRC` |
+| Blocker ends | activation allowed | `SRC` |
+| Active without retrigger | `AlreadyActive` | `SRC` |
+| Active with retrigger | `Ended` then a new `Activated` | `SRC` |
+| Cancel tag arrives | `Cancelled` | `DIFF` |
+| Cancel tag present before activation | activates; the next tag change cancels | `DIFF` |
+| Cancelling ability activates | targets cancelled before its own `Activated` | `SRC` |
+| Revoke an active grant | `Cancelled` then `Revoked` | `SRC` |
+| Owner destroyed | grants released silently | `DIFF` |
+| Entity index reused | new occupant has no grants | `DIFF` |
+| Activation revoked by a handler | `EndedDuringActivation` | `DIFF` |
+| Owner destroyed by a handler | `EndedDuringActivation` | `DIFF` |
+| Activation by input | every grant bound to the input is attempted | `SRC` |
+
+## 4.9 Performance
+
+Same machine and job as the earlier parts, in process, with a grant on
+every entity in a populated world and a separate set of actors for the
+measured operations.
+
+| Workload | 1,000 | 100,000 | Allocated |
+| --- | ---: | ---: | ---: |
+| Activate and end a lasting ability | 21.9 ns | 22.5 ns | 0 B |
+| Activate with a cost | 57.5 ns | 57.0 ns | 0 B |
+| Activate while on cooldown | 21.9 ns | 22.1 ns | 0 B |
+| Activate with an unmet requirement | 20.8 ns | 21.0 ns | 0 B |
+| Activate while blocked | 22.4 ns | 21.8 ns | 0 B |
+| Activate by input | 33.8 ns | 33.4 ns | 0 B |
+| Give and revoke | 13.5 ns | 13.3 ns | 0 B |
+| `GetAbilityCount` | 0.69 ns | 0.70 ns | 0 B |
+| Cooldown time remaining | 2.07 ns | 2.05 ns | 0 B |
+
+Every measured path is flat in world size: an ability operation touches
+only its owner's grant list and the owner's tags, never the
+population. Give and revoke allocate nothing once a slot and its owner
+segment are warm, and an activation allocates nothing at all.
+
+**Limitation.** These ran with the in-process toolchain, for the same
+reason as the earlier parts: untracked experiment workspaces contain
+duplicate benchmark project names.
 
 # Part 5 — Cues, events, and replication preparation
 
