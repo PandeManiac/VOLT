@@ -38,6 +38,12 @@ The loop clamps long frames, caps catch-up steps, drops excess simulation debt i
 
 See [src/Volt.Core/Timing/README.md](src/Volt.Core/Timing/README.md) for the execution order, frequency semantics, missed-deadline policy, and time-scale precision, and [src/Volt.Rendering/Transforms/README.md](src/Volt.Rendering/Transforms/README.md) for the interpolation and history rules.
 
+### Gameplay
+
+`Volt.Gameplay` is an optional assembly for Unreal-style gameplay systems. It currently implements hierarchical gameplay tags: interned four-byte identities, an append-only registry with cached ancestry, immutable tag sets for shared definitions, a mutable authoring container, and nested AND/OR/NOT tag queries. Matching performs no string work and allocates nothing once warmed up; containers of 40 tags resolve exact and hierarchical lookups in a few nanoseconds.
+
+Attributes, effects, and abilities follow in later milestones. Their behavior, Unreal source references, and intentional differences are tracked in [the gameplay specification](src/Volt.Gameplay/GameplaySpec.md).
+
 ### Platform and graphics
 
 Platform integration uses SDL3 for native windows, events, and Vulkan-compatible presentation surfaces.
@@ -56,6 +62,7 @@ See the [Vulkan surface demo README](samples/Volt.VulkanSurfaceDemo/README.md) f
 | --- | --- |
 | `Volt.Core` | Native memory arenas and buffers, and the deterministic game-loop timing foundation |
 | `Volt.Ecs` | Entities, components, archetypes, queries, and chunk storage |
+| `Volt.Gameplay` | Optional gameplay systems: hierarchical tags, attributes, effects, and abilities |
 | `Volt.Jobs` | Job scheduling and parallel batch execution |
 | `Volt.Graphics` | Graphics device abstractions |
 | `Volt.Graphics.Vulkan` | Vulkan graphics backend and native resource management |
@@ -123,7 +130,7 @@ The demo displays a color-interpolated triangle against a dark background for a 
 
 VOLT uses [BenchmarkDotNet](https://github.com/dotnet/BenchmarkDotNet) to measure performance-sensitive operations.
 
-The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration, plus empty, fixed-step, idle-scheduled, and due-scheduled game-loop frames, time-scaled frames at `1.0x`, `0.5x`, and `2.0x`, and the separate costs of capturing transform history, interpolating poses, extracting interpolated render instances, and capturing under entity churn.
+The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration, plus empty, fixed-step, idle-scheduled, and due-scheduled game-loop frames, time-scaled frames at `1.0x`, `0.5x`, and `2.0x`, the separate costs of capturing transform history, interpolating poses, extracting interpolated render instances, and capturing under entity churn, and gameplay tag matching, query evaluation, authoring, and name resolution.
 
 Benchmark results are intended to inform implementation decisions, not merely to maximize reported throughput. Results should be evaluated alongside correctness, memory consumption, and workload characteristics.
 
