@@ -326,7 +326,89 @@ Each row is covered by an automated test.
 | Tag name `A B` | rejected | `SRC` (leading/trailing), `DIFF` (interior) |
 | Tag name `A.B` | accepted | `DOCS`, `SRC` |
 
-## 1.11 Performance
+## 1.11 Entity tag participation
+
+Implemented in `GameplayTagStore`.
+
+**Rule.** Per-entity tags are reference counted grants, not a set.
+Adding the same tag twice produces a count of two, and removing it
+once leaves it present.
+
+- `SRC` `FGameplayTagCountContainer`
+  (`GameplayAbilities/Public/GameplayEffectTypes.h`): "tracks the
+  number/count of tag applications within it. Explicitly tracks the
+  tags added or removed, while simultaneously tracking the count of
+  parent tags as well."
+- `SRC` `UpdateTagMap_Internal` / `UpdateExplicitTags`: every update
+  is a signed count delta; a grant can be added or removed without
+  the tag appearing or disappearing.
+- `UTEST`-style coverage in `GameplayTagStoreTests`: two grants,
+  one removal, tag still present.
+
+**Rule.** Ancestor counts are maintained alongside explicit counts,
+so a hierarchical `HasTag` is a single lookup rather than a walk over
+ancestors.
+
+- `SRC` `FGameplayTagCountContainer::HasMatchingGameplayTag` reads
+  `GameplayTagCountMap` (which contains parent counts), and
+  `UpdateTagMap_Internal` updates the parent map after the explicit
+  tag map.
+- `DIFF`: VOLT keeps the explicit and total counts in one sorted
+  entry array per entity. Two parallel hash maps are the natural
+  Unreal shape because an ability system component owns one shared
+  table; VOLT's per-entity arrays are smaller for the common case of
+  a handful of tags and need no hashing.
+
+**Rule.** Destroying an entity releases every grant, and a stale
+handle cannot observe or mutate the state of a later entity that
+reuses the index.
+
+- `DIFF`: Unreal's ability system owns its count container and is
+  destroyed with its owner. VOLT stores tags beside entity slots, so
+  it adds two safeguards Unreal's loose container does not have:
+  `World.EntityDestroyed` clears the slot immediately, and every
+  access validates the entity generation, so a recycled index is a
+  different entity even before the destruction callback runs.
+- `SRC` (generation precedent): `EntityAllocator` already guarantees
+  that a stale handle never equals a newer occupant of the same
+  slot. The tag store follows the same rule instead of trusting that
+  callers remember to clear tags.
+
+**Rule.** An entity with no tags has no entry array and no dense
+index. Its only cost is a slot in a lazily allocated 1,024-slot
+segment.
+
+- `DIFF`: this is a VOLT-specific layout decision. Unreal allocates a
+  map inside every ability system component, whether or not it has
+  tags. VOLT's storage is sparse by construction: a million-entity
+  world with one percent tagged reserves storage proportional to the
+  tagged entities, not to the world.
+
+**Rule.** Granting a tag to a dead entity throws rather than silently
+succeeding, because a silent success would be lost gameplay state.
+Removing a tag from a dead or untagged entity returns false, because
+removal is idempotent by nature.
+
+- `DIFF`: Unreal's `UpdateTagCount` can only report whether the map
+  changed; it has no world against which to validate the owner.
+
+**Rule.** Tag counts are signed 32-bit integers. An entity cannot
+meaningfully accumulate `int.MaxValue` grants, and apply/remove paths
+are symmetric, so overflow is treated as an application bug rather
+than a supported state.
+
+- `INFER`: this bound is a VOLT implementation limit, not Unreal
+  behavior.
+
+**Rule.** The store participates in query evaluation through the same
+query type as immutable sets, using store-owned scratch spans so a
+warmed query allocates nothing.
+
+- `DIFF`: Unreal evaluates queries against a materialized
+  `FGameplayTagContainer`. VOLT reads the entity's entry array
+  directly into reusable spans, avoiding a copy per evaluation.
+
+## 1.12 Performance
 
 Measured 2026-10-22 on an AMD Ryzen 9 9950X3D, .NET 10.0.13,
 BenchmarkDotNet 0.15.8, in-process job, 3 warmups, 5 iterations.
@@ -354,6 +436,36 @@ immutable set; both are authoring or query-preparation operations.
 Matching, query evaluation, and warmed mutation allocate nothing.
 `Add` + `Remove` is dominated by recomputing parents, which is the
 price of exact parent counts after removal; adding alone is cheaper.
+
+Entity tag storage, same machine and job, one percent of entities
+tagged:
+
+| Workload | 1,000 entities | 100,000 entities | 1,000,000 entities | Allocated |
+| --- | ---: | ---: | ---: | ---: |
+| Hierarchical `HasTag` on a tagged entity | 1.71 ns | 1.73 ns | 1.74 ns | 0 B |
+| `HasTag` on an untagged entity | 0.66 ns | 0.68 ns | 0.67 ns | 0 B |
+| Nested query on a tagged entity | 19.6 ns | 19.7 ns | 19.8 ns | 0 B |
+| Grant + remove on a warmed entity | 63.7 ns | 63.7 ns | 64.0 ns | 0 B |
+| Copy all tagged handles (1% of world) | 10 ns | 1.16 μs | 18.0 μs | 0 B |
+
+Dense participation (every entity tagged):
+
+| Workload | 1,000 entities | 100,000 entities | Allocated |
+| --- | ---: | ---: | ---: |
+| Hierarchical `HasTag` | 2.43 ns | 2.49 ns | 0 B |
+| Create + destroy untagged entity | 86.9 ns | 106.4 ns | 0 B |
+| Create + grant + destroy tagged entity | 131.7 ns | 152.9 ns | 0 B |
+
+Lookup cost is flat in world size, which is the point of indexing by
+entity slot instead of hashing. The dense case adds about 0.75 ns to
+a lookup. Tagging an existing entity for the first time allocates its
+entry array; after that, grants and removals reuse it, so creating
+and destroying tagged entities allocates nothing once the slot array
+is warm.
+
+The sparse copy is proportional to the tagged population, not the
+world, and performs no allocation because the caller supplies the
+destination span.
 
 **Limitation.** These ran with the in-process toolchain because the
 checkout contains untracked experiment workspaces with duplicate

@@ -71,6 +71,43 @@ set rejects it at construction. Unregistered names resolve to
 Tag registration is process-wide and append-only. Register during
 initialization; matching is safe from any thread afterwards.
 
+## Entity tags
+
+```csharp
+using Volt.Ecs;
+using Volt.Gameplay.Tags;
+
+using World world = new();
+using GameplayTagStore tags = new(world);
+
+Entity player = world.CreateEntity();
+GameplayTag stunned = GameplayTagRegistry.Shared.Register("Status.Stunned");
+
+// Grants are counted: two sources can each add the same tag.
+tags.AddTag(player, stunned);
+tags.AddTag(player, stunned);
+
+Debug.Assert(tags.GetTagCount(player, stunned) == 2);
+Debug.Assert(tags.HasTag(player, GameplayTagRegistry.Shared.Register("Status")));
+
+// Removing one source leaves the tag present.
+tags.RemoveTag(player, stunned);
+Debug.Assert(tags.HasTagExact(player, stunned));
+
+// Destruction releases every grant; a stale handle sees nothing.
+world.DestroyEntity(player);
+Debug.Assert(!tags.HasTag(player, stunned));
+```
+
+The store is sparse: an entity with no tags has no entry array, and
+tagging one entity in a million-entity world reserves one 1,024-slot
+segment rather than a million-entry table. `HasTag` is flat in world
+size (0.7 ns untagged, 1.7 ns hierarchical on a 1,000,000-entity
+world in the measured benchmark). Two grants of the same tag require
+two removals; destroying an entity clears all of them, and entity
+generations prevent a recycled index from exposing its predecessor's
+state.
+
 ## Projects
 
 | Type | Purpose |
@@ -80,6 +117,7 @@ initialization; matching is safe from any thread afterwards.
 | `GameplayTagSet` | Immutable set used by definitions and queries |
 | `GameplayTagContainer` | Mutable authoring container |
 | `GameplayTagQuery` | Nested AND/OR/NOT expression over tags |
+| `GameplayTagStore` | Reference-counted tags for one world's entities |
 
 ## Verification
 

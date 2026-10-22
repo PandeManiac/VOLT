@@ -22,6 +22,8 @@ Structural changes are coordinated separately from component processing. Paralle
 
 Structural freezing does **not** automatically make conflicting component reads and writes thread-safe. Those operations still require appropriate coordination.
 
+`World` raises `EntityDestroyed` after a successful destruction, outside the structural lock, so optional subsystems can release per-entity state or stop scheduled work without the core ECS depending on them. With no subscribers the event costs one null check per destruction.
+
 ### Jobs and memory
 
 The job scheduler supports parallel batch execution using the .NET ThreadPool and Task Parallel Library. VOLT does not currently maintain a separate pool of custom worker threads.
@@ -40,7 +42,7 @@ See [src/Volt.Core/Timing/README.md](src/Volt.Core/Timing/README.md) for the exe
 
 ### Gameplay
 
-`Volt.Gameplay` is an optional assembly for Unreal-style gameplay systems. It currently implements hierarchical gameplay tags: interned four-byte identities, an append-only registry with cached ancestry, immutable tag sets for shared definitions, a mutable authoring container, and nested AND/OR/NOT tag queries. Matching performs no string work and allocates nothing once warmed up; containers of 40 tags resolve exact and hierarchical lookups in a few nanoseconds.
+`Volt.Gameplay` is an optional assembly for Unreal-style gameplay systems. It currently implements hierarchical gameplay tags: interned four-byte identities, an append-only registry with cached ancestry, immutable tag sets for shared definitions, a mutable authoring container, nested AND/OR/NOT tag queries, and reference-counted per-entity tag storage integrated with entity lifetime. Matching performs no string work and allocates nothing once warmed up; containers of 40 tags resolve exact and hierarchical lookups in a few nanoseconds, and entity tag lookup is flat in world size.
 
 Attributes, effects, and abilities follow in later milestones. Their behavior, Unreal source references, and intentional differences are tracked in [the gameplay specification](src/Volt.Gameplay/GameplaySpec.md).
 

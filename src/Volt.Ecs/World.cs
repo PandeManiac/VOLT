@@ -84,6 +84,48 @@ public sealed unsafe class World : IDisposable
 		}
 	}
 
+	/// <summary>
+	/// Gets the identity of the allocator that issued this world's
+	/// entity handles.
+	/// </summary>
+	/// <remarks>
+	/// Optional subsystems that store data beside entity slots use this
+	/// to reject handles issued by another world without asking the
+	/// world on every access.
+	/// </remarks>
+	public uint AllocatorId
+	{
+		get
+		{
+			ThrowIfDisposed();
+			return _allocator.AllocatorId;
+		}
+	}
+
+	/// <summary>
+	/// Occurs after an entity has been destroyed and removed from
+	/// storage.
+	/// </summary>
+	/// <remarks>
+	/// <para>
+	/// The event fires once per successful
+	/// <see cref="DestroyEntity"/>, outside the structural lock, so a
+	/// handler may safely query or mutate the world. It does not fire
+	/// for a handle that was already dead.
+	/// </para>
+	/// <para>
+	/// Optional subsystems use this to release per-entity state.
+	/// With no subscribers the only cost is one null check per
+	/// destruction; the event is not part of per-frame execution.
+	/// </para>
+	/// <para>
+	/// An exception thrown by a handler propagates to the caller
+	/// after the destruction has been committed, because the world
+	/// does not hide failures in user code.
+	/// </para>
+	/// </remarks>
+	public event Action<Entity>? EntityDestroyed;
+
 	internal int StructuralVersion
 	{
 		get
@@ -139,23 +181,34 @@ public sealed unsafe class World : IDisposable
 
 	public bool DestroyEntity(Entity entity)
 	{
-		using StructuralMutationScope scope = EnterStructuralMutation();
-		ThrowIfDisposed();
+		bool destroyed;
 
-		if (!_allocator.IsAlive(entity))
+		using (StructuralMutationScope scope = EnterStructuralMutation())
 		{
-			return false;
+			ThrowIfDisposed();
+
+			if (!_allocator.IsAlive(entity))
+			{
+				return false;
+			}
+
+			EntityLocation location = _locations[entity];
+			RemoveFromChunk(location);
+
+			_locations.Remove(entity);
+			destroyed = _allocator.Destroy(entity);
+
+			if (destroyed)
+			{
+				_structuralVersion++;
+			}
 		}
 
-		EntityLocation location = _locations[entity];
-		RemoveFromChunk(location);
-
-		_locations.Remove(entity);
-		bool destroyed = _allocator.Destroy(entity);
-
+		// The destruction is committed before user code runs, so a
+		// handler may create, destroy, or query entities.
 		if (destroyed)
 		{
-			_structuralVersion++;
+			EntityDestroyed?.Invoke(entity);
 		}
 
 		return destroyed;
