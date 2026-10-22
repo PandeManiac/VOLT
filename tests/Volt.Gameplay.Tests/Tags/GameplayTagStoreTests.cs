@@ -434,6 +434,99 @@ public sealed class GameplayTagStoreTests
 	}
 
 	[Fact]
+	public void TagsChanged_ReportsEverySuccessfulMutation()
+	{
+		using World world = new();
+		using GameplayTagStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+		List<Entity> changed = [];
+
+		store.TagsChanged += changed.Add;
+
+		store.AddTag(entity, TagSchema.Status);
+		store.AddTag(entity, TagSchema.Status);
+		store.RemoveTag(entity, TagSchema.Status);
+		store.RemoveTag(entity, TagSchema.Status);
+
+		// A removal without a grant is not a change.
+		store.RemoveTag(entity, TagSchema.Status);
+
+		Assert.Equal(4, changed.Count);
+
+		foreach (Entity reported in changed)
+		{
+			Assert.Equal(entity, reported);
+		}
+	}
+
+	[Fact]
+	public void TagsChanged_IsNotRaisedForTheInvalidTag()
+	{
+		using World world = new();
+		using GameplayTagStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+		int changes = 0;
+
+		store.TagsChanged += _ => changes++;
+
+		Assert.False(store.AddTag(entity, GameplayTag.None));
+		Assert.False(store.RemoveTag(entity, GameplayTag.None));
+		Assert.Equal(0, changes);
+	}
+
+	[Fact]
+	public void TagsChanged_IsNotRaisedForClearOrDestruction()
+	{
+		using World world = new();
+		using GameplayTagStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+		int changes = 0;
+
+		store.AddTag(entity, TagSchema.Status);
+
+		store.TagsChanged += _ => changes++;
+
+		Assert.True(store.Clear(entity));
+		Assert.Equal(0, changes);
+
+		store.AddTag(entity, TagSchema.Status);
+		Assert.Equal(1, changes);
+
+		world.DestroyEntity(entity);
+		Assert.Equal(1, changes);
+	}
+
+	[Fact]
+	public void TagsChanged_HandlerMayMutateTheSameEntity()
+	{
+		using World world = new();
+		using GameplayTagStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+		int changes = 0;
+
+		store.TagsChanged += changed =>
+		{
+			changes++;
+
+			if (changes < 4)
+			{
+				store.AddTag(changed, TagSchema.Effect);
+			}
+		};
+
+		store.AddTag(entity, TagSchema.Status);
+
+		// The first grant triggers the handler, and each of its three
+		// grants triggers it again until the guard stops the chain.
+		Assert.Equal(4, changes);
+		Assert.Equal(3, store.GetTagCount(entity, TagSchema.Effect));
+	}
+
+	[Fact]
 	public void Dispose_UnsubscribesFromWorldDestruction()
 	{
 		using World world = new();

@@ -46,7 +46,9 @@ See [src/Volt.Core/Timing/README.md](src/Volt.Core/Timing/README.md) for the exe
 
 It also implements gameplay attributes with registered definitions, base and current values, Unreal-compatible modifier aggregation (`AddBase`, additive and compound multipliers, additive divisors, final add, and override), definition-driven clamping, cached evaluation, and change notifications. An attribute read is a cached binary search: about 2.3 ns regardless of world size or active modifiers.
 
-Effects and abilities follow in later milestones. Their behavior, Unreal source references, and intentional differences are tracked in [the gameplay specification](src/Volt.Gameplay/GameplaySpec.md).
+Gameplay effects are implemented on top of those stores: instant, duration, infinite, and periodic execution, reference-counted granted tags, per-source and per-target stacking with limits and refresh policies, application, ongoing and removal tag requirements, inhibition, and deterministic expiry and ticking from a single due-time heap. Idle effects cost one comparison per simulated step regardless of how many are active, and applying or removing one allocates nothing once warmed up.
+
+Abilities follow in the next milestone. Their behavior, Unreal source references, and intentional differences are tracked in [the gameplay specification](src/Volt.Gameplay/GameplaySpec.md).
 
 ### Platform and graphics
 
@@ -134,7 +136,7 @@ The demo displays a color-interpolated triangle against a dark background for a 
 
 VOLT uses [BenchmarkDotNet](https://github.com/dotnet/BenchmarkDotNet) to measure performance-sensitive operations.
 
-The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration, plus empty, fixed-step, idle-scheduled, and due-scheduled game-loop frames, time-scaled frames at `1.0x`, `0.5x`, and `2.0x`, the separate costs of capturing transform history, interpolating poses, extracting interpolated render instances, and capturing under entity churn, and gameplay tag matching, query evaluation, authoring, and name resolution.
+The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration, plus empty, fixed-step, idle-scheduled, and due-scheduled game-loop frames, time-scaled frames at `1.0x`, `0.5x`, and `2.0x`, the separate costs of capturing transform history, interpolating poses, extracting interpolated render instances, and capturing under entity churn, gameplay tag matching, query evaluation, authoring, name resolution, effect application, stacking, idle stepping, and periodic ticking.
 
 Benchmark results are intended to inform implementation decisions, not merely to maximize reported throughput. Results should be evaluated alongside correctness, memory consumption, and workload characteristics.
 

@@ -311,6 +311,102 @@ public sealed class GameplayAttributeStore : IDisposable
 	}
 
 	/// <summary>
+	/// Applies a modifier operation to an entity's permanent base value
+	/// once, without keeping any state that could undo it.
+	/// </summary>
+	/// <param name="entity">The living entity.</param>
+	/// <param name="attribute">The attribute.</param>
+	/// <param name="operation">How the magnitude changes the base value.</param>
+	/// <param name="magnitude">The operation's magnitude.</param>
+	/// <returns>
+	/// <see langword="true"/> when the base value changed.
+	/// </returns>
+	/// <exception cref="ArgumentException">
+	/// The attribute is not registered or the entity is not alive.
+	/// </exception>
+	/// <exception cref="ArgumentOutOfRangeException">
+	/// The magnitude is not finite or the operation is undefined.
+	/// </exception>
+	/// <remarks>
+	/// <para>
+	/// This is how an instant gameplay effect executes: each modifier of
+	/// the effect is folded into the base value in declaration order, so
+	/// an override followed by an addition leaves the addition, and a
+	/// multiplication sees the result of an earlier addition. This
+	/// reproduces Unreal's <c>FAggregator::StaticExecModOnBaseValue</c>,
+	/// where every operation except <c>Override</c> and
+	/// <c>DivideAdditive</c> is a plain arithmetic step.
+	/// </para>
+	/// <para>
+	/// A divide by exactly zero leaves the value unchanged, because the
+	/// alternative is infinity. Every write is clamped to the
+	/// attribute's range, so an intermediate result is clamped before
+	/// the next modifier of the same effect runs.
+	/// </para>
+	/// </remarks>
+	public bool ExecuteInstantModifier(
+		Entity entity,
+		GameplayAttribute attribute,
+		GameplayModifierOperation operation,
+		float magnitude)
+	{
+		ThrowIfDisposed();
+
+		GetDefinitionOrThrow(attribute);
+
+		if ((uint)operation > (uint)GameplayModifierOperation.AddFinal)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(operation),
+				operation,
+				"The modifier operation is not defined.");
+		}
+
+		if (!float.IsFinite(magnitude))
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(magnitude),
+				magnitude,
+				"A modifier magnitude must be finite.");
+		}
+
+		if (!_world.IsAlive(entity))
+		{
+			throw new ArgumentException(
+				"The entity is not alive in this store's world. An " +
+				"instant modifier cannot be applied to a destroyed or " +
+				"recycled handle.",
+				nameof(entity));
+		}
+
+		float current = GetBaseValue(entity, attribute);
+
+		float value = operation switch
+		{
+			GameplayModifierOperation.Override => magnitude,
+			GameplayModifierOperation.AddBase => current + magnitude,
+			GameplayModifierOperation.AddFinal => current + magnitude,
+			GameplayModifierOperation.MultiplyAdditive => current * magnitude,
+			GameplayModifierOperation.MultiplyCompound => current * magnitude,
+			GameplayModifierOperation.DivideAdditive => magnitude == 0f
+				? current
+				: current / magnitude,
+			_ => current
+		};
+
+		if (!float.IsFinite(value))
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(magnitude),
+				magnitude,
+				"The resulting attribute value is not finite. The " +
+				"magnitude overflows the base value.");
+		}
+
+		return SetBaseValue(entity, attribute, value);
+	}
+
+	/// <summary>
 	/// Applies a modifier to an entity's attribute.
 	/// </summary>
 	/// <param name="entity">The living entity.</param>
@@ -380,6 +476,11 @@ public sealed class GameplayAttributeStore : IDisposable
 
 		entry.CurrentValue = definition.Clamp(Evaluate(ref entry));
 
+		// The generation is read before the notification, because a
+		// listener may destroy the entity, which clears the entry the
+		// reference still points at.
+		uint generation = entry.Modifiers[modifierSlot].Generation;
+
 		if (oldCurrentValue != entry.CurrentValue)
 		{
 			RaiseChange(
@@ -395,7 +496,7 @@ public sealed class GameplayAttributeStore : IDisposable
 			entity,
 			attribute,
 			modifierSlot,
-			entry.Modifiers[modifierSlot].Generation);
+			generation);
 	}
 
 	/// <summary>
@@ -459,6 +560,107 @@ public sealed class GameplayAttributeStore : IDisposable
 		modifier.Sequence = 0;
 
 		entry.ActiveModifierCount--;
+
+		float oldCurrentValue = entry.CurrentValue;
+
+		entry.CurrentValue = definition.Clamp(Evaluate(ref entry));
+
+		if (oldCurrentValue != entry.CurrentValue)
+		{
+			RaiseChange(
+				handle.Entity,
+				handle.Attribute,
+				entry.BaseValue,
+				entry.BaseValue,
+				oldCurrentValue,
+				entry.CurrentValue);
+		}
+
+		return true;
+	}
+
+	/// <summary>
+	/// Replaces the magnitude of an active modifier.
+	/// </summary>
+	/// <param name="handle">The handle returned when it was added.</param>
+	/// <param name="magnitude">The new magnitude.</param>
+	/// <returns>
+	/// <see langword="true"/> when a magnitude changed;
+	/// <see langword="false"/> when the handle is stale, belongs to
+	/// another store, is already removed, or already had this
+	/// magnitude.
+	/// </returns>
+	/// <exception cref="ArgumentOutOfRangeException">
+	/// The magnitude is not finite.
+	/// </exception>
+	/// <remarks>
+	/// A stacked effect rescales its modifiers in place instead of
+	/// removing and re-adding them. The attribute is re-evaluated once,
+	/// so a stack change produces one change notification rather than a
+	/// dip and a recovery that a UI would have to debounce. The
+	/// modifier keeps its original insertion sequence, so override
+	/// precedence does not change when a magnitude does.
+	/// </remarks>
+	public bool SetModifierMagnitude(
+		GameplayModifierHandle handle,
+		float magnitude)
+	{
+		ThrowIfDisposed();
+
+		if (!float.IsFinite(magnitude))
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(magnitude),
+				magnitude,
+				"A modifier magnitude must be finite.");
+		}
+
+		if (handle.IsNone)
+		{
+			return false;
+		}
+
+		if (!GameplayAttributeRegistry.Shared.TryGetDefinition(
+			handle.Attribute,
+			out GameplayAttributeDefinition definition))
+		{
+			return false;
+		}
+
+		if (!TryGetSlotLocation(
+			handle.Entity,
+			out int segmentIndex,
+			out int offset))
+		{
+			return false;
+		}
+
+		ref Slot slot = ref _segments[segmentIndex]![offset];
+
+		int entryIndex = FindEntry(slot.Entries, slot.Count, handle.Attribute);
+
+		if (entryIndex < 0)
+		{
+			return false;
+		}
+
+		ref AttributeEntry entry = ref slot.Entries[entryIndex];
+
+		if ((uint)handle.Slot >= (uint)entry.ModifierSlotCount)
+		{
+			return false;
+		}
+
+		ref Modifier modifier = ref entry.Modifiers[handle.Slot];
+
+		if (!modifier.Active
+			|| modifier.Generation != handle.Generation
+			|| modifier.Magnitude == magnitude)
+		{
+			return false;
+		}
+
+		modifier.Magnitude = magnitude;
 
 		float oldCurrentValue = entry.CurrentValue;
 

@@ -731,6 +731,165 @@ public sealed class GameplayAttributeStoreTests
 	}
 
 	[Fact]
+	public void ExecuteInstantModifier_AppliesEachOperationToTheBaseValue()
+	{
+		using World world = new();
+		using GameplayAttributeStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+
+		Assert.True(store.ExecuteInstantModifier(
+			entity,
+			AttributeSchema.Unbounded,
+			GameplayModifierOperation.Override,
+			30f));
+
+		Assert.Equal(30f, store.GetBaseValue(entity, AttributeSchema.Unbounded));
+
+		Assert.True(store.ExecuteInstantModifier(
+			entity,
+			AttributeSchema.Unbounded,
+			GameplayModifierOperation.AddFinal,
+			5f));
+
+		Assert.Equal(35f, store.GetBaseValue(entity, AttributeSchema.Unbounded));
+
+		Assert.True(store.ExecuteInstantModifier(
+			entity,
+			AttributeSchema.Unbounded,
+			GameplayModifierOperation.MultiplyCompound,
+			2f));
+
+		Assert.Equal(70f, store.GetBaseValue(entity, AttributeSchema.Unbounded));
+
+		Assert.True(store.ExecuteInstantModifier(
+			entity,
+			AttributeSchema.Unbounded,
+			GameplayModifierOperation.DivideAdditive,
+			2f));
+
+		Assert.Equal(35f, store.GetBaseValue(entity, AttributeSchema.Unbounded));
+
+		Assert.True(store.ExecuteInstantModifier(
+			entity,
+			AttributeSchema.Unbounded,
+			GameplayModifierOperation.AddBase,
+			-5f));
+
+		Assert.Equal(30f, store.GetBaseValue(entity, AttributeSchema.Unbounded));
+	}
+
+	[Fact]
+	public void ExecuteInstantModifier_LeavesTheValueOnADivideByZero()
+	{
+		using World world = new();
+		using GameplayAttributeStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+
+		store.SetBaseValue(entity, AttributeSchema.Unbounded, 40f);
+
+		Assert.False(store.ExecuteInstantModifier(
+			entity,
+			AttributeSchema.Unbounded,
+			GameplayModifierOperation.DivideAdditive,
+			0f));
+
+		Assert.Equal(40f, store.GetBaseValue(entity, AttributeSchema.Unbounded));
+	}
+
+	[Fact]
+	public void ExecuteInstantModifier_ValidatesItsInput()
+	{
+		using World world = new();
+		using GameplayAttributeStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+		Entity dead = world.CreateEntity();
+
+		world.DestroyEntity(dead);
+
+		Assert.Throws<ArgumentOutOfRangeException>(() =>
+			store.ExecuteInstantModifier(
+				entity,
+				AttributeSchema.Unbounded,
+				GameplayModifierOperation.AddBase,
+				float.NaN));
+
+		Assert.Throws<ArgumentException>(() =>
+			store.ExecuteInstantModifier(
+				dead,
+				AttributeSchema.Unbounded,
+				GameplayModifierOperation.AddBase,
+				1f));
+	}
+
+	[Fact]
+	public void SetModifierMagnitude_RevaluesOnceAndKeepsTheSlot()
+	{
+		using World world = new();
+		using GameplayAttributeStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+		int changes = 0;
+
+		GameplayModifierHandle handle = store.AddModifier(
+			entity,
+			AttributeSchema.Unbounded,
+			GameplayModifierOperation.AddBase,
+			10f);
+
+		store.AttributeChanged += _ => changes++;
+
+		Assert.True(store.SetModifierMagnitude(handle, 25f));
+		Assert.Equal(125f, store.GetCurrentValue(
+			entity,
+			AttributeSchema.Unbounded));
+		Assert.Equal(1, changes);
+
+		Assert.False(store.SetModifierMagnitude(handle, 25f));
+		Assert.Equal(1, changes);
+
+		Assert.True(store.RemoveModifier(handle));
+		Assert.False(store.SetModifierMagnitude(handle, 40f));
+		Assert.Equal(100f, store.GetCurrentValue(
+			entity,
+			AttributeSchema.Unbounded));
+	}
+
+	[Fact]
+	public void SetModifierMagnitude_DoesNotChangeOverridePrecedence()
+	{
+		using World world = new();
+		using GameplayAttributeStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+
+		store.AddModifier(
+			entity,
+			AttributeSchema.Unbounded,
+			GameplayModifierOperation.Override,
+			42f);
+
+		GameplayModifierHandle later = store.AddModifier(
+			entity,
+			AttributeSchema.Unbounded,
+			GameplayModifierOperation.Override,
+			50f);
+
+		Assert.Equal(42f, store.GetCurrentValue(
+			entity,
+			AttributeSchema.Unbounded));
+
+		// Rescaling the later override does not make it win; the first
+		// insertion still has precedence.
+		Assert.True(store.SetModifierMagnitude(later, 60f));
+		Assert.Equal(42f, store.GetCurrentValue(
+			entity,
+			AttributeSchema.Unbounded));
+	}
+
+	[Fact]
 	public void NonFiniteModifierMagnitude_IsRejected()
 	{
 		using World world = new();

@@ -148,6 +148,71 @@ modifier list. Writes clamp to the registered range and raise one
 uses slot generations, so a stale handle cannot remove a later
 modifier that reused its slot.
 
+## Effects
+
+```csharp
+using Volt.Gameplay.Effects;
+
+GameplayEffectDefinition burn = GameplayEffectDefinition
+    .Create("Status.Burning")
+    .HasDuration(10f)
+    .Period(1f)
+    .Modifier(health, GameplayModifierOperation.AddBase, -2f)
+    .GrantTags(burning)
+    .Build();
+
+GameplayEffectDefinition slow = GameplayEffectDefinition
+    .Create("Status.Slow")
+    .HasDuration(5f)
+    .Modifier(speed, GameplayModifierOperation.MultiplyAdditive, 0.5f)
+    .GrantTags(slowed)
+    .Stacking(GameplayEffectStackingType.AggregateByTarget, limit: 3)
+    .Build();
+
+using GameplayEffectSystem effects = new(world, attributes, tags);
+
+effects.Changed += change =>
+    Console.WriteLine($"{change.Kind}: {change.Definition.Name}");
+
+GameplayEffectApplyResult applied = effects.Apply(
+    player,
+    burn,
+    source: caster);
+
+Debug.Assert(applied.Status == GameplayEffectApplyStatus.Applied);
+
+// Re-applying a stackable effect merges into the existing instance.
+Debug.Assert(effects.Apply(player, slow).StackCount == 1);
+Debug.Assert(effects.Apply(player, slow).StackCount == 2);
+
+// Drive the clock with the simulation step; idle effects cost one
+// comparison.
+effects.Advance((float)deltaSeconds);
+
+Debug.Assert(effects.TryGetEffect(applied.Handle, out ActiveGameplayEffect active));
+Debug.Assert(active.StackCount == 1);
+
+// Removing the instance restores every value and tag it contributed.
+effects.Remove(applied.Handle);
+```
+
+Instant effects execute once against the base value and are never
+tracked. Duration and infinite effects hold their modifiers and granted
+tags until they end, are removed, or are inhibited by their ongoing tag
+requirements. Periodic effects execute once per period instead of
+holding a modifier, so damage over time is permanent damage per tick.
+
+One binary min-heap holds every expiry and periodic deadline, ordered
+by due time and then by scheduling order. Advancing time processes only
+what is due, so 100,000 idle effects cost the same 1.7 ns per step as an
+empty world, and a large step replays every tick in order, matching the
+result of many small steps. Nothing is polled per frame.
+
+Definitions are validated when built: an unregistered attribute, a
+non-finite magnitude, an instant effect with a period, a stack limit
+without a stacking type, or an effect that grants a tag its own ongoing
+requirements forbid all throw before reaching gameplay.
+
 ## Projects
 
 | Type | Purpose |
@@ -161,6 +226,13 @@ modifier that reused its slot.
 | `GameplayAttribute` | Interned attribute handle with a shared definition |
 | `GameplayAttributeStore` | Base/current values, modifiers, and change events |
 | `GameplayModifierHandle` | Generation-checked removal handle for a modifier |
+| `GameplayEffectDefinition` | Immutable effect: duration, period, modifiers, tags, stacking |
+| `GameplayEffectDefinitionBuilder` | Fluent, validating authoring path |
+| `GameplayEffectSystem` | Application, scheduling, inhibition, and removal |
+| `GameplayEffectHandle` | Generation-checked handle to an active instance |
+| `GameplayTagRequirements` | Required and ignored tag pair used for gating |
+| `ActiveGameplayEffect` | Read-only snapshot of one active instance |
+| `GameplayEffectChange` | Notification payload for every effect transition |
 
 ## Verification
 
@@ -172,6 +244,8 @@ dotnet run -c Release -- --filter '*GameplayTagBenchmarks*'
 ```
 
 The test suite includes differential tests that reproduce Unreal's own
-tag and query test expectations, lifecycle and invalid-input cases, a
+tag and query test expectations, effect behavior read from the 5.8.4
+source, lifecycle and invalid-input cases, re-entrancy cases, a
 concurrent-registration test, and allocation guards asserting that
-warmed-up matching and container mutation allocate zero managed bytes.
+warmed-up matching, container mutation, effect application, and effect
+ticking allocate zero managed bytes.

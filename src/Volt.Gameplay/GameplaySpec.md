@@ -702,14 +702,333 @@ entry array; a modifier's first use allocates its slot array.
 
 # Part 3 — Effects
 
-Not yet implemented. Milestone D will add instant, duration, infinite,
-and periodic effects, granted tags with contribution counts, stacking,
-requirements, expiration, and deterministic scheduling.
+Implemented in `Volt.Gameplay.Effects`.
+
+## 3.1 Definitions and instances
+
+**Rule.** A `GameplayEffectDefinition` is immutable, shared, and
+validated at construction. Applying it creates a compact instance that
+stores only what differs between applications: the definition, the
+target and source, the stack count, the clocks, and the modifier
+handles needed to undo the effect.
+
+- `SRC` three Unreal types: `UGameplayEffect` is the data asset,
+  `FGameplayEffectSpec` is the per-application copy that captures
+  attributes and evaluates magnitudes, and `FActiveGameplayEffect` is
+  the tracked instance with start time, duration, and period handles.
+- `DIFF`: VOLT folds the spec into the instance. There is no separate
+  spec object, because a spec in Unreal exists mainly to carry
+  captured attribute values and set-by-caller magnitudes, and this
+  milestone supports constant magnitudes only.
+- `DIFF`: the source is an `Entity` identity rather than an ability
+  system component. It is an identity, not a live reference, so a
+  damage-over-time effect keeps burning after its caster dies, exactly
+  as in Unreal.
+- `DIFF`: definitions are validated eagerly. An unregistered
+  attribute, a non-finite magnitude, a negative limit, an instant
+  effect with a period, or a limit without a stacking type throws when
+  the definition is built instead of failing on the first application.
+
+## 3.2 Duration policies
+
+**Rule.** Instant effects execute once and are never tracked, hold no
+modifiers, and grant no tags. Infinite effects stay active until
+removed. Effects with a duration expire after their duration has
+elapsed in simulation time.
+
+- `SRC` `UAbilitySystemComponent::ApplyGameplayEffectSpecToSelf`
+  (`AbilitySystemComponent.cpp`): only a spec whose
+  `DurationPolicy != Instant` is passed to
+  `ApplyGameplayEffectSpec`; an instant spec goes through
+  `ExecuteGameplayEffect` and never enters the active container. Its
+  return value is `FActiveGameplayEffectHandle::GetInstantExecutedHandle()`.
+- `SRC` `FActiveGameplayEffectsContainer::InternalOnActiveGameplayEffectAdded`
+  is the only path that grants tags, and it is unreachable for an
+  instant spec.
+- `DIFF`: Unreal silently ignores a period configured on an instant
+  effect (`GetPeriod()` forcibly returns `NO_PERIOD`). VOLT rejects
+  that definition, because it cannot do what it declares.
+- `DIFF`: `Apply` returns a status instead of a handle that encodes
+  "instant" through a special value. `GameplayEffectHandle.None` means
+  "no tracked instance", and the status says whether the application
+  executed, created an instance, stacked, was rejected, or ended
+  during application.
+
+## 3.3 Modifiers
+
+**Rule.** An instant effect folds each modifier into the base value in
+declaration order. The operations are: `Override` replaces the value,
+`AddBase` and `AddFinal` add, the two multiply operations multiply,
+and `DivideAdditive` divides. A division by exactly zero leaves the
+value unchanged. Each step is clamped before the next one runs.
+
+- `SRC` `FActiveGameplayEffectsContainer::ApplyModToAttribute` calls
+  `FAggregator::StaticExecModOnBaseValue`, which is the operation set
+  above and skips division when the divisor is nearly zero
+  (`GameplayEffectAggregator.cpp`).
+- `DIFF`: the near-zero tolerance becomes an exact zero test, so a
+  deliberately small divisor keeps its meaning.
+
+**Rule.** A non-periodic effect with a duration or infinite duration
+holds its modifiers for as long as it is active: the current value
+changes and the base value does not. A periodic effect holds no
+modifiers and instead executes its modifiers as instant changes once
+per period.
+
+- `SRC` `FActiveGameplayEffectsContainer::AddActiveGameplayEffectGrantedTagsAndModifiers`:
+  aggregator mods are registered only when
+  `Effect.Spec.GetPeriod() <= NO_PERIOD`; the periodic branch schedules
+  a repeating timer instead.
+- `SRC` `FActiveGameplayEffectsContainer::InternalExecutePeriodicGameplayEffect`
+  calls `ExecuteActiveEffectsFrom`, which is the same instant path.
+
+**Rule.** When `FactorInStackCount` is enabled, a modifier's magnitude
+is scaled by the stack count: a non-compound operation contributes
+`(magnitude - bias) * stacks + bias`, and a compound multiplier
+contributes `magnitude ^ stacks`, where the bias is one for the
+multiply and divide operations and zero otherwise. `Override` ignores
+the stack count entirely.
+
+- `SRC` `GameplayEffectUtilities::ComputeStackedModifierMagnitude` and
+  `GetModifierBiasByModifierOp` (`GameplayEffectTypes.cpp`).
+- `SRC`: the scaling is applied by `FGameplayEffectSpec::GetModifierMagnitude`,
+  which is used both for aggregator mods and for periodic execution,
+  so a stacked damage-over-time tick is scaled too.
+
+## 3.4 Granted tags
+
+**Rule.** Each active instance contributes one grant of each granted
+tag, whatever its stack count. The grant is withdrawn when the
+instance is inhibited or removed. Instant effects never grant tags.
+
+- `SRC` `UpdateTagMap(Effect.Spec.Def->GetGrantedTags(), 1)` in
+  `AddActiveGameplayEffectGrantedTagsAndModifiers` and `-1` in
+  `RemoveActiveGameplayEffectGrantedTagsAndModifiers`.
+- Consequence: two effects granting the same tag leave it present when
+  one of them ends, which the store's reference counting provides.
+
+## 3.5 Requirements
+
+**Rule.** An application is refused when the target does not have every
+required tag or does have an ignored tag. Matching is non-exact in both
+directions, so requiring `Status` accepts `Status.Stunned`.
+
+- `SRC` `FGameplayTagRequirements::RequirementsMet` and
+  `FGameplayEffectSpec::Def->CanApply`.
+- A refused application changes nothing and reports
+  `RejectedByRequirements`; failing a requirement is gameplay, not an
+  error.
+
+**Rule.** An active effect whose ongoing requirements are unmet is
+inhibited: its modifiers and granted tags are removed, its clock keeps
+running, and it is restored when the requirements hold again. The
+initial state is decided before the effect grants its own tags.
+
+- `SRC` `UAbilitySystemComponent::SetActiveGameplayEffectInhibit`
+  removes or re-adds granted tags and aggregator mods, and
+  `FActiveGameplayEffectsContainer::InternalOnActiveGameplayEffectAdded`
+  evaluates the requirements before the effect's tags exist.
+- `SRC` `CheckDuration` ignores inhibition, so an inhibited effect
+  still expires on schedule.
+- `DIFF`: re-evaluation is driven by the tag store's `TagsChanged`
+  notification instead of per-ability-system tag delegates. The effect
+  system coalesces the work per entity and iterates to a fixpoint with
+  a bounded number of passes.
+- `DIFF`: a definition that grants a tag its own ongoing requirements
+  forbid is rejected at build time. Unreal would oscillate between
+  granting and withdrawing the tag forever.
+
+**Rule.** An active effect is removed as soon as its removal
+requirements are satisfied; this is a hard removal, not an inhibition.
+
+- `SRC` the deprecated `RemovalTagRequirements` / `URemoveOtherGameplayEffectComponent`
+  family: "Tag requirements that if met will remove this effect."
+
+## 3.6 Stacking
+
+**Rule.** Only a non-instant effect can stack. `AggregateBySource`
+merges applications with the same definition and the same source;
+`AggregateByTarget` merges every application of the definition on the
+target. `None` creates an independent instance per application.
+
+- `SRC` `FActiveGameplayEffectsContainer::FindStackableActiveGameplayEffect`
+  compares `Spec.Def` and, for `AggregateBySource`, the instigator.
+  It also returns early for instant effects and for `None`.
+- `DIFF`: the source is compared as an `Entity` value.
+
+**Rule.** One application adds one stack. A stack limit of zero means
+no limit. An application at the limit still succeeds: the count stays
+at the limit and the duration and period are refreshed according to
+their policies.
+
+- `SRC` `bDenyOverflowApplication` defaults to false, so
+  `HandleActiveGameplayEffectStackOverflow` allows the application and
+  the count is clamped by `FMath::Min(NewStackCount, StackLimitCount)`.
+- `DIFF`: VOLT applies one stack per call, so a burst is a loop of
+  applications. Unreal lets a spec carry several stacks at once; the
+  clamped outcome is the same, and this keeps the common path free of
+  a loop over a count that is almost always one.
+
+**Rule.** On a successful stack application the duration policy
+behaves as follows: `RefreshOnSuccessfulApplication` restarts the
+duration from now, `NeverRefresh` leaves it untouched, and
+`ExtendDuration` adds a full duration to the remaining time. The period
+policy either restarts the period from now or leaves the schedule
+unchanged.
+
+- `SRC` `ApplyGameplayEffectSpec` (`GameplayEffect.cpp`):
+  `CarryOverDuration` plus `RestartActiveGameplayEffectDuration` for
+  the duration policies, and the `StackPeriodResetPolicy` guard that
+  skips re-registering the period timer.
+
+**Rule.** When a stacked effect reaches the end of its duration,
+`ClearEntireStack` removes the instance, `RemoveSingleStackAndRefreshDuration`
+removes one stack and restarts the duration (removing the instance
+when the last stack goes), and `RefreshDuration` restarts the duration
+without touching the count.
+
+- `SRC` `FActiveGameplayEffectsContainer::CheckDuration`, including
+  `StacksToRemove = 1` and the `RefreshStartTime` flags.
+
+## 3.7 Scheduling and determinism
+
+**Rule.** Expiries and periodic ticks share one binary min-heap ordered
+by due time, then by the order in which they were scheduled. Only
+entries that are actually due are processed, in due-time order, so the
+same history produces the same event sequence.
+
+- `DIFF`: Unreal registers a world timer per active effect. VOLT keeps
+  one heap, which makes an idle population cost one comparison per
+  step instead of one timer callback per effect, and makes ordering
+  explicit rather than dependent on timer manager internals.
+- `DIFF`: a tick that is due at application time executes during
+  `Apply` when `ExecuteOnApplication` is set; Unreal schedules it for
+  the next frame tick. The observable difference is one frame of
+  latency, not a different number of ticks.
+
+**Rule.** Every due boundary is processed, even when one step covers
+several of them. A period boundary always advances from the previous
+scheduled boundary, so a large step replays each tick in order and
+produces the same result as many small steps.
+
+- `INFER` from the timer semantics: a repeating timer that is already
+  past due fires once per tick of the timer manager, so the count over
+  a long interval is the same, while VOLT reproduces the exact
+  sequence inside one step.
+
+**Rule.** When a periodic tick and the duration expiry fall on the same
+instant, the tick executes first and the effect then expires.
+
+- `SRC` `CheckDuration`: `CheckForFinalPeriodicExec` runs
+  `InternalExecutePeriodicGameplayEffect` when the period timer is also
+  due, before removing the effect.
+
+**Rule.** Ticks that come due while an effect is inhibited are skipped,
+not replayed. On the transition back to active, `NeverReset` keeps the
+original schedule grid, `ResetPeriod` schedules one full period from
+now, and `ExecuteAndResetPeriod` executes once and then schedules a
+full period.
+
+- `SRC` `EGameplayEffectPeriodInhibitionRemovedPolicy` and the
+  periodic branch of `AddActiveGameplayEffectGrantedTagsAndModifiers`.
+- `DIFF`: the skipped boundaries are fast-forwarded arithmetically
+  instead of being fired and discarded one by one; the resulting
+  schedule is identical.
+
+**Rule.** `Advance` accepts only a finite, non-negative step. Zero is a
+no-op, which is what a paused game supplies. Calling it from inside an
+effect notification throws instead of corrupting the traversal.
+
+- `DIFF`: Unreal has no equivalent because time comes from the world
+  tick; VOLT makes the contract explicit and testable.
+
+## 3.8 Lifecycle and re-entrancy
+
+**Rule.** Destroying an entity releases its effect instances silently,
+the way the attribute and tag stores release their own state. No
+`Removed` notification is raised, because the values no longer exist
+for anyone to observe.
+
+**Rule.** A handle carries the target, the slot, and the slot
+generation. Removing an instance advances the generation, so a stale
+handle cannot remove a later instance that reused the slot.
+
+**Rule.** Notifications are delivered after the change is committed,
+and a handler may query the system, apply or remove effects, or
+destroy the entity. An instance is linked into the entity's list and
+marked active before its modifiers are added, so a handler that
+reacts to the first modifier can clean it up completely. If the
+instance ends during its own application, `Apply` reports `Discarded`.
+
+## 3.9 Edge-case matrix
+
+| Case | Expected | Evidence |
+| --- | --- | --- |
+| Instant effect applied | base changes, no instance, no tag grant | `SRC` |
+| Instant effect on a full health bar | clamped, no state created | `SRC`, `DIFF` |
+| Instant effect with a period | definition rejected | `DIFF` |
+| Duration effect applied | current value changes, base unchanged | `SRC` |
+| Periodic effect between ticks | current equals base | `SRC` |
+| Periodic tick at the expiry instant | tick runs, then removal | `SRC` |
+| Periodic tick while inhibited | skipped, schedule advances | `SRC`, `DIFF` |
+| Two instances granting one tag | count 2; one removal leaves the tag | `SRC` |
+| Application requirement unmet | `RejectedByRequirements`, no side effect | `SRC` |
+| Required parent tag, child granted | requirement satisfied | `SRC` |
+| Ongoing requirement unmet | inhibited, modifiers and tags withdrawn | `SRC` |
+| Effect grants a tag it forbids | definition rejected | `DIFF` |
+| Removal requirement satisfied | instance removed | `SRC` |
+| Re-apply below the stack limit | one instance, stack +1, magnitude rescaled | `SRC` |
+| Re-apply at the stack limit | count clamped, duration refreshed | `SRC` |
+| Stack limit without a stacking type | definition rejected | `DIFF` |
+| `AggregateBySource`, same source | one instance | `SRC` |
+| `AggregateBySource`, other source | two instances | `SRC` |
+| `AggregateByTarget`, other source | one instance, newest source | `SRC` |
+| `RemoveSingleStackAndRefreshDuration` at one stack | instance removed | `SRC` |
+| `RefreshDuration` policy | instance never expires | `SRC` |
+| Inhibited effect reaches its duration | expires | `SRC` |
+| Entity destroyed with active effects | silent release, no notification | `DIFF` |
+| Entity index reused | new occupant sees no effects | `DIFF` |
+| Stale effect handle | removal rejected | `DIFF` |
+| Handler applies an effect during application | both instances active | `DIFF` |
+| Handler destroys the entity during application | `Discarded`, no leak | `DIFF` |
+| Negative or non-finite step | throws | `DIFF` |
+| `Advance` from a notification | throws | `DIFF` |
+
+## 3.10 Performance
+
+Same machine and job as the tag and attribute benchmarks, in process.
+Two worlds are prepared: one with a duration effect on every entity,
+and one with no gameplay state at all.
+
+| Workload | 1,000 | 100,000 | Allocated |
+| --- | ---: | ---: | ---: |
+| Apply + remove a duration effect | 151 ns | 152 ns | 0 B |
+| Apply an instant effect | 24.3 ns | 24.4 ns | 0 B |
+| Apply a stack at the limit | 15.0 ns | 15.0 ns | 0 B |
+| Apply an effect that fails its requirements | 10.7 ns | 10.7 ns | 0 B |
+| One periodic tick | 29.1 ns | 29.4 ns | 0 B |
+| Advance, every effect idle | 1.78 ns | 1.73 ns | 0 B |
+| Advance, no gameplay state | 1.63 ns | 1.63 ns | 0 B |
+| Attribute read with an active effect | 2.28 ns | 3.02 ns | 0 B |
+| `HasTag` granted by an active effect | 3.32 ns | 3.32 ns | 0 B |
+| `ActiveEffectCount` | — | 0.00 ns | 0 B |
+
+Idle stepping is flat in the number of active effects and in world
+size: 100,000 idle effects cost the same 1.7 ns as an empty world,
+which is the entire point of the heap. A tick costs one instant
+modifier execution plus one heap pop and push. Applying and removing
+an effect allocates nothing once the slot and modifier arrays are
+warm, because slots are recycled and their modifier arrays are kept.
+
+**Limitation.** These ran with the in-process toolchain, for the same
+reason as the earlier parts: untracked experiment workspaces contain
+duplicate benchmark project names.
 
 # Part 4 — Abilities
 
 Not yet implemented. Milestone E will add granting, activation
-requirements, costs, cooldowns, cancellation, and lifecycle.
+requirements, costs, cooldowns, cancellation, and lifecycle on top of
+the effect system.
 
 # Part 5 — Cues, events, and replication preparation
 

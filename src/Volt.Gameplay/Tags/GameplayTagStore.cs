@@ -80,6 +80,33 @@ public sealed class GameplayTagStore : IDisposable
 	}
 
 	/// <summary>
+	/// Occurs after a grant is added or removed.
+	/// </summary>
+	/// <remarks>
+	/// <para>
+	/// The event reports the entity whose tags may have changed. It
+	/// fires for every successful <see cref="AddTag"/> and
+	/// <see cref="RemoveTag"/> call, not only for the transition
+	/// between "no tags" and "some tags", because adding or removing
+	/// one grant can also add or drop an ancestor entry.
+	/// </para>
+	/// <para>
+	/// The notification exists so dependent systems can recompute
+	/// derived state when tags actually change, instead of polling. A
+	/// gameplay effect uses it to re-evaluate its ongoing and removal
+	/// requirements. With no subscribers the cost is one null check
+	/// per mutation.
+	/// </para>
+	/// <para>
+	/// The event fires after the change is committed, so a handler may
+	/// query or mutate the same entity's tags. A handler that reacts by
+	/// changing tags itself must guard against recursion; the effect
+	/// system does.
+	/// </para>
+	/// </remarks>
+	public event Action<Entity>? TagsChanged;
+
+	/// <summary>
 	/// Gets the number of entities that currently have at least one
 	/// tag.
 	/// </summary>
@@ -148,6 +175,8 @@ public sealed class GameplayTagStore : IDisposable
 			AppendTaggedIndex((int)entity.Index);
 		}
 
+		TagsChanged?.Invoke(entity);
+
 		return true;
 	}
 
@@ -207,6 +236,8 @@ public sealed class GameplayTagStore : IDisposable
 		{
 			ReleaseDenseIndex(ref slot);
 		}
+
+		TagsChanged?.Invoke(entity);
 
 		return true;
 	}
@@ -547,6 +578,7 @@ public sealed class GameplayTagStore : IDisposable
 
 		_world.EntityDestroyed -= HandleEntityDestroyed;
 
+		TagsChanged = null;
 		_segments = [];
 		_taggedCount = 0;
 		_disposed = true;
