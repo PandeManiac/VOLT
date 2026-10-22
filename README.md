@@ -44,7 +44,9 @@ See [src/Volt.Core/Timing/README.md](src/Volt.Core/Timing/README.md) for the exe
 
 `Volt.Gameplay` is an optional assembly for Unreal-style gameplay systems. It currently implements hierarchical gameplay tags: interned four-byte identities, an append-only registry with cached ancestry, immutable tag sets for shared definitions, a mutable authoring container, nested AND/OR/NOT tag queries, and reference-counted per-entity tag storage integrated with entity lifetime. Matching performs no string work and allocates nothing once warmed up; containers of 40 tags resolve exact and hierarchical lookups in a few nanoseconds, and entity tag lookup is flat in world size.
 
-Attributes, effects, and abilities follow in later milestones. Their behavior, Unreal source references, and intentional differences are tracked in [the gameplay specification](src/Volt.Gameplay/GameplaySpec.md).
+It also implements gameplay attributes with registered definitions, base and current values, Unreal-compatible modifier aggregation (`AddBase`, additive and compound multipliers, additive divisors, final add, and override), definition-driven clamping, cached evaluation, and change notifications. An attribute read is a cached binary search: about 2.3 ns regardless of world size or active modifiers.
+
+Effects and abilities follow in later milestones. Their behavior, Unreal source references, and intentional differences are tracked in [the gameplay specification](src/Volt.Gameplay/GameplaySpec.md).
 
 ### Platform and graphics
 

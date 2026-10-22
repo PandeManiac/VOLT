@@ -108,6 +108,46 @@ two removals; destroying an entity clears all of them, and entity
 generations prevent a recycled index from exposing its predecessor's
 state.
 
+## Attributes
+
+```csharp
+using Volt.Gameplay.Attributes;
+
+GameplayAttribute health = GameplayAttributeRegistry.Shared.Register(
+    "Health",
+    defaultBaseValue: 100f,
+    minimum: 0f,
+    maximum: 100f);
+
+using GameplayAttributeStore attributes = new(world);
+
+attributes.SetBaseValue(player, health, 70f);
+
+GameplayModifierHandle burning = attributes.AddModifier(
+    player,
+    health,
+    GameplayModifierOperation.AddFinal,
+    -10f);
+
+Debug.Assert(attributes.GetCurrentValue(player, health) == 60f);
+Debug.Assert(attributes.GetBaseValue(player, health) == 70f);
+
+attributes.AttributeChanged += change =>
+    Console.WriteLine($"{change.Attribute}: {change.NewCurrentValue}");
+
+attributes.RemoveModifier(burning);
+Debug.Assert(attributes.GetCurrentValue(player, health) == 70f);
+```
+
+The base value holds permanent changes; the current value includes
+modifiers. Modifiers aggregate in Unreal's order — add, multiply,
+divide, compound multiply, final add, with any override replacing the
+result — and the current value is cached, so reads never walk the
+modifier list. Writes clamp to the registered range and raise one
+`AttributeChanged` event with old and new values. A modifier handle
+uses slot generations, so a stale handle cannot remove a later
+modifier that reused its slot.
+
 ## Projects
 
 | Type | Purpose |
@@ -118,6 +158,9 @@ state.
 | `GameplayTagContainer` | Mutable authoring container |
 | `GameplayTagQuery` | Nested AND/OR/NOT expression over tags |
 | `GameplayTagStore` | Reference-counted tags for one world's entities |
+| `GameplayAttribute` | Interned attribute handle with a shared definition |
+| `GameplayAttributeStore` | Base/current values, modifiers, and change events |
+| `GameplayModifierHandle` | Generation-checked removal handle for a modifier |
 
 ## Verification
 

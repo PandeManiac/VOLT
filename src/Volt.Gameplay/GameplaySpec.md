@@ -478,8 +478,227 @@ relative comparison, not for absolute claims about a shipping build.
 
 # Part 2 — Attributes
 
-Not yet implemented. Milestone C will add attribute identity,
-base/current values, modifier ordering, clamping, and change events.
+Implemented in `Volt.Gameplay.Attributes`.
+
+## 2.1 Identity and declaration
+
+**Rule.** An attribute is a registered, interned four-byte identity
+with one immutable definition for the process.
+
+- `SRC` `FGameplayAttribute` is a reflected `FProperty` pointer plus
+  its owning attribute set; identity comes from reflection and the
+  property path.
+- `DIFF`: VOLT registers a name and a definition explicitly, so an
+  attribute does not require reflection, an attribute-set class, or
+  a `UObject`. This makes attributes usable from plain .NET code and
+  keeps the identity compact.
+- `DIFF`: names are case-insensitive and dots are allowed only as a
+  visual grouping separator. Attributes are flat; `Vitals.Health`
+  does not create a `Vitals` attribute or any hierarchy.
+
+**Rule.** Re-registering a name with a different default or range is
+an error, not a silent override.
+
+- `INFER`: Unreal cannot hit this case because attribute identity is
+  the property itself; two systems cannot disagree about the default
+  of one property.
+- `DIFF`: an explicit registry can be called twice, so VOLT rejects
+  the conflicting definition instead of letting load order decide.
+
+## 2.2 Base and current values
+
+**Rule.** The base value contains only permanent changes. The current
+value includes temporary modifiers. Writes to the base value
+recalculate the current value.
+
+- `SRC` `FGameplayAttributeData`
+  (`AttributeSet.h`): `GetCurrentValue` "includes temporary buffs",
+  `GetBaseValue` "only includes permanent changes".
+- `SRC` (aggregation flow): the ability system passes the base value
+  through `FAggregator::EvaluateWithBase` to obtain the current
+  value; base modifiers never mutate the attribute's `BaseValue`.
+- `UTEST`-style coverage: adding an `AddBase` modifier changes the
+  current value but leaves the base value untouched.
+
+## 2.3 Modifier operations and evaluation order
+
+**Rule.** Modifiers aggregate in this exact order:
+
+```
+((Base + Sum(AddBase)) * MultiplyAdditive / DivideAdditive
+  * Product(MultiplyCompound)) + Sum(AddFinal)
+```
+
+with a unit bias for the multiplicative sums:
+
+- `AddBase` contributes its magnitude.
+- `MultiplyAdditive` contributes `magnitude - 1` to a sum that starts
+  at one. Two 1.5 modifiers produce a 2.0 multiplier.
+- `DivideAdditive` contributes `magnitude - 1` to a divisor sum that
+  starts at one. Two 2.0 divisors divide by three.
+- `MultiplyCompound` multiplies the running result by each magnitude.
+- `AddFinal` contributes its magnitude after all multiplication.
+
+- `SRC` `EGameplayModOp` (`GameplayEffectTypes.h`): the equation is
+  documented verbatim in the enum comment.
+- `SRC` `FAggregatorModChannel::EvaluateWithBase`
+  (`GameplayEffectAggregator.cpp`): implements that equation.
+- `SRC` `FAggregatorModChannel::SumMods`: `Sum = Bias; Sum += Magnitude
+  - Bias`, and `GameplayEffectUtilities::GetModifierBiasByModifierOp`
+  returns `{0, 1, 1, 0, 0, 0}` for the six operations.
+
+**Rule.** Any active `Override` replaces the entire result; the base
+and all other modifiers are ignored.
+
+- `SRC` `FAggregatorModChannel::EvaluateWithBase`: iterates the
+  override list first and returns the first qualifying magnitude
+  before computing anything else.
+- `DIFF`: "first" is defined by insertion sequence, not by storage
+  slot. VOLT recycles modifier slots, so an explicit sequence number
+  keeps the winner stable when a slot is reused. Unreal never reuses
+  an aggregator slot in place, so its array order already means
+  insertion order.
+
+**Rule.** An exactly zero aggregated divisor is replaced by one to
+avoid division by zero.
+
+- `SRC`: `if (FMath::IsNearlyZero(Division)) Division = 1.f;`.
+- `DIFF`: Unreal also replaces near-zero divisors within its
+  `IsNearlyZero` tolerance (about `1e-4`), which silently discards a
+  deliberately small divisor. VOLT substitutes one only for an exact
+  zero, where the alternative is infinity.
+
+**Rule.** Modifier magnitudes and base values must be finite; NaN and
+infinity are rejected at the call site.
+
+- `DIFF`: Unreal accepts any float from game code and relies on the
+  game's clamping hook. VOLT rejects non-finite input because it
+  cannot be clamped meaningfully and turns every later comparison
+  into a false result.
+
+## 2.4 Clamping
+
+**Rule.** Base and current values are clamped to the definition's
+`[Minimum, Maximum]` range after every mutation. Infinite bounds mean
+unclamped. A NaN result is mapped to the minimum.
+
+- `SRC` `AttributeSet::PreAttributeChange` and
+  `PreAttributeBaseChange`: Unreal provides virtual hooks and states
+  that clamping is the game's responsibility; there is no built-in
+  range.
+- `DIFF`: VOLT stores the range in the definition. Every mutation is
+  clamped consistently, and the policy is visible at the declaration
+  instead of in an override that can be forgotten.
+- `DIFF`: a NaN current value is mapped to the minimum. Unreal would
+  keep the NaN, and every comparison against it would be false.
+
+**Rule.** Dynamic bounds (for example, health clamped by a buffed
+maximum health) are not part of the attribute itself and must be
+applied by game code.
+
+- `INFER`: Unreal has the same limitation; `MaxHealth` is an ordinary
+  attribute, and the health clamp in `PreAttributeChange` reads it
+  manually.
+
+## 2.5 Evaluation and change notification
+
+**Rule.** The current value is cached. It is recalculated only when a
+base value or a modifier changes, never on read.
+
+- `DIFF`: Unreal's aggregator evaluates on demand through
+  `Evaluate`/`EvaluateWithBase`, and the ability system caches the
+  result at set points. VOLT makes the cache explicit per attribute
+  entry and updates it at every mutation, so reads are one binary
+  search with no aggregation work.
+
+**Rule.** One notification is raised per mutation when either the
+base or the current value changed, after clamping. It carries the
+old and new values for both. A base change that is hidden by an
+override still notifies, with an unchanged current value. No
+notification is raised when nothing changed, when an entity is
+destroyed, or when a store is cleared.
+
+- `SRC` (event model): Unreal exposes `OnGameplayAttributeValueChange`
+  on the ability system component and pre/post change hooks in the
+  attribute set.
+- `DIFF`: VOLT raises one store-level event instead of a delegate per
+  attribute. A per-attribute delegate would allocate a subscriber
+  list for every attribute on every entity; listeners filter by the
+  attribute in the payload instead.
+
+## 2.6 Attribute dependencies
+
+**Rule.** Attributes are independent. A modifier targets exactly one
+attribute and does not read another.
+
+- `SRC`/`INFER`: Unreal attributes are also independent floats. Any
+  relationship, such as health depending on maximum health, is
+  expressed by a gameplay effect or by an execution calculation, not
+  by the attribute system.
+- `DIFF`: none. This is a shared limitation, documented so it is not
+  mistaken for unfinished work.
+
+## 2.7 Lifecycle and handles
+
+**Rule.** Destroying an entity releases its attribute entries and
+their modifiers without raising change notifications. A stale entity
+handle cannot read or write the next occupant's values.
+
+**Rule.** A modifier handle carries the entity, attribute, slot, and
+slot generation. Removing advances the slot generation, so a stale
+handle cannot remove a modifier that reuses the slot.
+
+- `SRC`/`UTEST` analog: `ScheduledHandle` and `Entity` already use
+  generation counters for this purpose. The modifier handle follows
+  the same rule.
+- `INFER`: Unreal's `FActiveGameplayEffectHandle` provides the same
+  protection for effects; VOLT's per-modifier handle is finer
+  grained because modifiers can exist without an effect yet.
+
+## 2.8 Edge-case matrix
+
+| Case | Expected | Evidence |
+| --- | --- | --- |
+| Read an attribute the entity never touched | registered default, no state created | `DIFF` |
+| Write the default to untouched state | no change, no allocation | `DIFF` |
+| Base 100, `AddBase` 20 | current 120, base 100 | `SRC` |
+| Base 100, two `MultiplyAdditive` 1.5 | current 200 | `SRC` |
+| Base 100, two `DivideAdditive` 2 | current 33.33 | `SRC` |
+| Base 100, `MultiplyCompound` 1.5 and 2 | current 300 | `SRC` |
+| Full chain `((100+20)×1.5÷2×2)+10` | 190 | `SRC` |
+| Override 42 with other modifiers | 42 | `SRC` |
+| Two overrides 42 then 50 | 42; 50 after removing 42 | `SRC`, `DIFF` (sequence) |
+| Exactly zero divisor sum | behaves as divisor 1 | `SRC`, `DIFF` |
+| Current above maximum | clamped to maximum | `DIFF` |
+| NaN computed value | minimum | `DIFF` |
+| Base change hidden by override | event with unchanged current | `DIFF` |
+| Add a zero-magnitude `AddBase` | no event | `DIFF` |
+| Remove an already removed modifier | false, no change | `UTEST` analog |
+| Destroy an entity with modifiers | state released, no event | `DIFF` |
+| Write to a dead entity | throws | `DIFF` |
+| Read from a dead entity | default value | `DIFF` |
+| Unregistered attribute anywhere | throws | `DIFF` |
+
+## 2.9 Performance
+
+Same machine and job as the tag benchmarks. One percent of entities
+own attribute state; the dense case initializes every entity.
+
+| Workload | 1,000 | 100,000 | 1,000,000 | Allocated |
+| --- | ---: | ---: | ---: | ---: |
+| `GetCurrentValue`, state present | 2.33 ns | 2.31 ns | 2.28 ns | 0 B |
+| `GetCurrentValue`, no state | 1.44 ns | 1.45 ns | 1.74 ns | 0 B |
+| `GetBaseValue`, state present | 2.35 ns | 2.32 ns | 2.29 ns | 0 B |
+| `SetBaseValue` twice (alternating) | 24.2 ns | 24.0 ns | 23.8 ns | 0 B |
+| Add + remove a modifier with 8 active | 40.2 ns | 40.1 ns | 40.4 ns | 0 B |
+| Dense `GetCurrentValue` (every entity initialized) | 2.25 ns | 2.25 ns | — | 0 B |
+
+Cached reads are flat in world size and do not depend on the number
+of active modifiers. Mutation cost is the aggregation itself, not
+storage growth: both cases reuse their arrays after warmup, and the
+store raises no event and allocates nothing when nobody subscribed.
+Adding a new attribute to an entity for the first time allocates its
+entry array; a modifier's first use allocates its slot array.
 
 # Part 3 — Effects
 
