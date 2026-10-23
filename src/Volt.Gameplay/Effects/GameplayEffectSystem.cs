@@ -384,6 +384,55 @@ public sealed class GameplayEffectSystem : IDisposable
 	}
 
 	/// <summary>
+	/// Gets the longest remaining duration among an entity's active
+	/// instances that grant any of the given tags.
+	/// </summary>
+	/// <param name="target">The entity.</param>
+	/// <param name="tags">The tags to match.</param>
+	/// <returns>
+	/// The longest remaining duration, zero when no active instance
+	/// grants a matching tag, or infinity for an infinite instance.
+	/// </returns>
+	/// <remarks>
+	/// An inhibited instance is included, because its clock keeps
+	/// running and its tags may return. This is the query Unreal's
+	/// <c>GetActiveEffectsTimeRemaining</c> answers for a tag query.
+	/// </remarks>
+	public double GetMaxRemainingDuration(Entity target, GameplayTagSet tags)
+	{
+		ThrowIfDisposed();
+		ArgumentNullException.ThrowIfNull(tags);
+
+		if (tags.IsEmpty
+			|| !TryGetEntitySlot(target, out int segmentIndex, out int offset))
+		{
+			return 0d;
+		}
+
+		double remaining = 0d;
+		int slot = _entitySegments[segmentIndex]![offset].Head;
+
+		while (slot >= 0)
+		{
+			ref ActiveEffect effect = ref _effects[slot];
+
+			if (effect.Active && effect.Definition.GrantedTags.HasAny(tags))
+			{
+				double candidate = Math.Max(0d, effect.ExpireTime - _time);
+
+				if (candidate > remaining)
+				{
+					remaining = candidate;
+				}
+			}
+
+			slot = effect.NextOnEntity;
+		}
+
+		return remaining;
+	}
+
+	/// <summary>
 	/// Advances simulation time and processes every effect event that
 	/// came due.
 	/// </summary>

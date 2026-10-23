@@ -43,21 +43,30 @@ public sealed class GameplayAbilitySystem : IDisposable
 	private const int SegmentSize = 1 << SegmentShift;
 	private const int SegmentMask = SegmentSize - 1;
 	private const int InitialAbilityCapacity = 16;
+	private const int MaxTagCancelPasses = 8;
+
+	private static int s_nextSystemId;
 
 	private readonly World _world;
 	private readonly GameplayTagStore _tags;
 	private readonly GameplayEffectSystem _effects;
 	private readonly GameplayAttributeStore _attributes;
 	private readonly uint _allocatorId;
+	private readonly uint _systemId;
 
 	private AbilitySlot[] _abilities = new AbilitySlot[InitialAbilityCapacity];
 	private int _abilitySlotCount;
 	private int _freeAbilitySlot = -1;
 	private int _grantedCount;
 	private int _activeCount;
-	private int _nextAttemptStamp;
+	private uint _nextActivationId;
 
 	private EntityAbilities[]?[] _entitySegments = [];
+
+	private readonly CapturePool _cancelPool = new();
+	private readonly CapturePool _tagCancelPool = new();
+	private readonly CapturePool _inputPool = new();
+	private readonly CapturePool _revokePool = new();
 
 	private bool _disposed;
 
@@ -96,6 +105,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 		_effects = effects;
 		_attributes = attributes;
 		_allocatorId = world.AllocatorId;
+		_systemId = AllocateSystemId();
 
 		_world.EntityDestroyed += HandleEntityDestroyed;
 		_tags.TagsChanged += HandleTagsChanged;
@@ -186,7 +196,9 @@ public sealed class GameplayAbilitySystem : IDisposable
 		_abilities[slot].InputId = inputId;
 		_abilities[slot].Target = default;
 		_abilities[slot].Active = false;
-		_abilities[slot].AttemptStamp = 0;
+		_abilities[slot].Activating = false;
+		_abilities[slot].Revoking = false;
+		_abilities[slot].ActivationId = 0;
 
 		Link(owner, slot);
 
@@ -212,30 +224,51 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// An active ability is cancelled before the grant is removed, so
 	/// listeners see <see cref="GameplayAbilityChangeKind.Cancelled"/>
 	/// followed by <see cref="GameplayAbilityChangeKind.Revoked"/>.
-	/// Unreal's <c>ClearAbility</c> also cancels first.
+	/// Unreal's <c>ClearAbility</c> also cancels first. While the call
+	/// is in progress the grant is marked as revoking: a nested
+	/// revocation returns <see langword="false"/>, and an activation
+	/// reports <see cref="GameplayAbilityActivationStatus.NotGranted"/>,
+	/// so a cancellation handler cannot resurrect it.
 	/// </remarks>
 	public bool RevokeAbility(GameplayAbilityHandle handle)
 	{
 		ThrowIfDisposed();
 
-		if (!TryResolve(handle, out int slot))
+		if (!TryResolve(handle, out int slot)
+			|| _abilities[slot].Revoking)
 		{
 			return false;
 		}
 
-		if (_abilities[slot].Active)
-		{
-			EndActivation(slot, GameplayAbilityChangeKind.Cancelled);
+		// Mark the grant as being revoked before its cancellation
+		// notification can reach user code. A handler that tries to
+		// reactivate it, or to revoke it again, is refused instead of
+		// leaving an active grant to be released without cleanup.
+		_abilities[slot].Revoking = true;
 
-			if (!TryResolve(handle, out slot))
+		try
+		{
+			if (_abilities[slot].Active)
 			{
-				return false;
+				EndActivation(slot, GameplayAbilityChangeKind.Cancelled);
+
+				if (!TryResolve(handle, out slot))
+				{
+					return false;
+				}
+			}
+
+			RevokeSlot(slot);
+
+			return true;
+		}
+		finally
+		{
+			if (TryResolve(handle, out slot))
+			{
+				_abilities[slot].Revoking = false;
 			}
 		}
-
-		RevokeSlot(slot);
-
-		return true;
 	}
 
 	/// <summary>
@@ -244,38 +277,47 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// <param name="owner">The entity.</param>
 	/// <returns>The number of grants this call removed.</returns>
 	/// <remarks>
-	/// Abilities granted by a notification raised during the call are
-	/// not revoked by the same call, which bounds the work even if a
-	/// handler grants a replacement every time one is removed.
+	/// The call captures the grants that exist when it starts. Abilities
+	/// granted by a notification raised during the call are not revoked
+	/// by the same call, which bounds the work even if a handler grants
+	/// a replacement every time one is removed.
 	/// </remarks>
 	public int RevokeAll(Entity owner)
 	{
 		ThrowIfDisposed();
 
-		int remaining = GetAbilityCount(owner);
-		int removed = 0;
+		int capacity = GetAbilityCount(owner);
 
-		while (remaining-- > 0)
+		if (capacity == 0)
 		{
-			if (!TryGetEntitySlot(owner, out int segmentIndex, out int offset))
-			{
-				break;
-			}
-
-			int slot = _entitySegments[segmentIndex]![offset].Head;
-
-			if (slot < 0)
-			{
-				break;
-			}
-
-			if (RevokeAbility(CreateHandle(slot)))
-			{
-				removed++;
-			}
+			return 0;
 		}
 
-		return removed;
+		// Capture the grants that exist when the call starts. A
+		// notification raised by a revocation may grant a replacement;
+		// that replacement is not part of this call's scope, even
+		// though it is pushed onto the same owner list.
+		CapturedAbility[] captured = _revokePool.Rent(capacity);
+
+		try
+		{
+			int count = CaptureGrants(owner, captured);
+			int removed = 0;
+
+			for (int index = 0; index < count; index++)
+			{
+				if (RevokeAbility(captured[index].Handle))
+				{
+					removed++;
+				}
+			}
+
+			return removed;
+		}
+		finally
+		{
+			_revokePool.Return();
+		}
 	}
 
 	/// <summary>
@@ -324,7 +366,9 @@ public sealed class GameplayAbilitySystem : IDisposable
 	{
 		ThrowIfDisposed();
 
-		return CountActiveSlots(owner, null, -1);
+		return TryGetEntitySlot(owner, out int segmentIndex, out int offset)
+			? _entitySegments[segmentIndex]![offset].ActiveCount
+			: 0;
 	}
 
 	/// <summary>
@@ -458,15 +502,32 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// A committed activation marks the ability active, cancels active
 	/// abilities whose asset tags match
 	/// <see cref="GameplayAbilityDefinition.CancelAbilitiesWithTags"/>,
-	/// then applies the cost and the cooldown before raising
+	/// then applies the cooldown and the cost before raising
 	/// <see cref="GameplayAbilityChangeKind.Activated"/>. A handler
-	/// therefore observes the paid cost and the granted cooldown tags.
+	/// therefore observes the granted cooldown tags and the paid cost.
+	/// </para>
+	/// <para>
+	/// The cooldown is reversible; the cost is the commit point. A
+	/// cooldown that refuses to apply aborts before payment, and a cost
+	/// that refuses to apply or is no longer affordable rolls the
+	/// cooldown back. A notification that ends the activation after the
+	/// cooldown was applied but before the cost is paid rolls the
+	/// cooldown back too, because the ability never bought it. A failed
+	/// commit raises no ability notification and reports
+	/// <see cref="GameplayAbilityActivationStatus.RejectedByCost"/> or
+	/// <see cref="GameplayAbilityActivationStatus.RejectedByCooldown"/>.
+	/// Once the cost is paid or <see cref="GameplayAbilityChangeKind.Activated"/>
+	/// is raised, the cooldown is retained and an activation ended by a
+	/// later notification reports
+	/// <see cref="GameplayAbilityActivationStatus.EndedDuringActivation"/>.
 	/// </para>
 	/// <para>
 	/// An activation without a handle that still resolves is reported
 	/// as <see cref="GameplayAbilityActivationStatus.NotGranted"/>,
 	/// not thrown: a stale handle is a gameplay race, not a
-	/// programming error.
+	/// programming error. A nested activation of the grant that is
+	/// already being activated reports
+	/// <see cref="GameplayAbilityActivationStatus.AlreadyActive"/>.
 	/// </para>
 	/// </remarks>
 	public GameplayAbilityActivationResult TryActivate(
@@ -485,19 +546,55 @@ public sealed class GameplayAbilitySystem : IDisposable
 				0);
 		}
 
+		if (_abilities[slot].Revoking)
+		{
+			return Rejected(
+				GameplayAbilityActivationStatus.NotGranted,
+				handle,
+				_abilities[slot].Owner,
+				target,
+				_abilities[slot].Level);
+		}
+
+		if (_abilities[slot].Activating)
+		{
+			return Rejected(
+				GameplayAbilityActivationStatus.AlreadyActive,
+				handle,
+				_abilities[slot].Owner,
+				target,
+				_abilities[slot].Level);
+		}
+
 		GameplayAbilityDefinition definition = _abilities[slot].Definition;
 		Entity owner = _abilities[slot].Owner;
 		int level = _abilities[slot].Level;
 
-		if (definition.CooldownEffect is not null
-			&& _tags.HasAny(owner, definition.CooldownTags))
+		if (definition.CooldownEffect is not null)
 		{
-			return Rejected(
-				GameplayAbilityActivationStatus.RejectedByCooldown,
-				handle,
-				owner,
-				target,
-				level);
+			if (_tags.HasAny(owner, definition.CooldownTags))
+			{
+				return Rejected(
+					GameplayAbilityActivationStatus.RejectedByCooldown,
+					handle,
+					owner,
+					target,
+					level);
+			}
+
+			// The cooldown is part of what activation buys. If its
+			// own requirements are unmet, applying it would silently
+			// leave the ability without a cooldown, so reject up front.
+			if (!definition.CooldownEffect.ApplicationRequirements
+				.IsSatisfiedBy(_tags, owner))
+			{
+				return Rejected(
+					GameplayAbilityActivationStatus.RejectedByCooldown,
+					handle,
+					owner,
+					target,
+					level);
+			}
 		}
 
 		if (!CostIsMet(owner, definition.CostEffect))
@@ -540,71 +637,76 @@ public sealed class GameplayAbilitySystem : IDisposable
 				level);
 		}
 
-		if (_abilities[slot].Active)
+		// The guard is set before a retrigger ends the current
+		// instance, so a handler cannot start a nested activation
+		// between the end and the restart.
+		_abilities[slot].Activating = true;
+
+		try
 		{
-			if (!definition.CanRetrigger)
+			if (_abilities[slot].Active)
 			{
-				return Rejected(
-					GameplayAbilityActivationStatus.AlreadyActive,
-					handle,
-					owner,
-					target,
-					level);
+				if (!definition.CanRetrigger)
+				{
+					return Rejected(
+						GameplayAbilityActivationStatus.AlreadyActive,
+						handle,
+						owner,
+						target,
+						level);
+				}
+
+				// Unreal ends the running instance normally and then
+				// starts a fresh activation.
+				EndActivation(slot, GameplayAbilityChangeKind.Ended);
+
+				if (!TryResolve(handle, out slot))
+				{
+					return Rejected(
+						GameplayAbilityActivationStatus.NotGranted,
+						handle,
+						owner,
+						target,
+						level);
+				}
 			}
 
-			// Unreal ends the running instance normally and then
-			// starts a fresh activation.
-			EndActivation(slot, GameplayAbilityChangeKind.Ended);
-
-			if (!TryResolve(handle, out slot))
+			return CommitActivation(
+				handle,
+				slot,
+				definition,
+				owner,
+				target,
+				level);
+		}
+		finally
+		{
+			if (TryResolve(handle, out slot))
 			{
-				return Rejected(
-					GameplayAbilityActivationStatus.NotGranted,
-					handle,
-					owner,
-					target,
-					level);
+				_abilities[slot].Activating = false;
 			}
 		}
+	}
 
+	private GameplayAbilityActivationResult CommitActivation(
+		GameplayAbilityHandle handle,
+		int slot,
+		GameplayAbilityDefinition definition,
+		Entity owner,
+		Entity target,
+		int level)
+	{
 		_abilities[slot].Active = true;
 		_abilities[slot].Target = target;
+		_abilities[slot].ActivationId = NextActivationId();
 
 		_activeCount++;
+
+		GetOrCreateEntitySlot(owner).ActiveCount++;
 
 		if (!definition.CancelAbilitiesWithTags.IsEmpty)
 		{
 			CancelMatching(owner, definition.CancelAbilitiesWithTags, slot);
-		}
-
-		if (definition.CostEffect is not null)
-		{
-			if (!IsStillActive(handle, owner, out slot))
-			{
-				return Rejected(
-					GameplayAbilityActivationStatus.EndedDuringActivation,
-					handle,
-					owner,
-					target,
-					level);
-			}
-
-			_effects.Apply(owner, definition.CostEffect, owner);
-		}
-
-		if (definition.CooldownEffect is not null)
-		{
-			if (!IsStillActive(handle, owner, out slot))
-			{
-				return Rejected(
-					GameplayAbilityActivationStatus.EndedDuringActivation,
-					handle,
-					owner,
-					target,
-					level);
-			}
-
-			_effects.Apply(owner, definition.CooldownEffect, owner);
 		}
 
 		if (!IsStillActive(handle, owner, out slot))
@@ -615,6 +717,108 @@ public sealed class GameplayAbilitySystem : IDisposable
 				owner,
 				target,
 				level);
+		}
+
+		GameplayEffectHandle cooldown = GameplayEffectHandle.None;
+
+		if (definition.CooldownEffect is not null)
+		{
+			GameplayEffectApplyResult applied = _effects.Apply(
+				owner,
+				definition.CooldownEffect,
+				owner);
+
+			if (!CooldownBecameActive(owner, definition, applied))
+			{
+				if (IsStillActive(handle, owner, out slot))
+				{
+					AbortActivation(slot);
+				}
+
+				return Rejected(
+					GameplayAbilityActivationStatus.RejectedByCooldown,
+					handle,
+					owner,
+					target,
+					level);
+			}
+
+			cooldown = applied.Handle;
+
+			if (!IsStillActive(handle, owner, out slot))
+			{
+				// The cooldown was reversible until the cost was paid.
+				// A notification that ended the activation before that
+				// point must not leave the owner cooling down for an
+				// ability that never committed.
+				RollbackCooldown(cooldown);
+
+				return Rejected(
+					GameplayAbilityActivationStatus.EndedDuringActivation,
+					handle,
+					owner,
+					target,
+					level);
+			}
+		}
+
+		if (definition.CostEffect is not null)
+		{
+			// Cancellation callbacks and the cooldown's modifiers may
+			// have spent or changed the resource after the initial
+			// check. Re-check immediately before the irreversible
+			// payment, while the cooldown can still be rolled back.
+			if (!CostIsMet(owner, definition.CostEffect))
+			{
+				if (IsStillActive(handle, owner, out slot))
+				{
+					AbortActivation(slot);
+				}
+
+				RollbackCooldown(cooldown);
+
+				return Rejected(
+					GameplayAbilityActivationStatus.RejectedByCost,
+					handle,
+					owner,
+					target,
+					level);
+			}
+
+			GameplayEffectApplyResult applied = _effects.Apply(
+				owner,
+				definition.CostEffect,
+				owner);
+
+			if (applied.Status != GameplayEffectApplyStatus.InstantExecuted)
+			{
+				// The cost was the commit point. Paying it is the last
+				// irreversible step, so a rejected cost rolls the
+				// reversible cooldown back and ends the attempt.
+				if (IsStillActive(handle, owner, out slot))
+				{
+					AbortActivation(slot);
+				}
+
+				RollbackCooldown(cooldown);
+
+				return Rejected(
+					GameplayAbilityActivationStatus.RejectedByCost,
+					handle,
+					owner,
+					target,
+					level);
+			}
+
+			if (!IsStillActive(handle, owner, out slot))
+			{
+				return Rejected(
+					GameplayAbilityActivationStatus.EndedDuringActivation,
+					handle,
+					owner,
+					target,
+					level);
+			}
 		}
 
 		RaiseChange(GameplayAbilityChangeKind.Activated, slot);
@@ -649,6 +853,28 @@ public sealed class GameplayAbilitySystem : IDisposable
 			level);
 	}
 
+	private bool CooldownBecameActive(
+		Entity owner,
+		GameplayAbilityDefinition definition,
+		GameplayEffectApplyResult applied)
+	{
+		if (applied.Status is not (
+			GameplayEffectApplyStatus.Applied
+			or GameplayEffectApplyStatus.Stacked))
+		{
+			return false;
+		}
+
+		// The cooldown check reads tags, so another effect may have
+		// supplied the same tag while this instance was being applied.
+		// An instance that is active but inhibited has no tag yet and
+		// still satisfies the requirement; a handler that removed the
+		// instance leaves neither a tag nor a live handle.
+		return _tags.HasAny(owner, definition.CooldownTags)
+			|| (!applied.Handle.IsNone
+				&& _effects.TryGetEffect(applied.Handle, out _));
+	}
+
 	/// <summary>
 	/// Attempts the activation bound to an input.
 	/// </summary>
@@ -658,37 +884,46 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// The number of grants bound to the input that activated.
 	/// </returns>
 	/// <remarks>
-	/// Every grant bound to the input is attempted, most recently
-	/// granted first — the order the per-owner list is stored in. The
-	/// separate attempt stamps make the loop independent of
-	/// notifications that revoke or add grants while it runs.
+	/// Every grant bound to the input when the call starts is attempted,
+	/// most recently granted first — the order the per-owner list is
+	/// stored in. A grant added by a notification is not part of that
+	/// press, and a nested input call does not share its scope.
 	/// </remarks>
 	public int TryActivateByInput(Entity owner, int inputId)
 	{
 		ThrowIfDisposed();
 
-		int stamp = unchecked(++_nextAttemptStamp);
-		int remaining = CountGrantedWithInput(owner, inputId);
-		int activated = 0;
+		int capacity = GetAbilityCount(owner);
 
-		while (remaining-- > 0)
+		if (capacity == 0)
 		{
-			int slot = FindGrantedWithInput(owner, inputId, stamp);
-
-			if (slot < 0)
-			{
-				break;
-			}
-
-			_abilities[slot].AttemptStamp = stamp;
-
-			if (TryActivate(CreateHandle(slot)).Succeeded)
-			{
-				activated++;
-			}
+			return 0;
 		}
 
-		return activated;
+		// Capture the grants that exist when the call starts. A grant
+		// added by a notification is not part of this input press, so
+		// it cannot consume an attempt that belongs to an older grant.
+		CapturedAbility[] captured = _inputPool.Rent(capacity);
+
+		try
+		{
+			int count = CaptureInputGrants(owner, inputId, captured);
+			int activated = 0;
+
+			for (int index = 0; index < count; index++)
+			{
+				if (TryActivate(captured[index].Handle).Succeeded)
+				{
+					activated++;
+				}
+			}
+
+			return activated;
+		}
+		finally
+		{
+			_inputPool.Return();
+		}
 	}
 
 	/// <summary>
@@ -738,6 +973,11 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// </summary>
 	/// <param name="owner">The entity.</param>
 	/// <returns>The number of abilities this call cancelled.</returns>
+	/// <remarks>
+	/// The call captures the abilities that are active when it starts.
+	/// An ability activated by a <see cref="GameplayAbilityChangeKind.Cancelled"/>
+	/// notification is a new activation and survives the call.
+	/// </remarks>
 	public int CancelAll(Entity owner)
 	{
 		ThrowIfDisposed();
@@ -753,7 +993,9 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// <returns>The number of abilities this call cancelled.</returns>
 	/// <remarks>
 	/// Matching is hierarchical, so cancelling <c>Ability</c> also
-	/// cancels an ability whose asset tag is <c>Ability.Dash</c>.
+	/// cancels an ability whose asset tag is <c>Ability.Dash</c>. Like
+	/// <see cref="CancelAll"/>, the call captures the active abilities
+	/// when it starts; one activated by a notification survives.
 	/// </remarks>
 	public int CancelByTags(Entity owner, GameplayTagSet tags)
 	{
@@ -803,17 +1045,20 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// <param name="owner">The entity.</param>
 	/// <param name="definition">The ability definition.</param>
 	/// <returns>
-	/// The remaining duration of the cooldown effect, zero when no
-	/// instance is active, or infinity for an infinite cooldown.
+	/// The longest remaining duration among active effects that grant
+	/// the cooldown tags, zero when none is active, or infinity for an
+	/// infinite cooldown.
 	/// </returns>
 	/// <remarks>
-	/// Unreal queries the active effects that grant the cooldown tags.
-	/// VOLT looks up the ability's own cooldown effect, which is the
-	/// only instance that can start one; the ability cannot activate
-	/// again while its tags are present, so at most one instance
-	/// exists. An inhibited cooldown still reports its remaining time,
-	/// because Unreal's <c>GetActiveEffectsTimeRemaining</c> ignores
-	/// inhibition.
+	/// Unreal queries every active effect that grants the cooldown
+	/// tags with <c>MakeQuery_MatchAnyOwningTags</c> and takes the
+	/// longest remaining duration. VOLT asks the effect system for the
+	/// same maximum, so an unrelated effect that grants a cooldown tag
+	/// contributes its duration instead of being invisible to the
+	/// query. A tag present without an effect behind it still blocks
+	/// activation but has no duration to report, exactly as in Unreal.
+	/// An inhibited instance still reports its remaining time, because
+	/// <c>GetActiveEffectsTimeRemaining</c> ignores inhibition.
 	/// </remarks>
 	public double GetCooldownTimeRemaining(
 		Entity owner,
@@ -822,16 +1067,9 @@ public sealed class GameplayAbilitySystem : IDisposable
 		ThrowIfDisposed();
 		ArgumentNullException.ThrowIfNull(definition);
 
-		if (definition.CooldownEffect is null
-			|| !_effects.TryFindEffect(
-				owner,
-				definition.CooldownEffect,
-				out ActiveGameplayEffect effect))
-		{
-			return 0d;
-		}
-
-		return effect.RemainingDuration;
+		return definition.CooldownEffect is null
+			? 0d
+			: _effects.GetMaxRemainingDuration(owner, definition.CooldownTags);
 	}
 
 	/// <inheritdoc />
@@ -848,10 +1086,15 @@ public sealed class GameplayAbilitySystem : IDisposable
 		Changed = null;
 		_abilities = [];
 		_entitySegments = [];
+		_cancelPool.Clear();
+		_tagCancelPool.Clear();
+		_inputPool.Clear();
+		_revokePool.Clear();
 		_abilitySlotCount = 0;
 		_freeAbilitySlot = -1;
 		_grantedCount = 0;
 		_activeCount = 0;
+		_nextActivationId = 0;
 		_disposed = true;
 
 		GC.SuppressFinalize(this);
@@ -929,7 +1172,8 @@ public sealed class GameplayAbilitySystem : IDisposable
 		int ignoreSlot)
 	{
 		if (assetTags.IsEmpty
-			|| !TryGetEntitySlot(owner, out int segmentIndex, out int offset))
+			|| !TryGetEntitySlot(owner, out int segmentIndex, out int offset)
+			|| _entitySegments[segmentIndex]![offset].ActiveCount == 0)
 		{
 			return false;
 		}
@@ -974,29 +1218,57 @@ public sealed class GameplayAbilitySystem : IDisposable
 		GameplayTagSet? tags,
 		int ignoreSlot)
 	{
-		int remaining = CountActiveSlots(owner, tags, ignoreSlot);
-		int cancelled = 0;
+		int capacity = GetAbilityCount(owner);
 
-		while (remaining-- > 0)
+		if (capacity == 0)
 		{
-			int slot = FindActiveSlot(owner, tags, ignoreSlot);
-
-			if (slot < 0)
-			{
-				break;
-			}
-
-			EndActivation(slot, GameplayAbilityChangeKind.Cancelled);
-			cancelled++;
+			return 0;
 		}
 
-		return cancelled;
+		// Capture the abilities that are active when the call starts.
+		// An ability activated by a Cancelled notification is a new
+		// activation and is left alone; an ability that was already in
+		// scope but has since been reactivated is also left alone,
+		// because its activation identity changed.
+		CapturedAbility[] captured = _cancelPool.Rent(capacity);
+
+		try
+		{
+			int count = CaptureActiveAbilities(
+				owner,
+				tags,
+				ignoreSlot,
+				captured);
+			int cancelled = 0;
+
+			for (int index = 0; index < count; index++)
+			{
+				CapturedAbility candidate = captured[index];
+
+				if (!TryResolve(candidate.Handle, out int slot)
+					|| !_abilities[slot].Active
+					|| _abilities[slot].ActivationId != candidate.ActivationId)
+				{
+					continue;
+				}
+
+				EndActivation(slot, GameplayAbilityChangeKind.Cancelled);
+				cancelled++;
+			}
+
+			return cancelled;
+		}
+		finally
+		{
+			_cancelPool.Return();
+		}
 	}
 
-	private int CountActiveSlots(
+	private int CaptureActiveAbilities(
 		Entity owner,
 		GameplayTagSet? tags,
-		int ignoreSlot)
+		int ignoreSlot,
+		CapturedAbility[] destination)
 	{
 		if (!TryGetEntitySlot(owner, out int segmentIndex, out int offset))
 		{
@@ -1014,7 +1286,9 @@ public sealed class GameplayAbilitySystem : IDisposable
 				&& slot != ignoreSlot
 				&& (tags is null || candidate.Definition.AssetTags.HasAny(tags)))
 			{
-				count++;
+				destination[count++] = new CapturedAbility(
+					CreateHandle(slot),
+					candidate.ActivationId);
 			}
 
 			slot = candidate.NextOnEntity;
@@ -1023,36 +1297,10 @@ public sealed class GameplayAbilitySystem : IDisposable
 		return count;
 	}
 
-	private int FindActiveSlot(
+	private int CaptureInputGrants(
 		Entity owner,
-		GameplayTagSet? tags,
-		int ignoreSlot)
-	{
-		if (!TryGetEntitySlot(owner, out int segmentIndex, out int offset))
-		{
-			return -1;
-		}
-
-		int slot = _entitySegments[segmentIndex]![offset].Head;
-
-		while (slot >= 0)
-		{
-			ref AbilitySlot candidate = ref _abilities[slot];
-
-			if (candidate.Active
-				&& slot != ignoreSlot
-				&& (tags is null || candidate.Definition.AssetTags.HasAny(tags)))
-			{
-				return slot;
-			}
-
-			slot = candidate.NextOnEntity;
-		}
-
-		return -1;
-	}
-
-	private int CountGrantedWithInput(Entity owner, int inputId)
+		int inputId,
+		CapturedAbility[] destination)
 	{
 		if (!TryGetEntitySlot(owner, out int segmentIndex, out int offset))
 		{
@@ -1068,41 +1316,15 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 			if (candidate.InputId == inputId)
 			{
-				count++;
+				destination[count++] = new CapturedAbility(
+					CreateHandle(slot),
+					candidate.ActivationId);
 			}
 
 			slot = candidate.NextOnEntity;
 		}
 
 		return count;
-	}
-
-	private int FindGrantedWithInput(
-		Entity owner,
-		int inputId,
-		int stamp)
-	{
-		if (!TryGetEntitySlot(owner, out int segmentIndex, out int offset))
-		{
-			return -1;
-		}
-
-		int slot = _entitySegments[segmentIndex]![offset].Head;
-
-		while (slot >= 0)
-		{
-			ref AbilitySlot candidate = ref _abilities[slot];
-
-			if (candidate.InputId == inputId
-				&& candidate.AttemptStamp != stamp)
-			{
-				return slot;
-			}
-
-			slot = candidate.NextOnEntity;
-		}
-
-		return -1;
 	}
 
 	private bool EndActivation(int slot, GameplayAbilityChangeKind kind)
@@ -1114,13 +1336,48 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		// Mark the ability inactive before the notification reaches
 		// user code, so a handler that queries it sees it ended.
-		_abilities[slot].Active = false;
-
-		_activeCount--;
+		MarkInactive(slot);
 
 		RaiseChange(kind, slot);
 
 		return true;
+	}
+
+	private void AbortActivation(int slot)
+	{
+		// A commit that never raised Activated is rejected rather than
+		// cancelled: it is rolled back silently, like a failed check.
+		if (_abilities[slot].Active)
+		{
+			MarkInactive(slot);
+		}
+	}
+
+	private void RollbackCooldown(GameplayEffectHandle cooldown)
+	{
+		if (!cooldown.IsNone)
+		{
+			_effects.Remove(cooldown);
+		}
+	}
+
+	private void MarkInactive(int slot)
+	{
+		Entity owner = _abilities[slot].Owner;
+
+		_abilities[slot].Active = false;
+
+		_activeCount--;
+
+		if (TryGetEntitySlot(owner, out int segmentIndex, out int offset))
+		{
+			ref EntityAbilities state = ref _entitySegments[segmentIndex]![offset];
+
+			if (state.ActiveCount > 0)
+			{
+				state.ActiveCount--;
+			}
+		}
 	}
 
 	private void HandleTagsChanged(Entity entity)
@@ -1130,22 +1387,95 @@ public sealed class GameplayAbilitySystem : IDisposable
 			return;
 		}
 
-		int remaining = CountCancelledByTags(entity);
+		ref EntityAbilities state = ref _entitySegments[segmentIndex]![offset];
 
-		while (remaining-- > 0)
+		if (state.ActiveCount == 0)
 		{
-			int slot = FindCancelledByTags(entity);
+			return;
+		}
 
-			if (slot < 0)
+		if (state.CancellingByTags)
+		{
+			// A cancellation handler changed tags again. Run another
+			// pass after the current one instead of recursing, which
+			// also means an ability activated by a handler is evaluated
+			// by the tag change it observed.
+			state.TagsChangedAgain = true;
+			return;
+		}
+
+		state.CancellingByTags = true;
+
+		try
+		{
+			for (int pass = 0; pass < MaxTagCancelPasses; pass++)
 			{
-				break;
-			}
+				if (!TryGetEntitySlot(entity, out segmentIndex, out offset))
+				{
+					return;
+				}
 
-			EndActivation(slot, GameplayAbilityChangeKind.Cancelled);
+				_entitySegments[segmentIndex]![offset].TagsChangedAgain = false;
+
+				CancelByTagPass(entity);
+
+				if (!TryGetEntitySlot(entity, out segmentIndex, out offset)
+					|| !_entitySegments[segmentIndex]![offset].TagsChangedAgain)
+				{
+					return;
+				}
+			}
+		}
+		finally
+		{
+			if (TryGetEntitySlot(entity, out segmentIndex, out offset))
+			{
+				ref EntityAbilities final = ref _entitySegments[segmentIndex]![offset];
+
+				final.CancellingByTags = false;
+				final.TagsChangedAgain = false;
+			}
 		}
 	}
 
-	private int CountCancelledByTags(Entity entity)
+	private void CancelByTagPass(Entity entity)
+	{
+		int capacity = GetAbilityCount(entity);
+
+		if (capacity == 0)
+		{
+			return;
+		}
+
+		CapturedAbility[] captured = _tagCancelPool.Rent(capacity);
+
+		try
+		{
+			int count = CaptureTagCancelled(entity, captured);
+
+			for (int index = 0; index < count; index++)
+			{
+				CapturedAbility candidate = captured[index];
+
+				if (!TryResolve(candidate.Handle, out int slot)
+					|| !_abilities[slot].Active
+					|| _abilities[slot].ActivationId != candidate.ActivationId)
+				{
+					continue;
+				}
+
+				EndActivation(slot, GameplayAbilityChangeKind.Cancelled);
+			}
+		}
+		finally
+		{
+			_tagCancelPool.Return();
+		}
+	}
+
+	private int CaptureTagCancelled(
+		Entity entity,
+		CapturedAbility[] destination)
 	{
 		if (!TryGetEntitySlot(entity, out int segmentIndex, out int offset))
 		{
@@ -1163,7 +1493,9 @@ public sealed class GameplayAbilitySystem : IDisposable
 				&& !candidate.Definition.CancelOnTags.IsEmpty
 				&& _tags.HasAny(entity, candidate.Definition.CancelOnTags))
 			{
-				count++;
+				destination[count++] = new CapturedAbility(
+					CreateHandle(slot),
+					candidate.ActivationId);
 			}
 
 			slot = candidate.NextOnEntity;
@@ -1172,30 +1504,28 @@ public sealed class GameplayAbilitySystem : IDisposable
 		return count;
 	}
 
-	private int FindCancelledByTags(Entity entity)
+	private int CaptureGrants(Entity owner, CapturedAbility[] destination)
 	{
-		if (!TryGetEntitySlot(entity, out int segmentIndex, out int offset))
+		if (!TryGetEntitySlot(owner, out int segmentIndex, out int offset))
 		{
-			return -1;
+			return 0;
 		}
 
+		int count = 0;
 		int slot = _entitySegments[segmentIndex]![offset].Head;
 
 		while (slot >= 0)
 		{
 			ref AbilitySlot candidate = ref _abilities[slot];
 
-			if (candidate.Active
-				&& !candidate.Definition.CancelOnTags.IsEmpty
-				&& _tags.HasAny(entity, candidate.Definition.CancelOnTags))
-			{
-				return slot;
-			}
+			destination[count++] = new CapturedAbility(
+				CreateHandle(slot),
+				candidate.ActivationId);
 
 			slot = candidate.NextOnEntity;
 		}
 
-		return -1;
+		return count;
 	}
 
 	private void HandleEntityDestroyed(Entity entity)
@@ -1235,6 +1565,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		_entitySegments[segmentIndex]![offset].Head = -1;
 		_entitySegments[segmentIndex]![offset].Count = 0;
+		_entitySegments[segmentIndex]![offset].ActiveCount = 0;
 	}
 
 	private void RevokeSlot(int slot)
@@ -1270,6 +1601,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 		ref AbilitySlot ability = ref _abilities[slot];
 
 		return new GameplayAbilityHandle(
+			_systemId,
 			ability.Owner,
 			slot,
 			ability.Generation);
@@ -1287,7 +1619,8 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		ref AbilitySlot ability = ref _abilities[handle.Slot];
 
-		return ability.Generation == handle.Generation
+		return handle.SystemId == _systemId
+			&& ability.Generation == handle.Generation
 			&& ability.Owner == handle.Owner;
 	}
 
@@ -1420,12 +1753,54 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		if (slot.Generation != entity.Generation)
 		{
+			// An earlier destruction handler may have recycled the
+			// index before this system observed the old entity's
+			// destruction. The old grants must be released here, or
+			// they would keep their slots and counters forever. A
+			// never-used segment has a zero generation and no grants;
+			// its default head is not a list to walk.
+			if (slot.Count > 0)
+			{
+				ReleaseStaleGrants(ref slot);
+			}
+
 			slot.Generation = entity.Generation;
 			slot.Head = -1;
 			slot.Count = 0;
+			slot.ActiveCount = 0;
+			slot.CancellingByTags = false;
+			slot.TagsChangedAgain = false;
 		}
 
 		return ref slot;
+	}
+
+	private void ReleaseStaleGrants(ref EntityAbilities state)
+	{
+		int slot = state.Head;
+
+		while (slot >= 0)
+		{
+			int next = _abilities[slot].NextOnEntity;
+
+			if (_abilities[slot].Active)
+			{
+				_activeCount--;
+			}
+
+			// The old owner is already dead, so its grants are
+			// released silently, exactly as in HandleEntityDestroyed.
+			Unlink(slot);
+			ReleaseSlot(slot);
+
+			_grantedCount--;
+
+			slot = next;
+		}
+
+		state.Head = -1;
+		state.Count = 0;
+		state.ActiveCount = 0;
 	}
 
 	private bool TryGetEntitySlot(
@@ -1495,9 +1870,77 @@ public sealed class GameplayAbilitySystem : IDisposable
 		return generation == 0 ? 1 : generation;
 	}
 
+	private static uint AllocateSystemId()
+	{
+		// System identity is process-global and never reused, so a handle
+		// can never be mistaken for one from a later system. Wrapping to
+		// zero is skipped because zero is the default handle's id.
+		uint id = unchecked((uint)Interlocked.Increment(ref s_nextSystemId));
+
+		return id == 0
+			? unchecked((uint)Interlocked.Increment(ref s_nextSystemId))
+			: id;
+	}
+
+	private uint NextActivationId()
+	{
+		uint id = unchecked(++_nextActivationId);
+
+		return id == 0 ? unchecked(++_nextActivationId) : id;
+	}
+
 	private void ThrowIfDisposed()
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
+	}
+
+	private readonly struct CapturedAbility
+	{
+		public CapturedAbility(GameplayAbilityHandle handle, uint activationId)
+		{
+			Handle = handle;
+			ActivationId = activationId;
+		}
+
+		public GameplayAbilityHandle Handle { get; }
+		public uint ActivationId { get; }
+	}
+
+	private sealed class CapturePool
+	{
+		private readonly List<CapturedAbility[]> _buffers = [];
+		private int _depth;
+
+		public CapturedAbility[] Rent(int capacity)
+		{
+			if (_depth == _buffers.Count)
+			{
+				_buffers.Add(new CapturedAbility[Math.Max(16, capacity)]);
+			}
+
+			CapturedAbility[] buffer = _buffers[_depth++];
+
+			if (buffer.Length < capacity)
+			{
+				Array.Resize(
+					ref buffer,
+					Math.Max(capacity, buffer.Length * 2));
+
+				_buffers[_depth - 1] = buffer;
+			}
+
+			return buffer;
+		}
+		public void Return()
+		{
+			_depth--;
+		}
+
+		public void Clear()
+		{
+			_buffers.Clear();
+			_depth = 0;
+		}
 	}
 
 	private struct AbilitySlot
@@ -1507,11 +1950,13 @@ public sealed class GameplayAbilitySystem : IDisposable
 		public Entity Target;
 		public int Level;
 		public int InputId;
-		public int AttemptStamp;
 		public int NextOnEntity;
 		public int PreviousOnEntity;
 		public uint Generation;
+		public uint ActivationId;
 		public bool Active;
+		public bool Activating;
+		public bool Revoking;
 	}
 
 	private struct EntityAbilities
@@ -1519,5 +1964,8 @@ public sealed class GameplayAbilitySystem : IDisposable
 		public uint Generation;
 		public int Head;
 		public int Count;
+		public int ActiveCount;
+		public bool CancellingByTags;
+		public bool TagsChangedAgain;
 	}
 }

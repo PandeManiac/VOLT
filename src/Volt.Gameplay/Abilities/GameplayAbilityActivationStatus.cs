@@ -57,8 +57,14 @@ public enum GameplayAbilityActivationStatus : byte
 	AlreadyActive = 7,
 
 	/// <summary>
-	/// The activation was committed, but a notification reached during
-	/// it revoked the ability, cancelled it, or destroyed its owner.
+	/// The ability ended during the activation call: a notification
+	/// revoked it, cancelled it, or destroyed its owner before the
+	/// result was returned.
 	/// </summary>
+	/// <remarks>
+	/// Reversible state applied before the cost was paid, such as the
+	/// cooldown, is rolled back. State applied at or after the commit
+	/// point is retained.
+	/// </remarks>
 	EndedDuringActivation = 8
 }
