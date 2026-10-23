@@ -299,6 +299,108 @@ while active. Grants are validated when built: a non-instant cost, an
 instant cooldown, a cooldown without granted tags, and a cooldown that
 grants the ability's own cancel tag all throw before reaching gameplay.
 
+## Gameplay events
+
+```csharp
+using Volt.Gameplay.Events;
+
+GameplayTag damageReceived = tags.Register("Event.Damage.Received");
+
+using GameplayEventSystem events = new(world);
+
+GameplayEventSubscription subscription = events.Subscribe(
+    damageReceived,
+    gameplayEvent =>
+    {
+        if (gameplayEvent.Payload.TryGetNumber(out double amount))
+        {
+            Console.WriteLine($"{amount} damage to {gameplayEvent.Target}");
+        }
+    },
+    owner: player);
+
+events.Publish(new GameplayEvent(
+    damageReceived,
+    source: attacker,
+    target: player,
+    payload: GameplayEventPayload.FromNumber(12.5)));
+
+events.Unsubscribe(subscription);
+```
+
+Subscriptions are indexed by tag, so publishing touches only the
+buckets that can match: the exact tag, its ancestors for hierarchical
+listeners, and the wildcard bucket. Listeners on unrelated tags are
+never scanned. Exact matching is the default; pass
+`GameplayEventMatch.Hierarchical` to receive descendants. Dispatch
+captures the matching subscriptions before invoking any handler and
+revalidates each delivery, so a handler may unsubscribe itself,
+subscribe another listener, publish another event, cancel an ability,
+or destroy an entity without invalidating the iteration. A subscription
+scoped to an entity is removed when that entity is destroyed, and the
+stored generation stops a recycled index from reviving it. Recursive
+publishing is bounded at 16 levels.
+
+## Ability tasks
+
+```csharp
+using Volt.Gameplay.Abilities;
+using Volt.Gameplay.Tasks;
+
+GameplayAbilityDefinition chargedDash = GameplayAbilityDefinition
+    .Create("Ability.ChargedDash")
+    .AssetTags(tags.Register("Ability.Dash"))
+    .Cost(staminaCost)
+    .Cooldown(dashCooldown)
+    .CancelOnTags(tags.Register("Status.Stunned"))
+    .Plan(
+        GameplayAbilityPlan
+            .Create()
+            .Wait(0.25f)
+            .WaitEvent(tags.Register("Event.Dash.Released"))
+            .ApplyEffect(dashBuff)
+            .WaitTag(
+                tags.Register("Status.Dashing"),
+                GameplayTagWaitMode.Absent)
+            .End()
+            .Build())
+    .Build();
+
+GameplayAbilityHandle handle = abilities.GiveAbility(player, chargedDash);
+
+GameplayAbilityActivationResult result = abilities.TryActivate(handle);
+
+// Keep the token to start application tasks on this activation.
+GameplayAbilityActivation activation = result.Activation;
+
+GameplayAbilityTaskHandle task = abilities.Tasks.WaitDuration(
+    activation,
+    0.5f);
+
+abilities.Tasks.Changed += change =>
+    Console.WriteLine($"{change.Kind}: {change.TaskKind}");
+```
+
+Tasks are owned by an activation token, not just a grant, so a retrigger
+cannot reuse an earlier activation's context. A task handle carries the
+task system, owner, slot generation, and activation id; completing,
+cancelling, retriggering, revoking, or destroying the owner retires it.
+`Cancel`, `Complete`, and `TryGetTask` return `false` for a stale handle
+instead of touching a recycled slot.
+
+A plan is data, and every step runs on the same low-level task runtime
+as application code. `Wait` and `WaitTag` use a deadline heap;
+`WaitEvent` uses the event router; a tag change visits only the
+owner's tag-condition tasks, not its duration or event tasks. Ending an
+ability releases all of its tasks before the ability notification, and
+the `Cancelled` task notifications follow the release. A zero-duration
+task completes on the next positive `Advance`, a zero step is a pause,
+and tasks created during an advance wait for the next advance.
+
+Run `samples/Volt.GameplayDemo` for the complete charged-dash example,
+including a stun interruption, overlapping abilities, stale handles,
+and owner destruction.
+
 ## Projects
 
 | Type | Purpose |
@@ -325,6 +427,17 @@ grants the ability's own cancel tag all throw before reaching gameplay.
 | `GameplayAbilityHandle` | System- and generation-checked handle to a grant |
 | `GameplayAbilityChange` | Notification payload for every ability transition |
 | `GrantedGameplayAbility` | Read-only snapshot of one grant |
+| `GameplayEventSystem` | Tag-indexed gameplay event routing and scoped subscriptions |
+| `GameplayEventSubscription` | System- and generation-checked subscription handle |
+| `GameplayEvent` | Value-type event with tag, source, target, and payload |
+| `GameplayEventPayload` | Discriminated numeric, entity, or tag payload |
+| `GameplayAbilityTaskSystem` | Pooled task storage, deadlines, and event or tag waits |
+| `GameplayAbilityTaskHandle` | System-, owner-, generation-, and activation-checked task handle |
+| `GameplayAbilityTaskChange` | Notification payload for started, completed, or cancelled tasks |
+| `GameplayAbilityTaskInfo` | Read-only snapshot of one pending task |
+| `GameplayAbilityPlan` | Immutable authored wait and action sequence |
+| `GameplayAbilityPlanBuilder` | Fluent, validating plan authoring path |
+| `GameplayAbilityActivation` | Grant plus activation id, used as task ownership |
 
 ## Verification
 
@@ -336,6 +449,13 @@ dotnet run -c Release -- --filter '*GameplayTagBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityScalingBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayLifecycleBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayEventBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAbilityTaskBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAbilityTaskIdleBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAbilityTaskScalingBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAbilityTaskDestructionBenchmarks*'
+
+dotnet run --project samples/Volt.GameplayDemo -c Release
 ```
 
 The test suite includes differential tests that reproduce Unreal's own
@@ -344,8 +464,12 @@ the 5.8.4 source, lifecycle and invalid-input cases, adversarial
 destruction ordering, cross-store recycling, re-entrancy and notification
 exception cases, a concurrent-registration test, and allocation guards
 asserting that warmed-up matching, container mutation, effect
-application, effect ticking, ability granting, ability activation, and
-entity recycling with live gameplay state allocate zero managed bytes.
+application, effect ticking, ability granting, ability activation,
+event dispatch and subscription, task start, event and tag waits, bulk
+task expiry, ability ending with tasks, and entity recycling with live
+gameplay state allocate zero managed bytes. The gameplay demo is a
+separate executable smoke test whose assertions cover the combined
+charged-dash lifecycle.
 
 `LifecycleStressHarness` adds a seed-replayable state machine over all
 four stores. It generates operations at the top level and from

@@ -48,7 +48,9 @@ It also implements gameplay attributes with registered definitions, base and cur
 
 Gameplay effects are implemented on top of those stores: instant, duration, infinite, and periodic execution, reference-counted granted tags, per-source and per-target stacking with limits and refresh policies, application, ongoing and removal tag requirements, inhibition, and deterministic expiry and ticking from a single due-time heap. Idle effects cost one comparison per simulated step regardless of how many are active, and applying or removing one allocates nothing once warmed up.
 
-Abilities are implemented on top of effects: definitions with owner and target tag requirements, blocking by active abilities, instant costs checked for affordability, cooldowns that are the tags their effect grants, cancellation by tag or by another ability's asset tags, and grants that are released when their owner is destroyed. Activation is a status, not an exception; a rejected attempt touches nothing. Every ability operation is flat in world size, and a warmed-up activation allocates nothing. Their behavior, Unreal source references, and intentional differences are tracked in [the gameplay specification](src/Volt.Gameplay/GameplaySpec.md).
+Abilities are implemented on top of effects: definitions with owner and target tag requirements, blocking by active abilities, instant costs checked for affordability, cooldowns that are the tags their effect grants, cancellation by tag or by another ability's asset tags, and grants that are released when their owner is destroyed. Activation is a status, not an exception; a rejected attempt touches nothing. Every ability operation is flat in world size, and a warmed-up activation allocates nothing.
+
+Gameplay events are tag-indexed values with a source, a target, and a typed payload. Dispatch visits the exact tag, its ancestors for hierarchical listeners, and the wildcard bucket, so unrelated subscriptions are never scanned; scoped subscriptions are removed when their owner is destroyed, and reentrant handlers are captured and revalidated rather than allowed to invalidate the iteration. Ability tasks are pooled, generational records owned by an activation token: duration waits use a deadline heap, event waits use the event index, and tag waits use a per-owner index updated from tag changes. Plans compose those waits and actions as data, and an ability's tasks are released before its end notification. One hundred thousand idle tasks cost the same as one, and warmed-up task and event paths allocate nothing. Their behavior, Unreal references, and intentional differences are tracked in [the gameplay specification](src/Volt.Gameplay/GameplaySpec.md).
 
 ### Platform and graphics
 
@@ -68,7 +70,7 @@ See the [Vulkan surface demo README](samples/Volt.VulkanSurfaceDemo/README.md) f
 | --- | --- |
 | `Volt.Core` | Native memory arenas and buffers, and the deterministic game-loop timing foundation |
 | `Volt.Ecs` | Entities, components, archetypes, queries, and chunk storage |
-| `Volt.Gameplay` | Optional gameplay systems: hierarchical tags, attributes, effects, and abilities |
+| `Volt.Gameplay` | Optional gameplay systems: hierarchical tags, attributes, effects, abilities, events, and tasks |
 | `Volt.Jobs` | Job scheduling and parallel batch execution |
 | `Volt.Graphics` | Graphics device abstractions |
 | `Volt.Graphics.Vulkan` | Vulkan graphics backend and native resource management |
@@ -77,7 +79,7 @@ See the [Vulkan surface demo README](samples/Volt.VulkanSurfaceDemo/README.md) f
 | `Volt.*.Tests` | Automated tests for the corresponding engine subsystems |
 | `Volt.Benchmarks` | BenchmarkDotNet performance benchmarks |
 
-The `samples/` directory contains focused demonstrations of platform and Vulkan functionality. Samples are integration and diagnostic tools, not yet a public game-creation workflow.
+The `samples/` directory contains focused demonstrations of platform, Vulkan, and gameplay functionality. Samples are integration and diagnostic tools, not yet a public game-creation workflow.
 
 ## Building
 
@@ -136,7 +138,7 @@ The demo displays a color-interpolated triangle against a dark background for a 
 
 VOLT uses [BenchmarkDotNet](https://github.com/dotnet/BenchmarkDotNet) to measure performance-sensitive operations.
 
-The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration, plus empty, fixed-step, idle-scheduled, and due-scheduled game-loop frames, time-scaled frames at `1.0x`, `0.5x`, and `2.0x`, the separate costs of capturing transform history, interpolating poses, extracting interpolated render instances, and capturing under entity churn, gameplay tag matching, query evaluation, authoring, name resolution, effect application, stacking, idle stepping, periodic ticking, ability granting, activation, blocking, input activation, cancellation, and behavior from 1 to 256 grants on one owner.
+The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration, plus empty, fixed-step, idle-scheduled, and due-scheduled game-loop frames, time-scaled frames at `1.0x`, `0.5x`, and `2.0x`, the separate costs of capturing transform history, interpolating poses, extracting interpolated render instances, and capturing under entity churn, gameplay tag matching, query evaluation, authoring, name resolution, effect application, stacking, idle stepping, periodic ticking, ability granting, activation, blocking, input activation, cancellation, and behavior from 1 to 256 grants on one owner, plus gameplay event dispatch with zero, relevant, irrelevant, and hierarchical listeners, single-task creation, completion, and cancellation, idle task populations up to 100,000, batch expiry, batch cancellation, ability ending with pending tasks, and owner destruction with pending tasks.
 
 Benchmark results are intended to inform implementation decisions, not merely to maximize reported throughput. Results should be evaluated alongside correctness, memory consumption, and workload characteristics.
 

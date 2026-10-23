@@ -3,7 +3,7 @@
 **Reference engine:** Unreal Engine 5.8.4, local source at
 `/home/berds/applications/unreal-engine-5.8.4`.
 **Status:** living document. Sections are added as milestones land.
-**Last updated:** 2026-10-22.
+**Last updated:** 2026-10-23.
 
 This document records the behavior VOLT implements, where that behavior
 comes from, and where VOLT deliberately differs. It is the source of
@@ -53,6 +53,27 @@ whatever the current implementation happens to do.
 - Local reference project: `/home/berds/programming/unreal/VoltUnrealReference`.
   `Config/DefaultGameplayTags.ini` declares `Ability.Dash`,
   `Status.Burning`, and `Status.Stunned`.
+- Epic, *Gameplay Ability Tasks in Unreal Engine* (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/gameplay-ability-tasks-in-unreal-engine>
+  — task lifetime, `ReadyForActivation`, ending with the ability.
+- Epic, `UAbilityTask` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/GameplayAbilities/UAbilityTask>
+  — the owning `Ability` and task helpers.
+- Epic, `UGameplayTask` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Runtime/GameplayTasks/UGameplayTask>
+  — `InitTask`, `ReadyForActivation`, `EndTask`, `TaskOwnerEnded`.
+- Epic, `UAbilityTask_WaitDelay` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/GameplayAbilities/UAbilityTask_WaitDelay>
+  — wait for a duration, `OnFinish`.
+- Epic, `UAbilityTask_WaitGameplayEvent` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/GameplayAbilities/UAbilityTask_WaitGameplayEvent>
+  — one-shot listening, `OnlyMatchExact`, optional external target.
+- Epic, `SendGameplayEventToActor` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/GameplayAbilities/UAbilitySystemBlueprintLibrary/SendGameplayEven->
+  — event tag and payload delivery through an ability system.
+- Epic, `UAbilitySystemComponent::HandleGameplayEvent` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/GameplayAbilities/UAbilitySystemComponent/HandleGameplayEvent>
+  — execute an event and count matching activations.
 
 ---
 
@@ -1229,16 +1250,18 @@ those tags, or infinity for an infinite instance.
 ## 4.6 Lifecycle, ending, and cancellation
 
 **Rule.** An ability ends as soon as its activation is committed unless
-its definition keeps it active. `End` reports `Ended`; `Cancel`
-reports `Cancelled`. Revoking an active grant cancels it first. Ending
-or cancelling an inactive ability does nothing and returns `false`.
+its definition keeps it active or attaches a plan. `End` reports
+`Ended`; `Cancel` reports `Cancelled`. Revoking an active grant cancels
+it first. Ending or cancelling an inactive ability does nothing and
+returns `false`.
 
 - `SRC` `UGameplayAbility::EndAbility`, `CancelAbility`, and
   `UAbilitySystemComponent::ClearAbility`, which cancels the active
   instance before removing the spec.
-- `DIFF` a data definition has no tasks or input of its own, so ending
-  on activation is the default; Unreal abilities stay active until
-  they call `EndAbility`.
+- `DIFF` a data definition has no activation code or input of its
+  own. Without a plan it ends on activation by default; with a plan,
+  its wait steps keep it active until the plan ends. Unreal abilities
+  stay active until their code calls `EndAbility`.
 
 **Rule.** Activation cancels every active ability whose asset tags
 match `CancelAbilitiesWithTags`, except the activating grant, and does
@@ -1575,6 +1598,561 @@ attribute, and applies four infinite effects before the stores observe
 the destruction. The attribute store retains its modifier arrays across
 the generation boundary, and both cases allocate zero managed bytes.
 
-# Part 5 — Cues, events, and replication preparation
+# Part 5 — Gameplay events and ability tasks
+
+Implemented in `Volt.Gameplay.Events` and `Volt.Gameplay.Tasks`.
+
+## 5.1 Gameplay events
+
+**Rule.** A gameplay event is a value with a registered tag, an
+optional source entity, an optional target entity, and an optional
+typed payload. Publishing copies the value; a high-frequency event does
+not allocate a managed event object. The tag carries the meaning and
+the hierarchy, exactly as it does for abilities and effects.
+
+- `DOCS` Epic describes sending a gameplay event to an actor as an
+event tag plus an `FGameplayEventData` payload, delivered through the
+actor's ability system (`SendGameplayEventToActor`). The ability system
+can also execute the event directly and reports how many matching
+abilities it activated (`HandleGameplayEvent`).
+- `DIFF` VOLT's event router is independent of the ability system.
+Abilities, tasks, effects, and application code share one
+`GameplayEventSystem` over a world; an event is not tied to an
+activation attempt. This keeps event routing usable outside gameplay
+abilities and avoids a second event path.
+- `DIFF` the payload is a compact discriminated value
+(`GameplayEventPayload`) rather than an open `FGameplayEventData`-style
+object graph. The built-in kinds cover the common numeric and entity
+cases without boxing. An application that needs a new shape extends
+the payload union rather than allocating a context object per event.
+
+**Rule.** Subscriptions are indexed by tag. Dispatch walks the exact
+tag bucket, then its ancestors from nearest to farthest, then the
+wildcard bucket. It never scans unrelated subscriptions. A
+hierarchical subscription in an ancestor bucket matches descendants;
+an exact subscription in an ancestor bucket does not. A `GameplayTag.None`
+subscription receives every event after the tagged subscriptions.
+
+- `DOCS` `UAbilityTask_WaitGameplayEvent` documents `OnlyMatchExact`:
+when it is false, nested tags can trigger the wait.
+- `DIFF` Unreal routes through the actor's ability system. VOLT indexes
+by tag directly, so dispatch scales with matching subscriptions rather
+than with the number of listeners on unrelated tags or with the number
+of abilities. With no subscriptions a publish is one counter check
+(about 3 ns in the measured table).
+- `DIFF` delivery order is specified: exact bucket first, then each
+ancestor nearest to farthest, then wildcard; within a bucket, the
+newest subscription runs first. Unreal does not document an ordering
+contract for its event callback map.
+
+**Rule.** Dispatch captures the matching subscriptions and their
+generations before invoking any handler. Each delivery revalidates the
+subscription and the scoped owner. A handler may subscribe,
+unsubscribe itself or another subscription, publish another event,
+cancel an ability, complete or cancel a task, or destroy an entity.
+A subscription removed during dispatch does not run; a subscription
+added during dispatch does not receive the event already in flight.
+
+- `DIFF` this is the same snapshot-and-revalidate rule the ability
+  system uses for bulk operations (section 4.6). Unreal code generally
+  iterates its callback arrays directly, so mutation during a callback
+  is the caller's responsibility.
+
+**Rule.** Recursive publishing is bounded at 16 nested dispatches. A
+handler that publishes without a terminating condition receives an
+`InvalidOperationException`; the depth counter is released in `finally`
+and subscriptions committed before the exception remain committed.
+
+- `DIFF` Unreal has no equivalent recursion guard in its event
+  delivery; an unbounded handler would recurse until the stack fails.
+
+**Rule.** A subscription may be scoped to an entity. Destroying that
+entity removes all of its scoped subscriptions before the world
+recycles the index. A scoped subscription stores the owner's
+generation, so a recycled index cannot revalidate the old subscription.
+Unscoped subscriptions live until removed or the system is disposed.
+
+- `DIFF` Unreal's ability system owns its event delegates and tears
+  them down with the component. VOLT keys subscriptions by entity and
+  must handle world-wide destruction explicitly, as the other stores
+  do (section 4.10).
+
+**Rule.** Notifications are post-commit. A throwing handler propagates
+to the publisher. Subscriptions added or removed before the throw stay
+committed; later deliveries in that dispatch do not run; the dispatch
+depth is released.
+
+## 5.2 Task identity and ownership
+
+**Rule.** A task is owned by an activation token, not by a grant. The
+token carries the grant handle and the activation serial number. A
+task started for an earlier activation cannot complete, cancel,
+continue, or end a later activation of the same grant.
+
+- `DOCS` an `UAbilityTask` has an `Ability` field described as the
+  gameplay ability that created it, and Epic states that a task is
+  guaranteed to end no later than its owning ability.
+- `DIFF` Unreal tasks are `UObject`s bound to the ability instance.
+  VOLT uses a compact record with an activation token, so a retrigger
+  creates a different owner identity without allocating a new managed
+  task object. The token is also part of the task handle.
+
+**Rule.** A task handle embeds the task system identity, the owner
+entity, the task slot, the slot generation, and the owning activation
+id. A handle from another task system, a completed task, a cancelled
+task, a previous activation, or a recycled slot does not resolve.
+`Cancel`, `Complete`, and `TryGetTask` return `false` for such a
+handle; they do not throw.
+
+- `DIFF` Unreal's task pointers are object references, so a stale
+pointer is only as safe as its UObject lifetime. VOLT's handles are
+value types and are checked against the slot generation and activation
+identity on every use.
+
+**Rule.** Task state is pooled. Each pending task is one record in a
+system-wide slot array, linked into its activation's list and its
+owner's list. There is no managed object per task, no virtual task
+class hierarchy, and no delegate per task. Kinds are discriminated by
+`GameplayAbilityTaskKind`, with kind-specific fields in the same
+record.
+
+- `DIFF` Unreal uses a class per task (`UAbilityTask_WaitDelay`,
+  `UAbilityTask_WaitGameplayEvent`, and so on) with virtual
+  `Activate`/`OnDestroy` behavior. VOLT keeps the kinds as data so a
+  wait does not allocate and does not pay for a virtual dispatch. New
+  kinds add a value to the enum and a branch where their semantics
+  differ; they do not add a class or a per-task object.
+
+**Rule.** The task runtime is created on first use. A definition with
+no plan and no application task never allocates the task system, never
+subscribes to tag changes, and never enters a deadline heap.
+
+- `DIFF` Unreal's ability system has one ability task component whose
+  task array exists as part of the component. VOLT's lazy ownership is
+  stricter: the feature costs nothing until a task exists.
+
+## 5.3 Duration tasks and scheduling
+
+**Rule.** `WaitDuration` completes after a number of simulation
+seconds. Time is whatever the caller passes to
+`GameplayAbilityTaskSystem.Advance`; the runtime has no wall clock and
+no thread. A zero step is a no-op, which is how a paused game behaves.
+Time scaling is the caller's scaled step. A negative, NaN, or infinite
+step throws.
+
+- `DOCS` `UAbilityTask_WaitDelay` waits for a time and exposes an
+  `OnFinish` delegate. Epic's page does not state whether that timer is
+  world time, game time, or affected by pause or dilation.
+- `INFER` Unreal's timer manager is normally driven by world time, so
+  `WaitDelay` is likely affected by pause and time dilation. VOLT does
+  not rely on that inference: it takes the scaled step explicitly, so
+  pause, scaling, and single-stepping are deterministic and testable.
+- `DIFF` VOLT deadlines are not Unreal timer handles. They live in a
+  binary min-heap ordered by `(deadline, creation sequence)`, with a
+  per-task heap index for O(log n) cancellation. No captured delegate
+  is created per task.
+
+**Rule.** Task creation never completes a task synchronously. A zero
+duration task is scheduled at the current simulation time and completes
+during the next positive `Advance`. A task created during an advance is
+eligible on the next advance, even if its deadline has already passed.
+This bounds work per step and matches the one-frame latency of a
+zero-duration timer.
+
+- `DIFF` Unreal's `ReadyForActivation` runs during the ability's
+  execution and a zero-time timer may fire on a later frame. VOLT makes
+  the deferral explicit and uniform for all task kinds.
+
+**Rule.** A large advance processes every due task in
+`(deadline, sequence)` order, so the completion sequence does not
+depend on how the step was subdivided. Equal deadlines complete in
+creation order. A task created by a completion handler is deferred to
+the next advance, so one handler cannot extend the current step without
+bound.
+
+- `DIFF` Unreal processes timers per frame through its timer manager.
+  VOLT's explicit due-time ordering is deterministic across step sizes,
+  including a single large catch-up step.
+
+## 5.4 Gameplay-event tasks
+
+**Rule.** `WaitEvent` completes when the first matching event is
+delivered. A wait can match exactly or hierarchically and can filter by
+source, target, or both. It is one-shot: the subscription is removed
+before the completion notification. Several tasks may wait for the same
+event; each receives it once, in subscription order.
+
+- `DOCS` `UAbilityTask_WaitGameplayEvent` listens for a tag event and
+  keeps listening while `OnlyTriggerOnce` is false; `OnlyMatchExact`
+  controls nested-tag matching, and `OptionalExternalTarget` redirects
+  the wait. Epic's page documents the one-shot listening behavior but
+  not whether the task ends itself after the first event.
+- `DIFF` VOLT's event task is always one-shot. Repeating waits are
+  expressed by starting another task; there is no boolean that changes
+  the lifetime of the subscription. This keeps cleanup a single rule.
+
+**Rule.** An event task delivers on the simulation step that publishes
+the event, not on the next advance. A completion handler therefore runs
+inside `Publish`. Because the task is removed before the handler, a
+handler that publishes the same event again cannot complete the same
+task twice.
+
+- `DIFF` Unreal event delivery is synchronous inside the ability
+  system call as well, but the task's cleanup detail is not documented.
+  VOLT specifies the order: unlink, unsubscribe, remove any deadline,
+  then notify.
+
+**Rule.** When an event arrives, the task revalidates its activation.
+If the activation has ended but the task was not released (an
+inconsistent state that should not occur through the public API), the
+task is released silently rather than completing work for a dead
+activation.
+
+- `DIFF` defensive release instead of delivering to a dead owner. This
+  mirrors the gameplay stores' generation checks at their boundaries.
+
+## 5.5 Tag-condition tasks
+
+**Rule.** `WaitTag` completes when a tag becomes present or absent. The
+condition is evaluated when the task starts and on each tag change for
+the owner; it is not polled. If the condition already holds at start,
+the task is armed at the current time and completes on the next
+positive advance. If it holds because of a later tag change, the task
+is armed at that change and completes on the next advance. If the
+condition flips back before that advance, the task stays pending and
+waits for the next matching change.
+
+- `DOCS` Epic's ability task documentation lists tasks that wait on
+  gameplay events; it does not document a tag-presence wait helper with
+  these exact semantics. This is a VOLT capability built on the tag
+  store's change notification.
+- `DIFF` Unreal's common pattern is a repeating timer or a custom task
+  that polls or binds to tag delegates. VOLT indexes tag-condition
+  tasks in a per-owner list, so a tag change visits only the tasks that
+  watch tags, not every duration or event task the entity owns.
+- `DIFF` exact versus hierarchical matching is explicit via the `exact`
+  parameter. The default accepts a granted descendant, matching the tag
+  store's hierarchical `HasTag`.
+
+**Rule.** A tag-condition task must have a registered tag; a wait mode
+other than `Present` or `Absent` throws when the task is created. A
+task with an invalid tag is rejected by the ability plan builder as
+well.
+
+## 5.6 Ability integration and plans
+
+**Rule.** An activated ability can start tasks through
+`GameplayAbilitySystem.Tasks`. Tasks are created only while the
+activation is the current activation of its grant; otherwise the start
+returns `GameplayAbilityTaskHandle.None`. Ending, cancelling, revoking,
+or destroying an ability releases every task of its activation before
+the ability notification is raised.
+
+- `DOCS` Epic states a task may end itself with `EndTask` or be
+  terminated when its owning ability ends, and is guaranteed to end no
+  later than the ability. `UGameplayTask::TaskOwnerEnded` kills the task
+  and calls `OnDestroy`.
+- `DIFF` VOLT has no `UObject` task to destroy. Releasing the record
+  unlinks it from both lists, removes its event subscription and
+  deadline, decrements the pending counter, and retires its generation.
+  It then raises one `Cancelled` notification per task.
+- `DIFF` cancellation notifications are raised after all of the
+  activation's tasks are unlinked, not one by one during unlink. A
+  handler therefore never observes a partially torn-down task set, and
+  a handler that queries the activation's pending count sees zero.
+
+**Rule.** A plan is immutable authored data: wait for a duration, wait
+for an event, wait for a tag, apply an effect, publish an event, or end.
+The plan builder validates its steps and the definition builder keeps
+the ability active while a plan exists. A plan step owns exactly one
+task at a time; when that task completes, the runtime advances to the
+next step. The end of the plan ends the ability normally.
+
+- `DIFF` Unreal expresses this sequence in the ability's
+  `ActivateAbility` body with `UAbilityTask` nodes and latent Blueprint
+  execution. VOLT's plan is data, so an ability definition can be
+  authored, shared, and tested without a derived class. A plan has no
+  branching, loops, or per-step conditions; those belong in application
+  code using the low-level task API.
+
+**Rule.** If game code cancels a task that is the current plan step,
+the ability ends normally instead of staying active with no pending
+task. Cancellation caused by the ability's own end is ignored by the
+plan driver because the activation has already been marked inactive.
+
+- `DIFF` Unreal's latent nodes typically resume or abort through their
+  own delegates; there is no single "cancelled step ends the ability"
+  rule. VOLT chooses the rule that cannot leave a plan stalled.
+
+**Rule.** Retriggering ends the old activation and starts a new one.
+The old activation's tasks are cancelled with the old token before the
+new activation is committed. A stale task handle cannot cancel a task
+of the new activation, and a completion from the old activation cannot
+end or mutate the new one.
+
+- `DIFF` Unreal's instanced-per-actor abilities can reuse the same
+  ability object; VOLT's activation token makes the identity boundary
+  explicit and testable.
+
+**Rule.** Ending an ability with pending tasks is not an error. The
+ability's `Ended` or `Cancelled` notification is raised after the task
+cancellation notifications. Revocation raises `Cancelled` for the
+ability after cancelling its tasks, then `Revoked`. Destroying the
+owner releases grants and tasks silently, with no notifications.
+
+- `DIFF` Unreal's `EndAbility` ends tasks as part of the ability's
+  teardown; VOLT fixes the notification order so observers cannot see
+  a live task after the ability is gone.
+
+## 5.7 Developer API
+
+**Rule.** The runtime exposes two layers over one execution system:
+
+- Low-level: `GameplayAbilitySystem.Tasks` with `WaitDuration`,
+  `WaitEvent`, `WaitTag`, `Cancel`, `Complete`, `TryGetTask`,
+  `CopyTasks`, `CancelAll`, and the `Changed` notification.
+- Composition: `GameplayAbilityPlan.Create()` with `Wait`, `WaitEvent`,
+  `WaitTag`, `ApplyEffect`, `PublishEvent`, and `End`, attached with
+  `GameplayAbilityDefinitionBuilder.Plan`.
+
+Both create the same `TaskSlot` records and use the same event router
+and deadline heap. The plan layer does not have a second scheduler.
+
+- `DIFF` Unreal has one task class hierarchy and latent Blueprint
+  nodes; VOLT separates the low-level runtime from the authoring
+  composition so a data definition can stay declarative while game code
+  can still start and cancel arbitrary tasks.
+
+**Rule.** A task handle is not needed to keep a task alive. The task
+runtime owns it until completion, cancellation, or ability end. A
+handle is only needed to cancel, complete, or inspect a specific task.
+
+**Rule.** `GameplayAbilityTaskChange` reports `Started`, `Completed`,
+or `Cancelled`, with the task kind, completion reason, plan step, and
+the event that completed an event task. The payload is a value type and
+the notification allocates nothing.
+
+## 5.8 Integrated demonstration
+
+`samples/Volt.GameplayDemo` is a deterministic, graphics-free console
+application. It runs these scenarios and asserts each result:
+
+1. Charged Dash pays 10 stamina, starts a 0.25 s wind-up, waits for
+   `Event.Dash.Released`, applies a 0.5 s speed buff that grants
+   `Status.Dashing`, then waits for the tag to disappear and ends.
+2. A stun during the wind-up cancels the ability. The paid cost and
+   cooldown remain, the pending task is released, a stale task handle
+   is refused, and a late release event is not delivered.
+3. Charged Dash and Focus run concurrently with one task each.
+   Cancelling the dash leaves the focus activation and its task
+   untouched.
+4. Application tasks use the low-level API with no plan: a duration
+   task is inspected, completed, and shown stale; ending an ability
+   cancels its task; a stale handle cannot cancel a task of the next
+   activation.
+5. Destroying an owner with a pending task releases it, and a later
+   event is not delivered to the destroyed owner.
+
+Run it with:
+
+```bash
+dotnet run --project samples/Volt.GameplayDemo -c Release
+```
+
+The sample prints every transition and exits non-zero if an assertion
+fails, so it can be used as a smoke test in addition to the unit suite.
+
+## 5.9 Determinism and exception policy
+
+**Rule.** On one thread with one sequence of `Advance` calls, task
+completion order is deterministic. Duration and tag tasks are ordered
+by `(deadline, sequence)`; event tasks are ordered by subscription
+order within the event router. Task slots are allocated from a free
+list and retired with a new generation, so slot reuse does not change
+observable order.
+
+**Rule.** Task notifications are post-commit. A `Completed` or
+`Cancelled` handler observes the task already unlinked, unsubscribed,
+and removed from the heap. A `Started` handler observes a pending task.
+A handler may start or cancel tasks, publish events, end the ability,
+revoke the grant, or destroy the owner. Every path revalidates the
+activation and generation instead of trusting a captured slot.
+
+**Rule.** An exception from a task or event handler propagates to the
+caller. State committed before the exception remains committed. If a
+completion handler throws, the remaining tasks due in that advance are
+not processed; the task that threw is already retired, and the advance
+re-entrancy flag is released in `finally`. If one task cancellation
+handler throws during ability teardown, the remaining cancellation
+notifications for that activation are skipped, but every task has
+already been released and the ability end still completes. Exceptions
+are never swallowed.
+
+- `DIFF` Unreal generally logs or guards delegate failures; VOLT's
+  contract is that the exception reaches the caller and internal state
+  stays consistent. This mirrors the effect and ability systems.
+
+## 5.10 Edge-case matrix
+
+| Case | Expected | Evidence |
+| --- | --- | --- |
+| Publish with no subscriptions | returns 0; no allocation | `DIFF` |
+| Publish an unregistered tag | throws | `DIFF` |
+| Exact subscription on an ancestor | does not receive a descendant event | `DIFF` |
+| Hierarchical subscription on an ancestor | receives a descendant event | `DOCS` |
+| Wildcard subscription | receives every event after tagged subscriptions | `DIFF` |
+| Two tasks wait for one event | each receives it once, in subscription order | `DIFF` |
+| Handler unsubscribes itself | its remaining code runs; later candidates unaffected | `DIFF` |
+| Handler unsubscribes another pending subscription | that subscription does not run | `DIFF` |
+| Handler subscribes during dispatch | new subscription misses the in-flight event | `DIFF` |
+| Handler publishes recursively | nested dispatch uses its own capture buffer | `DIFF` |
+| Recursion beyond 16 levels | throws; depth is released | `DIFF` |
+| Handler throws | exception propagates; committed subscriptions remain | `DIFF` |
+| Subscription scoped to a destroyed entity | removed silently; stale index cannot revalidate | `DIFF` |
+| Handle from another task system | rejected | `DIFF` |
+| Stale task handle | `Cancel`/`Complete`/`TryGetTask` return false | `DIFF` |
+| Task from a previous activation | cannot cancel or end the new activation | `DIFF` |
+| Zero-duration task | completes on the next positive advance | `DIFF` |
+| Negative or non-finite duration | throws | `DIFF` |
+| Negative or non-finite advance | throws | `DIFF` |
+| Zero advance | no work; zero-duration tasks wait | `DIFF` |
+| Large advance | every due task in deadline order | `DIFF` |
+| Equal deadlines | creation order | `DIFF` |
+| Task created during an advance | eligible on the next advance | `DIFF` |
+| Task created during a completion handler | eligible on the next advance | `DIFF` |
+| WaitTag condition already true at start | armed at current time; completes next advance | `DIFF` |
+| WaitTag condition flips back before advance | stays pending; next change re-arms | `DIFF` |
+| Tag change with no tag tasks | does not walk the owner's task list | `DIFF` |
+| End with pending tasks | all released; cancellation notifications precede ability notification | `DIFF` |
+| Cancel during a task completion | activation ends; remaining tasks released | `DIFF` |
+| Revoke with pending tasks | tasks cancelled, then `Cancelled`, then `Revoked` | `DIFF` |
+| Owner destroyed with pending tasks | released silently; counters reach zero | `DIFF` |
+| Entity index recycled during destruction | old tasks released before the new generation adopts the slot | `DIFF` |
+| Retrigger with pending tasks | old tasks retire with the old token | `DIFF` |
+| System disposed with pending tasks | subscriptions removed and records cleared | `DIFF` |
+| Cancelled plan step | ability ends normally | `DIFF` |
+| Completion handler ends the ability | remaining tasks released; no stale completion | `DIFF` |
+| Completion handler reactivates the ability | old activation cannot affect the new one | `DIFF` |
+| Completion handler throws | task retired; advance flag released | `DIFF` |
+| Event task after ability end | no delivery; subscription removed | `DIFF` |
+| Event task after owner destruction | no delivery; subscription removed | `DIFF` |
+| Task cancellation handler throws | all tasks already released; ability end completes | `DIFF` |
+
+## 5.11 Performance
+
+**Rule.** Event dispatch scales with matching subscriptions, not with
+the number of listeners on unrelated tags. With no subscriptions the
+cost is a counter check. Task maintenance is driven by an indexed
+subscription or a due deadline; an idle task is not visited per frame.
+
+The event table measures the number of listeners configured on the
+same tag (relevant), on a different tag (irrelevant), or on an ancestor
+(hierarchical). The no-listener case uses a separate system.
+
+| Workload | 1,000 listeners | 10,000 listeners | Allocated |
+| --- | ---: | ---: | ---: |
+| Publish, no listeners | 3.2 ns | 3.4 ns | 0 B |
+| Publish, one listener | 40.1 ns | 43.3 ns | 0 B |
+| Publish, many relevant | 18.4 µs | 201.6 µs | 0 B |
+| Publish, many irrelevant | 21.6 ns | 18.2 ns | 0 B |
+| Publish, hierarchical | 42.3 ns | 39.5 ns | 0 B |
+| Subscribe and unsubscribe | 22.9 ns | 16.5 ns | 0 B |
+
+Many relevant deliveries cost about 18 to 20 ns per listener.
+Many irrelevant listeners cost the same as an empty bucket: the 10,000
+subscriptions on another tag are not visited. Hierarchical delivery
+costs about the same as one exact listener plus an ancestor bucket
+walk.
+
+| Warmed task operation | Mean | Allocated |
+| --- | ---: | ---: |
+| Start and cancel a duration task | 92.5 ns | 0 B |
+| Start and complete a duration task | 77.8 ns | 0 B |
+| Start and cancel an event task | 93.1 ns | 0 B |
+| Start and complete an event task | 143.3 ns | 0 B |
+| Start and cancel a tag task | 113.2 ns | 0 B |
+| Start, satisfy, and release a tag task | 254.3 ns | 0 B |
+| Advance with no tasks | 4.9 ns | 0 B |
+
+| Idle population | Advance cost | Allocated |
+| ---: | ---: | ---: |
+| 1,000 tasks | 4.9 ns | 0 B |
+| 10,000 tasks | 5.8 ns | 0 B |
+| 100,000 tasks | 5.3 ns | 0 B |
+
+The idle advance is constant within measurement noise: 100,000 idle
+tasks do not cost 100,000 checks. The runtime reads the heap root,
+sees it is not due, and returns. This is the critical performance rule
+for this milestone.
+
+| Batch operation | 1,000 tasks | 10,000 tasks |
+| --- | ---: | ---: |
+| Expire all due tasks | 1,165 µs | 4,005 µs |
+| Cancel all tasks | 321 µs | 893 µs |
+| End an ability with tasks | 236 µs | 648 µs |
+| Destroy an owner with tasks | 98 µs | 437 µs |
+
+Batch expiry is about 0.4 µs per task at 10,000 and includes one
+completion notification and one release per task. Batch cancellation
+is about 0.09 µs per task; ending an ability is about 0.065 µs per
+task; destroying the owner is about 0.044 µs per task. The batch
+numbers have wide error bars at this sample size and are indicative of
+linear scaling, not precise constants.
+
+The task benchmarks were run on the cloud verification VM (2 logical
+cores, .NET 10.0.13) with `--warmupCount 1 --iterationCount 3`; the
+earlier parts' tables were measured on the workstation. Absolute
+values are therefore not directly comparable. The scaling shape and
+the zero-allocation results are.
+
+**Allocation evidence.** The single-task and idle rows report zero
+managed allocation from `MemoryDiagnoser`. The batch benchmark classes
+use one measured invocation per iteration to pair cleanup with the
+operation, so the in-process harness's per-invocation overhead would
+swamp a memory column; their allocation claim is instead guarded by
+`GameplayAbilityTaskAllocationTests`, including a 10,000-task bulk
+expiry, 256-task ability ending, event completion, tag completion, and
+the idle population. Those guards measure
+`GC.GetAllocatedBytesForCurrentThread` around the warmed operations and
+assert exactly zero.
+
+**Workload sources.** `GameplayEventBenchmarks`,
+`GameplayAbilityTaskBenchmarks`,
+`GameplayAbilityTaskIdleBenchmarks`,
+`GameplayAbilityTaskScalingBenchmarks`, and
+`GameplayAbilityTaskDestructionBenchmarks` in
+`benchmarks/Volt.Benchmarks`.
+
+## 5.12 Known limitations
+
+- The gameplay runtime is single-threaded. Events and tasks are not a
+  cross-thread queue, and `Advance` must be called from the simulation
+  thread.
+- Event payloads are a closed discriminated union. Application-specific
+  payloads require extending `GameplayEventPayload`; there is no
+  arbitrary managed context object or boxing path.
+- Event matching is tag-based. There is no separate event channel or
+  string-keyed event name, and source/target filters are entity equality
+  only.
+- An event is delivered synchronously. There is no deferred queue,
+  priority, or cross-frame coalescing. Recursive dispatch is bounded at
+  16 levels.
+- Tag-condition completion waits for the next `Advance` after the tag
+  change, so it has up to one simulation step of latency. This is
+  intentional to keep tag changes free of user callbacks.
+- Plans are linear. They have no branching, loops, conditions, or
+  parallel steps; those require application code with the low-level
+  task API. Plans also only apply effects to the owner or the activation
+  target.
+- The task model currently implements duration, gameplay-event, and
+  tag-condition waits. A tick-based or custom task kind would add a
+  kind-specific branch and record fields; there is no public extension
+  point for third-party task kinds yet.
+- Tasks are not individually paused. Pausing the simulation with a zero
+  step pauses all of them; time scaling applies to all deadlines.
+- Cues, animation notifies, and replication prediction remain outside
+  this milestone.
+
+# Part 6 — Cues and replication preparation
 
 Not yet implemented.
