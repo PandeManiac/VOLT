@@ -24,6 +24,8 @@ namespace Volt.GameplayDemo;
 /// </remarks>
 internal sealed class ChargedDashDemo : IDisposable
 {
+	private const int CounterSwingTicks = 3;
+
 	private readonly World _world;
 	private readonly GameplayAttributeStore _attributes;
 	private readonly GameplayTagStore _tags;
@@ -36,8 +38,13 @@ internal sealed class ChargedDashDemo : IDisposable
 	private readonly GameplayAbilityHandle _dash;
 	private readonly GameplayAbilityHandle _focus;
 	private readonly GameplayAbilityHandle _overcharge;
+	private readonly GameplayAbilityHandle _counterattack;
+	private readonly GameplayAbilityTaskDefinition _counterSwing;
 	private readonly Entity _player;
 
+	private Entity _counterTarget;
+	private GameplayAbilityTaskHandle _counterSwingTask;
+	private int _counterSwingTicks;
 	private int _assertions;
 
 	internal ChargedDashDemo()
@@ -63,6 +70,96 @@ internal sealed class ChargedDashDemo : IDisposable
 		_dash = _abilities.GiveAbility(_player, DemoSchema.ChargedDash);
 		_focus = _abilities.GiveAbility(_player, DemoSchema.Focus);
 		_overcharge = _abilities.GiveAbility(_player, DemoSchema.Overcharge);
+
+		// Custom tasks are registered once. The definition is shared
+		// by every activation and carries no per-activation state.
+		_counterSwing = _abilities.RegisterTaskDefinition(
+			"Demo.CounterSwing");
+
+		GameplayAbilityDefinition counterattack = GameplayAbilityDefinition
+			.Create("Demo.Ability.Counterattack")
+			.AssetTags(DemoSchema.AbilityCounter)
+			.Cost(DemoSchema.CounterCost)
+			.CancelOnTags(DemoSchema.StatusStunned)
+			.RequireToActivate(
+				GameplayTagRequirements.Ignore(
+					GameplayTagSet.Create(DemoSchema.StatusStunned)))
+			.Plan(
+				GameplayAbilityPlan
+					.Create()
+					.ApplyEffect(DemoSchema.CounterGuard)
+					.WaitAny(
+						GameplayWaitAny
+							.Create()
+							.WithTimeout(0.5f)
+							.OnEvent(DemoSchema.EventIncomingHit))
+					.If(GameplayCondition.All(
+						GameplayCondition.TargetHasTag(
+							DemoSchema.StatusStunned),
+						GameplayCondition.OwnerAttribute(
+							DemoSchema.Stamina,
+							GameplayAttributeComparison.GreaterThanOrEqual,
+							40f)))
+					.ApplyEffect(DemoSchema.CounterEnhanced)
+					.PublishEvent(DemoSchema.EventCounterLanded)
+					.Else()
+					.WaitCustom(_counterSwing)
+					.ApplyEffect(DemoSchema.CounterStandard)
+					.PublishEvent(DemoSchema.EventCounterLanded)
+					.EndIf()
+					.WaitTag(
+						DemoSchema.StatusGuarding,
+						GameplayTagWaitMode.Absent)
+					.End()
+					.Build())
+			.Build();
+
+		_counterattack = _abilities.GiveAbility(
+			_player,
+			counterattack);
+
+		_counterTarget = _world.CreateEntity();
+
+		Tasks.Changed += change =>
+		{
+			if (change.TaskKind != GameplayAbilityTaskKind.Custom)
+			{
+				return;
+			}
+
+			if (change.Kind == GameplayAbilityTaskChangeKind.Started)
+			{
+				_counterSwingTask = change.Handle;
+				_counterSwingTicks = 0;
+			}
+			else if (change.Handle == _counterSwingTask)
+			{
+				// Completion, cancellation, or owner destruction may
+				// end this handle. Ignore terminal notifications for
+				// unrelated custom task instances.
+				_counterSwingTask = GameplayAbilityTaskHandle.None;
+				_counterSwingTicks = 0;
+			}
+		};
+
+		// The application owns the interaction that the custom task
+		// waits for. This ticker is the demo's stand-in for an
+		// animation or interaction system; the gameplay runtime never
+		// polls the task.
+		_loop.RegisterFixedUpdate((in FixedUpdateContext context) =>
+		{
+			if (_counterSwingTask.IsNone)
+			{
+				return;
+			}
+
+			_counterSwingTicks++;
+
+			if (_counterSwingTicks >= CounterSwingTicks)
+			{
+				Tasks.Complete(_counterSwingTask);
+			}
+		});
 	}
 
 	private GameplayAbilityTaskSystem Tasks => _abilities.Tasks;
@@ -76,6 +173,7 @@ internal sealed class ChargedDashDemo : IDisposable
 		RunOverlappingAbilities();
 		RunApplicationTasks();
 		RunOwnerDestruction();
+		RunCounterattack();
 		RunPauseAndTimeScale();
 		VerifyCleanShutdown();
 
@@ -461,6 +559,15 @@ internal sealed class ChargedDashDemo : IDisposable
 	private bool IsStunned =>
 		_tags.HasTag(_player, DemoSchema.StatusStunned);
 
+	private bool IsGuarding =>
+		_tags.HasTag(_player, DemoSchema.StatusGuarding);
+
+	private bool IsCounterStandard =>
+		_tags.HasTag(_player, DemoSchema.StatusCounterStandard);
+
+	private bool IsCounterEnhanced =>
+		_tags.HasTag(_player, DemoSchema.StatusCounterEnhanced);
+
 	/// <summary>
 	/// Advances real time through the fixed-step loop. At normal time
 	/// scale this is the same duration of simulation time. The gameplay
@@ -478,9 +585,246 @@ internal sealed class ChargedDashDemo : IDisposable
 		}
 	}
 
+	private void RunCounterattack()
+	{
+		Begin("6. Charged counterattack: branch, race, and custom task");
+
+		_attributes.SetBaseValue(_player, DemoSchema.Stamina, 50f);
+
+		List<GameplayAbilityChange> abilityChanges = [];
+		List<GameplayAbilityTaskChange> taskChanges = [];
+
+		void TrackAbilityChange(GameplayAbilityChange change)
+		{
+			abilityChanges.Add(change);
+		}
+
+		void TrackTaskChange(GameplayAbilityTaskChange change)
+		{
+			if (change.TaskKind == GameplayAbilityTaskKind.Custom)
+			{
+				taskChanges.Add(change);
+			}
+		}
+
+		_abilities.Changed += TrackAbilityChange;
+		Tasks.Changed += TrackTaskChange;
+
+		Require(
+			_abilities.TryActivate(_counterattack, _counterTarget).Succeeded,
+			"the counterattack did not activate");
+
+		Report(
+			$"activated: stamina={Stamina:0}, guard={IsGuarding}, " +
+			$"pendingTasks={Tasks.PendingTaskCount}");
+
+		Require(Stamina == 45f, "the counterattack cost was not paid");
+		Require(IsGuarding, "the guard effect did not start");
+		Require(
+			Tasks.PendingTaskCount == 1,
+			"the race did not start exactly one task");
+
+		Advance(0.1f);
+
+		Require(
+			_abilities.IsActive(_counterattack),
+			"the counterattack ended before the hit or the timeout");
+
+		int listeners = _events.Publish(new GameplayEvent(
+			DemoSchema.EventIncomingHit,
+			_counterTarget,
+			_player));
+
+		Report($"incoming hit delivered to {listeners} listener(s)");
+
+		Require(listeners > 0, "the incoming hit reached no listener");
+		Require(
+			!_counterSwingTask.IsNone,
+			"the standard branch did not wait for the custom task");
+		Require(
+			Tasks.GetPendingTaskCount(_player) == 1,
+			"the standard branch did not own exactly one task");
+		Require(
+			CountAbilityChanges(
+				abilityChanges,
+				GameplayAbilityChangeKind.Activated) == 1,
+			"the standard path changed activation notifications");
+		Require(
+			taskChanges.Count == 1
+				&& taskChanges[0].Kind == GameplayAbilityTaskChangeKind.Started
+				&& taskChanges[0].Handle == _counterSwingTask,
+			"the custom task did not emit one matching Started transition");
+
+		// The event won the race against the 0.5 s timeout, so the
+		// timeout is gone. The custom task now waits for the demo's
+		// own interaction ticker.
+		Advance((CounterSwingTicks - 1) / 60f);
+
+		Require(
+			!IsCounterStandard,
+			"the standard counter landed before the interaction finished");
+
+		Advance(1f / 60f);
+
+		Report(
+			$"interaction finished: standard={IsCounterStandard}, " +
+			$"enhanced={IsCounterEnhanced}, guard={IsGuarding}, " +
+			$"pendingTasks={Tasks.PendingTaskCount}");
+
+		Require(
+			IsCounterStandard,
+			"the standard counter did not land after the interaction");
+		Require(
+			_counterSwingTask.IsNone,
+			"the completed custom task was still tracked");
+		Require(
+			taskChanges.Count == 2
+				&& taskChanges[1].Kind == GameplayAbilityTaskChangeKind.Completed
+				&& taskChanges[1].Handle == taskChanges[0].Handle,
+			"the custom task did not emit a matching Completed transition");
+		Require(
+			_abilities.IsActive(_counterattack),
+			"the plan did not wait for the guard to expire");
+		Require(
+			Tasks.PendingTaskCount == 1,
+			"the guard wait did not start a task");
+
+		Advance(0.6f);
+
+		Report(
+			$"guard expired: active={_abilities.IsActive(_counterattack)}, " +
+			$"pendingTasks={Tasks.PendingTaskCount}");
+
+		Require(
+			!_abilities.IsActive(_counterattack),
+			"the guard wait did not end the counterattack");
+		Require(
+			Tasks.PendingTaskCount == 0,
+			"the counterattack kept tasks after ending");
+
+		// Enhanced branch: the target is stunned, so the condition
+		// chooses the enhanced counter and no interaction is needed.
+		Advance(2f);
+
+		_counterTarget = _world.CreateEntity();
+
+		_attributes.SetBaseValue(_player, DemoSchema.Stamina, 50f);
+
+		Require(
+			_effects.Apply(_counterTarget, DemoSchema.Stun).Applied,
+			"the counter target could not be stunned");
+		Require(
+			_abilities.TryActivate(_counterattack, _counterTarget).Succeeded,
+			"the enhanced counterattack did not activate");
+
+		Advance(0.1f);
+
+		_events.Publish(new GameplayEvent(
+			DemoSchema.EventIncomingHit,
+			_counterTarget,
+			_player));
+
+		Report(
+			$"stunned target: enhanced={IsCounterEnhanced}, " +
+			$"standard={IsCounterStandard}, " +
+			$"customTaskPending={!_counterSwingTask.IsNone}");
+
+		Require(
+			IsCounterEnhanced,
+			"the branch did not choose the enhanced counter");
+		Require(
+			!IsCounterStandard,
+			"the enhanced branch also applied the standard counter");
+		Require(
+			_counterSwingTask.IsNone,
+			"the enhanced branch waited for an interaction");
+		Require(
+			CountAbilityChanges(
+				abilityChanges,
+				GameplayAbilityChangeKind.Activated) == 2,
+			"the enhanced path did not activate independently");
+		Require(
+			taskChanges.Count == 2
+				&& taskChanges[1].Kind == GameplayAbilityTaskChangeKind.Completed,
+			"the enhanced path unexpectedly created a custom task");
+
+		Advance(0.6f);
+
+		Require(
+			!_abilities.IsActive(_counterattack),
+			"the enhanced counterattack did not end");
+
+		// Interruption: a stun during the wind-up cancels the ability
+		// and releases the custom task it was waiting on.
+		Advance(2f);
+
+		// A fresh, unstunned target, so the standard branch runs and
+		// the interruption has a custom task to release.
+		_world.DestroyEntity(_counterTarget);
+		_counterTarget = _world.CreateEntity();
+		_attributes.SetBaseValue(_player, DemoSchema.Stamina, 50f);
+
+		Require(
+			_abilities.TryActivate(_counterattack, _counterTarget).Succeeded,
+			"the interrupted counterattack did not activate");
+
+		Advance(0.1f);
+
+		_events.Publish(new GameplayEvent(
+			DemoSchema.EventIncomingHit,
+			_counterTarget,
+			_player));
+
+		Require(
+			!_counterSwingTask.IsNone,
+			"the interrupted branch did not start the custom task");
+		GameplayAbilityTaskHandle interruptedTask = _counterSwingTask;
+		Require(
+			taskChanges.Count == 3
+				&& taskChanges[2].Kind == GameplayAbilityTaskChangeKind.Started
+				&& taskChanges[2].Handle == interruptedTask,
+			"the interrupted custom task did not emit a Started transition");
+
+		Require(
+			_effects.Apply(_player, DemoSchema.Stun).Applied,
+			"the player could not be stunned");
+
+		Report(
+			$"stunned during wind-up: active=" +
+			$"{_abilities.IsActive(_counterattack)}, " +
+			$"pendingTasks={Tasks.PendingTaskCount}, " +
+			$"customTaskPending={!_counterSwingTask.IsNone}");
+
+		Require(
+			!_abilities.IsActive(_counterattack),
+			"the stun did not cancel the counterattack");
+		Require(
+			Tasks.PendingTaskCount == 0,
+			"the cancelled counterattack kept tasks");
+		Require(
+			_counterSwingTask.IsNone,
+			"the cancelled counterattack kept its custom task");
+		Require(
+			taskChanges.Count == 4
+				&& taskChanges[3].Kind == GameplayAbilityTaskChangeKind.Cancelled
+				&& taskChanges[3].Handle == interruptedTask,
+			"cancelling did not emit the matching custom-task transition");
+
+		_abilities.Changed -= TrackAbilityChange;
+		Tasks.Changed -= TrackTaskChange;
+		_effects.RemoveAll(_player);
+		_world.DestroyEntity(_counterTarget);
+
+		Advance(1f);
+
+		Require(
+			Tasks.PendingTaskCount == 0,
+			"a task survived the counterattack scenarios");
+	}
+
 	private void RunPauseAndTimeScale()
 	{
-		Begin("6. Pause, single step, and time scaling");
+		Begin("7. Pause, single step, and time scaling");
 
 		Require(
 			_abilities.TryActivate(_overcharge).Succeeded,
@@ -571,7 +915,7 @@ internal sealed class ChargedDashDemo : IDisposable
 
 	private void VerifyCleanShutdown()
 	{
-		Begin("7. Clean shutdown");
+		Begin("8. Clean shutdown");
 
 		Report(
 			$"activeAbilities={_abilities.ActiveAbilityCount}, " +
@@ -617,6 +961,23 @@ internal sealed class ChargedDashDemo : IDisposable
 	private static void Report(string message)
 	{
 		Console.WriteLine($"    {message}");
+	}
+
+	private static int CountAbilityChanges(
+		List<GameplayAbilityChange> changes,
+		GameplayAbilityChangeKind kind)
+	{
+		int count = 0;
+
+		for (int index = 0; index < changes.Count; index++)
+		{
+			if (changes[index].Kind == kind)
+			{
+				count++;
+			}
+		}
+
+		return count;
 	}
 
 	private void Require(bool condition, string message)

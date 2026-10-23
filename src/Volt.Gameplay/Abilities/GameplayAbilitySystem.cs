@@ -74,6 +74,8 @@ public sealed class GameplayAbilitySystem : IDisposable
 	private readonly CapturePool _tagCancelPool = new();
 	private readonly CapturePool _inputPool = new();
 	private readonly CapturePool _revokePool = new();
+	private readonly Dictionary<string, GameplayAbilityTaskDefinition>
+		_taskDefinitions = new(StringComparer.Ordinal);
 
 	private SimulationClockClaim? _clockClaim;
 	private bool _disposed;
@@ -164,6 +166,65 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// to tag changes, and never appear in the deadline heap.
 	/// </remarks>
 	public GameplayAbilityTaskSystem Tasks => _tasks ??= CreateTaskSystem();
+
+	/// <summary>
+	/// Registers a custom task that abilities of this system can wait
+	/// on.
+	/// </summary>
+	/// <param name="name">
+	/// A unique name, used for diagnostics and for identifying a
+	/// pending task through
+	/// <see cref="GameplayAbilityTaskInfo.CustomDefinition"/>.
+	/// </param>
+	/// <returns>The shared definition.</returns>
+	/// <exception cref="ArgumentException">
+	/// The name is empty or only whitespace.
+	/// </exception>
+	/// <exception cref="InvalidOperationException">
+	/// The name is already registered.
+	/// </exception>
+	/// <remarks>
+	/// <para>
+	/// Registering is initialization work. The definition is an
+	/// identity: it carries no callback and no per-activation state, so
+	/// any number of activations can share it.
+	/// </para>
+	/// <para>
+	/// Application code completes a pending custom task through
+	/// <see cref="GameplayAbilityTaskSystem.Complete"/> when the signal
+	/// it owns fires, and observes cancellation through
+	/// <see cref="GameplayAbilityTaskSystem.Changed"/>. Nothing polls
+	/// the task.
+	/// </para>
+	/// </remarks>
+	public GameplayAbilityTaskDefinition RegisterTaskDefinition(
+		string name)
+	{
+		ThrowIfDisposed();
+
+		if (string.IsNullOrWhiteSpace(name))
+		{
+			throw new ArgumentException(
+				"A custom task definition needs a non-empty name.",
+				nameof(name));
+		}
+
+		if (_taskDefinitions.ContainsKey(name))
+		{
+			throw new InvalidOperationException(
+				$"A custom task named '{name}' is already registered " +
+				"on this ability system. Reuse the existing definition.");
+		}
+
+		GameplayAbilityTaskDefinition definition = new(
+			this,
+			_taskDefinitions.Count + 1,
+			name);
+
+		_taskDefinitions.Add(name, definition);
+
+		return definition;
+	}
 
 	/// <summary>
 	/// Grants an ability to an entity.
@@ -1232,6 +1293,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 		_tagCancelPool.Clear();
 		_inputPool.Clear();
 		_revokePool.Clear();
+		_taskDefinitions.Clear();
 		_abilitySlotCount = 0;
 		_freeAbilitySlot = -1;
 		_grantedCount = 0;
@@ -1624,6 +1686,66 @@ public sealed class GameplayAbilitySystem : IDisposable
 							target));
 
 						stepIndex++;
+						break;
+					}
+				case GameplayAbilityPlanStepKind.WaitAny:
+					{
+						// Claim the step before creating the task, so a
+						// Started handler that completes the race advances
+						// from inside the start.
+						_abilities[slot].PlanStep = stepIndex;
+
+						GameplayAbilityTaskHandle task =
+							Tasks.StartWaitAnyTask(
+								activation,
+								step.Wait!,
+								stepIndex);
+
+						return HandleWaitStepStarted(
+							activation,
+							stepIndex,
+							task);
+					}
+				case GameplayAbilityPlanStepKind.WaitCustom:
+					{
+						_abilities[slot].PlanStep = stepIndex;
+
+						GameplayAbilityTaskHandle task =
+							Tasks.StartCustomTask(
+								activation,
+								step.CustomTask!,
+								stepIndex);
+
+						return HandleWaitStepStarted(
+							activation,
+							stepIndex,
+							task);
+					}
+				case GameplayAbilityPlanStepKind.Branch:
+					{
+						// Conditions read live state at the moment the
+						// step runs, so a callback that changed tags or
+						// attributes after the previous step is observed
+						// here.
+						GameplayConditionContext conditionContext = new(
+							_tags,
+							_attributes,
+							owner,
+							target,
+							_world.IsAlive(target));
+
+						if (!step.Condition!.Evaluate(in conditionContext))
+						{
+							stepIndex = step.TargetStep;
+							break;
+						}
+
+						stepIndex++;
+						break;
+					}
+				case GameplayAbilityPlanStepKind.Goto:
+					{
+						stepIndex = step.TargetStep;
 						break;
 					}
 				default:
