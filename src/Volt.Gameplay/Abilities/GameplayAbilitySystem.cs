@@ -720,13 +720,15 @@ public sealed class GameplayAbilitySystem : IDisposable
 		}
 
 		GameplayEffectHandle cooldown = GameplayEffectHandle.None;
+		GameplayEffectApplicationRollback cooldownRollback = default;
 
 		if (definition.CooldownEffect is not null)
 		{
 			GameplayEffectApplyResult applied = _effects.Apply(
 				owner,
 				definition.CooldownEffect,
-				owner);
+				owner,
+				out cooldownRollback);
 
 			if (!CooldownBecameActive(owner, definition, applied))
 			{
@@ -751,7 +753,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 				// A notification that ended the activation before that
 				// point must not leave the owner cooling down for an
 				// ability that never committed.
-				RollbackCooldown(cooldown);
+				RollbackCooldown(cooldown, cooldownRollback);
 
 				return Rejected(
 					GameplayAbilityActivationStatus.EndedDuringActivation,
@@ -775,7 +777,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 					AbortActivation(slot);
 				}
 
-				RollbackCooldown(cooldown);
+				RollbackCooldown(cooldown, cooldownRollback);
 
 				return Rejected(
 					GameplayAbilityActivationStatus.RejectedByCost,
@@ -800,7 +802,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 					AbortActivation(slot);
 				}
 
-				RollbackCooldown(cooldown);
+				RollbackCooldown(cooldown, cooldownRollback);
 
 				return Rejected(
 					GameplayAbilityActivationStatus.RejectedByCost,
@@ -1353,11 +1355,13 @@ public sealed class GameplayAbilitySystem : IDisposable
 		}
 	}
 
-	private void RollbackCooldown(GameplayEffectHandle cooldown)
+	private void RollbackCooldown(
+		GameplayEffectHandle cooldown,
+		GameplayEffectApplicationRollback rollback)
 	{
 		if (!cooldown.IsNone)
 		{
-			_effects.Remove(cooldown);
+			_effects.RevertApplication(cooldown, rollback);
 		}
 	}
 

@@ -66,6 +66,35 @@ public sealed class GameplayAbilityReentrancyTests
 			.Build();
 
 	/// <summary>
+	/// A stackable cooldown that is inhibited unless the owner is
+	/// stunned. Its pre-existing stack must survive a failed
+	/// activation that briefly uninhibits and stacks it.
+	/// </summary>
+	private static readonly GameplayEffectDefinition StackingCooldown =
+		GameplayEffectDefinition
+			.Create("Test.Ability.StackingCooldown")
+			.HasDuration(5f)
+			.GrantTags(AbilitySchema.CooldownDash)
+			.Stacking(GameplayEffectStackingType.AggregateByTarget, 5)
+			.RequireWhileActive(
+				GameplayTagRequirements.Require(
+					GameplayTagSet.Create(TagSchema.StatusStunned)))
+			.Build();
+
+	/// <summary>
+	/// A costed ability whose cancellation stuns the owner, stacking
+	/// an existing inhibited cooldown before the cost is rejected.
+	/// </summary>
+	private static readonly GameplayAbilityDefinition StackedCooldownAfterCancel =
+		GameplayAbilityDefinition
+			.Create("Test.Ability.StackedCooldownAfterCancel")
+			.AssetTags(AbilitySchema.AbilityFree)
+			.CancelAbilitiesWithTags(AbilitySchema.AbilityChannel)
+			.Cost(AbilitySchema.CostIgnoringStun)
+			.Cooldown(StackingCooldown)
+			.Build();
+
+	/// <summary>
 	/// A costed ability that cancels the channel and starts a cooldown.
 	/// </summary>
 	private static readonly GameplayAbilityDefinition AffordableAfterCancel =
@@ -202,6 +231,77 @@ public sealed class GameplayAbilityReentrancyTests
 		Assert.Equal(
 			"Granted,Activated,Granted,Cancelled",
 			recorder.Sequence());
+	}
+
+	[Fact]
+	public void FailedCostAfterStackingCooldown_RestoresExistingCooldownStack()
+	{
+		using AbilityRuntime runtime = new();
+		Entity actor = runtime.CreateActor();
+
+		// The cooldown is inhibited while the actor is not stunned, so
+		// its granted tag does not block the attempt and an activation
+		// stacks the existing instance.
+		GameplayEffectApplyResult seeded = runtime.Effects.Apply(
+			actor,
+			StackingCooldown,
+			actor);
+
+		Assert.Equal(GameplayEffectApplyStatus.Applied, seeded.Status);
+		Assert.True(runtime.Effects.TryGetEffect(
+			seeded.Handle,
+			out ActiveGameplayEffect before)); Assert.Equal(1, before.StackCount);
+		Assert.True(before.IsInhibited);
+
+		// Let part of the seeded duration elapse so the failed
+		// refresh is distinguishable from the restored deadline.
+		runtime.Effects.Advance(2f);
+
+		GameplayAbilityHandle victim =
+		runtime.Abilities.GiveAbility(actor, AbilitySchema.Channel);
+
+		Assert.True(runtime.Abilities.TryActivate(victim).Succeeded);
+
+		bool stunned = false;
+
+		runtime.Abilities.Changed += change =>
+		{
+			if (change.Kind == GameplayAbilityChangeKind.Cancelled
+				&& change.Handle == victim
+				&& !stunned)
+			{
+				stunned = true;
+
+				Assert.True(runtime.Effects.Apply(
+					actor,
+					EffectSchema.Stun).Applied);
+			}
+		};
+
+		GameplayAbilityHandle handle = runtime.Abilities.GiveAbility(
+			actor,
+			StackedCooldownAfterCancel);
+
+		GameplayAbilityActivationResult result =
+			runtime.Abilities.TryActivate(handle);
+
+		Assert.True(stunned);
+		Assert.Equal(GameplayAbilityActivationStatus.RejectedByCost, result.Status);
+		Assert.False(result.Succeeded);
+		Assert.Equal(0, runtime.Abilities.ActiveAbilityCount);
+
+		// The pre-existing cooldown instance survives with its old
+		// stack count rather than being removed as a new effect would
+		// be. The external stun is the other active instance and
+		// legitimately uninhibits the cooldown.
+		Assert.Equal(2, runtime.Effects.ActiveEffectCount);
+		Assert.True(runtime.Effects.TryGetEffect(
+			seeded.Handle,
+			out ActiveGameplayEffect after));
+		Assert.Equal(1, after.StackCount);
+		Assert.Equal(3d, after.RemainingDuration, 3);
+		Assert.False(after.IsInhibited);
+		Assert.True(runtime.Tags.HasTag(actor, AbilitySchema.CooldownDash));
 	}
 
 	[Fact]
