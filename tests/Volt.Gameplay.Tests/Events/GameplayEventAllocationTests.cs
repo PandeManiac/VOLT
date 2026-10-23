@@ -41,6 +41,40 @@ public sealed class GameplayEventAllocationTests
 	}
 
 	[Fact]
+	public void SubscribeAndUnsubscribe_AfterWarmup_AllocatesNothing()
+	{
+		using World world = new();
+		using GameplayEventSystem events = new(world);
+
+		Action<GameplayEvent> handler = _ => { };
+
+		for (int index = 0; index < 128; index++)
+		{
+			GameplayEventSubscription warm = events.Subscribe(
+				EventSchema.AttackHit,
+				handler);
+
+			Assert.True(events.Unsubscribe(warm));
+		}
+
+		long before = GC.GetAllocatedBytesForCurrentThread();
+
+		for (int index = 0; index < 1_000; index++)
+		{
+			GameplayEventSubscription subscription = events.Subscribe(
+				EventSchema.AttackHit,
+				handler);
+
+			Assert.True(events.Unsubscribe(subscription));
+		}
+
+		long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+		Assert.Equal(0, allocated);
+		Assert.Equal(0, events.SubscriptionCount);
+	}
+
+	[Fact]
 	public void PublishWithOneListener_AfterWarmup_AllocatesNothing()
 	{
 		using World world = new();
