@@ -165,6 +165,17 @@ public sealed class GameplayEffectSystem : IDisposable
 		GameplayEffectDefinition definition,
 		Entity source = default)
 	{
+		return Apply(target, definition, source, out _);
+	}
+
+	internal GameplayEffectApplyResult Apply(
+		Entity target,
+		GameplayEffectDefinition definition,
+		Entity source,
+		out GameplayEffectApplicationRollback rollback)
+	{
+		rollback = default;
+
 		ThrowIfDisposed();
 		ArgumentNullException.ThrowIfNull(definition);
 
@@ -201,6 +212,8 @@ public sealed class GameplayEffectSystem : IDisposable
 
 		if (existing >= 0)
 		{
+			rollback = CaptureRollback(existing);
+
 			return AddStack(existing, definition, source);
 		}
 
@@ -255,6 +268,9 @@ public sealed class GameplayEffectSystem : IDisposable
 		while (slot >= 0)
 		{
 			int next = _effects[slot].NextOnEntity;
+			uint nextGeneration = next >= 0
+				? _effects[next].Generation
+				: 0;
 
 			if (_effects[slot].Active)
 			{
@@ -263,6 +279,13 @@ public sealed class GameplayEffectSystem : IDisposable
 			}
 
 			slot = next;
+
+			// A removal handler may remove and reuse the next slot.
+			// Stop at that point instead of removing the new occupant.
+			if (slot >= 0 && _effects[slot].Generation != nextGeneration)
+			{
+				break;
+			}
 		}
 
 		return removed;
@@ -625,6 +648,63 @@ public sealed class GameplayEffectSystem : IDisposable
 			handle,
 			target,
 			stackCount);
+	}
+
+	internal bool RevertApplication(
+		GameplayEffectHandle handle,
+		in GameplayEffectApplicationRollback rollback)
+	{
+		if (handle.IsNone)
+		{
+			return false;
+		}
+
+		if (!rollback.WasStacked || rollback.Handle != handle)
+		{
+			return Remove(handle);
+		}
+
+		if (!TryResolve(handle, out int slot))
+		{
+			return false;
+		}
+
+		ref ActiveEffect effect = ref _effects[slot];
+
+		uint generation = effect.Generation;
+		int currentStackCount = effect.StackCount;
+
+		effect.StackCount = rollback.StackCount;
+		effect.Source = rollback.Source;
+		effect.ExpireTime = rollback.ExpireTime;
+		effect.NextPeriodTime = rollback.NextPeriodTime;
+		effect.PendingOrder = rollback.PendingOrder;
+
+		// The previous heap entry was left in place by AddStack; once
+		// the order is restored it is valid again and the entry the
+		// failed application pushed becomes stale.
+		RefreshModifierMagnitudes(slot, generation);
+
+		if (currentStackCount != rollback.StackCount
+			&& IsLive(slot, generation))
+		{
+			RaiseChange(GameplayEffectChangeKind.StackChanged, slot);
+		}
+
+		return true;
+	}
+
+	private GameplayEffectApplicationRollback CaptureRollback(int slot)
+	{
+		ref ActiveEffect effect = ref _effects[slot];
+
+		return new GameplayEffectApplicationRollback(
+			CreateHandle(slot),
+			effect.StackCount,
+			effect.Source,
+			effect.ExpireTime,
+			effect.NextPeriodTime,
+			effect.PendingOrder);
 	}
 
 	private static GameplayEffectApplyResult Discarded(Entity target)
@@ -1170,6 +1250,9 @@ public sealed class GameplayEffectSystem : IDisposable
 		while (slot >= 0)
 		{
 			int next = _effects[slot].NextOnEntity;
+			uint nextGeneration = next >= 0
+				? _effects[next].Generation
+				: 0;
 
 			if (_effects[slot].Active)
 			{
@@ -1181,10 +1264,21 @@ public sealed class GameplayEffectSystem : IDisposable
 			}
 
 			slot = next;
+
+			if (slot >= 0 && _effects[slot].Generation != nextGeneration)
+			{
+				// A cleanup handler recycled the next slot.
+				break;
+			}
 		}
 
-		_entitySegments[segmentIndex]![offset].Head = -1;
-		_entitySegments[segmentIndex]![offset].Count = 0;
+		// Cleanup handlers may have recycled the index and linked
+		// new effects to the replacement. Do not clear that state.
+		if (TryGetEntitySlot(entity, out segmentIndex, out offset))
+		{
+			_entitySegments[segmentIndex]![offset].Head = -1;
+			_entitySegments[segmentIndex]![offset].Count = 0;
+		}
 	}
 
 	private void RemoveEffectSilently(int slot)
@@ -1204,6 +1298,41 @@ public sealed class GameplayEffectSystem : IDisposable
 		RemoveGrantedTags(slot);
 
 		ReleaseSlot(slot);
+	}
+
+	private void RetireStaleEntityEffects(ref EntityEffects slotState)
+	{
+		int slot = slotState.Head;
+
+		// Detach the old chain before releasing any instance. The
+		// attribute and tag stores retire their own per-entity state,
+		// and a replacement that has already written new state has
+		// reset it, so this path only releases effect storage and never
+		// invokes user notifications.
+		slotState.Head = -1;
+		slotState.Count = 0;
+		slotState.Refreshing = false;
+		slotState.RefreshAgain = false;
+
+		while (slot >= 0)
+		{
+			int next = _effects[slot].NextOnEntity;
+
+			if ((uint)slot < (uint)_effectSlotCount
+				&& _effects[slot].Active)
+			{
+				_effects[slot].Active = false;
+
+				if (_activeEffectCount > 0)
+				{
+					_activeEffectCount--;
+				}
+
+				ReleaseSlot(slot);
+			}
+
+			slot = next;
+		}
 	}
 
 	private void ReleaseSlot(int slot)
@@ -1259,7 +1388,8 @@ public sealed class GameplayEffectSystem : IDisposable
 				while (slot >= 0)
 				{
 					if ((uint)slot >= (uint)_effectSlotCount
-						|| !_effects[slot].Active)
+						|| !_effects[slot].Active
+						|| _effects[slot].Target != entity)
 					{
 						break;
 					}
@@ -1678,6 +1808,16 @@ public sealed class GameplayEffectSystem : IDisposable
 
 		if (slot.Generation != entity.Generation)
 		{
+			// The replacement can be affected before the effect system
+			// receives the old generation's destruction notification.
+			// Detach and retire the old chain first; resetting the
+			// fields alone would orphan every instance, keep its count
+			// alive, and leave its deadlines able to execute.
+			if (slot.Generation != 0)
+			{
+				RetireStaleEntityEffects(ref slot);
+			}
+
 			slot.Generation = entity.Generation;
 			slot.Head = -1;
 			slot.Count = 0;
