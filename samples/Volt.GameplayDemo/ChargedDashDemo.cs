@@ -1,8 +1,10 @@
+using Volt.Core.Timing;
 using Volt.Ecs;
 using Volt.Gameplay.Abilities;
 using Volt.Gameplay.Attributes;
 using Volt.Gameplay.Effects;
 using Volt.Gameplay.Events;
+using Volt.Gameplay.Simulation;
 using Volt.Gameplay.Tags;
 using Volt.Gameplay.Tasks;
 
@@ -28,6 +30,9 @@ internal sealed class ChargedDashDemo : IDisposable
 	private readonly GameplayEffectSystem _effects;
 	private readonly GameplayEventSystem _events;
 	private readonly GameplayAbilitySystem _abilities;
+	private readonly GameLoop _loop;
+	private readonly GameplaySimulation _simulation;
+	private readonly DemoMonotonicClock _clock;
 	private readonly GameplayAbilityHandle _dash;
 	private readonly GameplayAbilityHandle _focus;
 	private readonly GameplayAbilityHandle _overcharge;
@@ -49,6 +54,10 @@ internal sealed class ChargedDashDemo : IDisposable
 			_attributes,
 			_events);
 
+		_clock = new DemoMonotonicClock();
+		_loop = new GameLoop(GameLoopSettings.Default, _clock);
+		_simulation = new GameplaySimulation(_loop, _abilities, _effects);
+
 		_player = _world.CreateEntity();
 
 		_dash = _abilities.GiveAbility(_player, DemoSchema.ChargedDash);
@@ -67,6 +76,8 @@ internal sealed class ChargedDashDemo : IDisposable
 		RunOverlappingAbilities();
 		RunApplicationTasks();
 		RunOwnerDestruction();
+		RunPauseAndTimeScale();
+		VerifyCleanShutdown();
 
 		Console.WriteLine();
 		Console.WriteLine(
@@ -76,6 +87,7 @@ internal sealed class ChargedDashDemo : IDisposable
 
 	public void Dispose()
 	{
+		_simulation.Dispose();
 		_abilities.Dispose();
 		_events.Dispose();
 		_effects.Dispose();
@@ -449,10 +461,151 @@ internal sealed class ChargedDashDemo : IDisposable
 	private bool IsStunned =>
 		_tags.HasTag(_player, DemoSchema.StatusStunned);
 
+	/// <summary>
+	/// Advances real time through the fixed-step loop. At normal time
+	/// scale this is the same duration of simulation time. The gameplay
+	/// integration advances effects and then tasks for every fixed
+	/// step the loop executes.
+	/// </summary>
 	private void Advance(float seconds)
 	{
-		_effects.Advance(seconds);
-		Tasks.Advance(seconds);
+		int frames = (int)MathF.Round(seconds * 60f);
+
+		for (int index = 0; index < frames; index++)
+		{
+			_clock.AdvanceNanoseconds(DemoMonotonicClock.FrameNanoseconds);
+			_loop.Advance();
+		}
+	}
+
+	private void RunPauseAndTimeScale()
+	{
+		Begin("6. Pause, single step, and time scaling");
+
+		Require(
+			_abilities.TryActivate(_overcharge).Succeeded,
+			"the pause scenario did not activate");
+
+		Require(
+			_abilities.TryGetActivation(_overcharge, out var activation),
+			"the pause scenario activation token was unavailable");
+
+		GameplayAbilityTaskHandle task = Tasks.WaitDuration(
+			activation,
+			0.25f);
+
+		double beforePause = Tasks.Time;
+
+		_loop.Pause();
+		Advance(1f);
+
+		Report(
+			$"paused for 1 s: simulationTime={Tasks.Time:0.000}, " +
+			$"pendingTasks={Tasks.PendingTaskCount}");
+
+		Require(Tasks.Time == beforePause, "paused time advanced gameplay");
+		Require(
+			Tasks.TryGetTask(task, out _),
+			"the paused task disappeared");
+
+		Require(_loop.StepOnce(), "a single step was not pending");
+
+		Advance(1f / 60f);
+
+		Require(
+			Math.Abs(Tasks.Time - beforePause - _loop.FixedDeltaSeconds)
+				< 0.000001,
+			"a single step did not advance exactly one fixed delta");
+
+		_loop.Resume();
+
+		_loop.TimeScale = TimeScale.FromSingle(2f);
+
+		double beforeFast = Tasks.Time;
+
+		Advance(0.125f);
+
+		Report(
+			$"2x for 0.125 real seconds: simulationTime={Tasks.Time:0.000}, " +
+			$"pendingTasks={Tasks.PendingTaskCount}");
+
+		Require(
+			!Tasks.TryGetTask(task, out _),
+			"the 2x simulation did not complete the 0.25 s task");
+		Require(
+			Tasks.Time - beforeFast > 0.2,
+			"2x time scaling did not advance simulation faster");
+
+		Require(_abilities.End(_overcharge), "the pause ability did not end");
+
+		_loop.TimeScale = TimeScale.FromSingle(0.5f);
+
+		Require(
+			_abilities.TryActivate(_overcharge).Succeeded,
+			"the slow scenario did not activate");
+
+		Require(
+			_abilities.TryGetActivation(_overcharge, out var slow),
+			"the slow scenario activation token was unavailable");
+
+		GameplayAbilityTaskHandle slowTask = Tasks.WaitDuration(slow, 0.25f);
+		double beforeSlow = Tasks.Time;
+
+		Advance(0.5f);
+
+		Report(
+			$"0.5x for 0.5 real seconds: simulationTime={Tasks.Time:0.000}, " +
+			$"pendingTasks={Tasks.PendingTaskCount}");
+
+		Require(
+			Tasks.Time - beforeSlow < 0.3,
+			"0.5x time scaling advanced too much simulation time");
+		Require(
+			!Tasks.TryGetTask(slowTask, out _),
+			"the 0.5x simulation did not complete the task");
+
+		_loop.TimeScale = TimeScale.Normal;
+
+		Require(_abilities.End(_overcharge), "the pause ability did not end");
+	}
+
+	private void VerifyCleanShutdown()
+	{
+		Begin("7. Clean shutdown");
+
+		Report(
+			$"activeAbilities={_abilities.ActiveAbilityCount}, " +
+			$"pendingTasks={Tasks.PendingTaskCount}, " +
+			$"activeEffects={_effects.ActiveEffectCount}, " +
+			$"subscriptions={_events.SubscriptionCount}");
+
+		Require(
+			_abilities.ActiveAbilityCount == 0,
+			"an ability survived the demonstration");
+		Require(
+			Tasks.PendingTaskCount == 0,
+			"a task survived the demonstration");
+		Require(
+			_effects.ActiveEffectCount == 0,
+			"an effect survived the demonstration");
+		Require(
+			_events.SubscriptionCount == 0,
+			"an event subscription survived the demonstration");
+	}
+
+	private sealed class DemoMonotonicClock : IMonotonicClock
+	{
+		public const long NanosecondsPerSecond = 1_000_000_000;
+		public const long FrameNanoseconds = 16_666_667;
+
+		public long Timestamp { get; private set; }
+
+		public long TicksPerSecond => NanosecondsPerSecond;
+
+		public void AdvanceNanoseconds(long nanoseconds)
+		{
+			Timestamp += nanoseconds;
+		}
 	}
 
 	private static void Begin(string title)
