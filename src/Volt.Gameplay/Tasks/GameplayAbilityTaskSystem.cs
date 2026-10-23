@@ -1,6 +1,7 @@
 using Volt.Ecs;
 using Volt.Gameplay.Abilities;
 using Volt.Gameplay.Events;
+using Volt.Gameplay.Simulation;
 using Volt.Gameplay.Tags;
 
 namespace Volt.Gameplay.Tasks;
@@ -68,6 +69,7 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 	private uint _nextSequence;
 	private double _time;
 	private bool _advancing;
+	private SimulationClockClaim? _clockClaim;
 
 	private DeadlineEntry[] _deadlines =
 		new DeadlineEntry[InitialDeadlineCapacity];
@@ -101,7 +103,7 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		_eventSink = new EventSink(this);
 
 		_world.EntityDestroyed += HandleEntityDestroyed;
-		_tags.TagsChanged += HandleTagsChanged;
+		_tags.TagChanged += HandleTagChanged;
 	}
 
 	/// <summary>
@@ -237,6 +239,70 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		ValidateTagWaitMode(mode);
 
 		return StartTagConditionTask(activation, tag, mode, exact, -1);
+	}
+
+	/// <summary>
+	/// Starts a task that completes when the first of several sources
+	/// fires.
+	/// </summary>
+	/// <param name="activation">The owning activation.</param>
+	/// <param name="wait">The composite wait description.</param>
+	/// <returns>
+	/// The task handle, or <see cref="GameplayAbilityTaskHandle.None"/>
+	/// when the activation is no longer active.
+	/// </returns>
+	/// <exception cref="ArgumentNullException">
+	/// The wait is <see langword="null"/>.
+	/// </exception>
+	/// <exception cref="InvalidOperationException">
+	/// The wait has no source.
+	/// </exception>
+	/// <remarks>
+	/// The task holds every source in one record: the timeout is one
+	/// deadline, the watched events are one subscription filtered by
+	/// the wait's tag set, and the tag condition is one entry in the
+	/// owner's tag index. Completing or cancelling it releases all of
+	/// them, so a race never leaves a losing source subscribed.
+	/// </remarks>
+	public GameplayAbilityTaskHandle WaitAny(
+		GameplayAbilityActivation activation,
+		GameplayWaitAny wait)
+	{
+		ThrowIfDisposed();
+		ArgumentNullException.ThrowIfNull(wait);
+		wait.Validate();
+
+		return StartWaitAnyTask(activation, wait, -1);
+	}
+
+	/// <summary>
+	/// Starts a registered custom task that completes when application
+	/// code completes its handle.
+	/// </summary>
+	/// <param name="activation">The owning activation.</param>
+	/// <param name="definition">The registered definition.</param>
+	/// <returns>
+	/// The task handle, or <see cref="GameplayAbilityTaskHandle.None"/>
+	/// when the activation is no longer active.
+	/// </returns>
+	/// <exception cref="ArgumentNullException">
+	/// The definition is <see langword="null"/>.
+	/// </exception>
+	/// <exception cref="ArgumentException">
+	/// The definition belongs to another ability system.
+	/// </exception>
+	/// <remarks>
+	/// A custom task is event-driven: the application completes the
+	/// handle when its own signal fires. The runtime never polls it, so
+	/// a dormant custom task costs one slot and one owner-list link.
+	/// </remarks>
+	public GameplayAbilityTaskHandle WaitCustom(
+		GameplayAbilityActivation activation,
+		GameplayAbilityTaskDefinition definition)
+	{
+		ThrowIfDisposed();
+
+		return StartCustomTask(activation, definition, -1);
 	}
 
 	/// <summary>
@@ -394,7 +460,8 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 			record.Kind,
 			record.PlanStep,
 			record.Deadline,
-			remaining);
+			remaining,
+			record.CustomDefinition);
 
 		return true;
 	}
@@ -466,15 +533,87 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 	/// it matches the one-frame latency of a zero-duration timer.
 	/// </para>
 	/// <para>
-	/// A large step processes every due deadline in order, exactly like
-	/// the effect system, so the sequence of completions is independent
-	/// of how the step was subdivided.
+	/// A large step processes every deadline that was pending when the
+	/// call started, in order. Completions run at the end-of-step
+	/// clock; a task created by one of those completions is deferred
+	/// to the next advance even when its duration is zero. Chained
+	/// waits are therefore intentionally not independent of how a
+	/// large step is subdivided: one <c>Advance(10)</c> completes one
+	/// link of a callback chain, while ten <c>Advance(1)</c> calls
+	/// give each link an advance to run in. This matches the fixed
+	/// step loop and
+	/// <see cref="Volt.Core.Timing.SimulationScheduler"/>, where work
+	/// registered during a step is eligible on the following step.
 	/// </para>
 	/// </remarks>
 	public void Advance(float deltaSeconds)
 	{
 		ThrowIfDisposed();
 
+		if (_clockClaim is not null)
+		{
+			throw new InvalidOperationException(
+				"This task system is advanced by a " +
+				"GameplaySimulation attached to the fixed-step loop. " +
+				"Calling Advance manually would advance the same clock " +
+				"twice in one step. Detach the integration or use its " +
+				"loop to advance simulation time.");
+		}
+
+		AdvanceCore(deltaSeconds);
+	}
+
+	/// <summary>
+	/// Advances the clock from the attached simulation integration.
+	/// </summary>
+	internal void AdvanceFromSimulation(float deltaSeconds)
+	{
+		ThrowIfDisposed();
+
+		AdvanceCore(deltaSeconds);
+	}
+
+	/// <summary>
+	/// Claims the clock for one fixed-step integration.
+	/// </summary>
+	/// <param name="claim">The claiming integration's identity.</param>
+	/// <exception cref="InvalidOperationException">
+	/// Another integration already owns the clock.
+	/// </exception>
+	internal void BeginSimulation(SimulationClockClaim claim)
+	{
+		ArgumentNullException.ThrowIfNull(claim);
+
+		if (_clockClaim is not null)
+		{
+			throw new InvalidOperationException(
+				"This task system is already advanced by another " +
+				"GameplaySimulation. A clock has one owner.");
+		}
+
+		_clockClaim = claim;
+	}
+
+	/// <summary>
+	/// Releases the clock when its integration is disposed.
+	/// </summary>
+	/// <param name="claim">The releasing integration's identity.</param>
+	/// <remarks>
+	/// A claim this system does not hold is left alone, so an
+	/// integration that failed to acquire it cannot detach the owner.
+	/// </remarks>
+	internal void EndSimulation(SimulationClockClaim claim)
+	{
+		if (!ReferenceEquals(_clockClaim, claim))
+		{
+			return;
+		}
+
+		_clockClaim = null;
+	}
+
+	private void AdvanceCore(float deltaSeconds)
+	{
 		if (!float.IsFinite(deltaSeconds) || deltaSeconds < 0f)
 		{
 			throw new ArgumentOutOfRangeException(
@@ -505,14 +644,12 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 			_time += deltaSeconds;
 
 			double stepTime = _time;
-			uint eligibleSequence = _nextSequence;
 
 			while (_deadlineCount > 0)
 			{
 				DeadlineEntry head = _deadlines[0];
 
-				if (head.Deadline > stepTime
-					|| head.Sequence > eligibleSequence)
+				if (head.Deadline > stepTime)
 				{
 					break;
 				}
@@ -531,8 +668,44 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 
 				if (record.Kind is not (
 					GameplayAbilityTaskKind.Duration
-					or GameplayAbilityTaskKind.TagCondition))
+					or GameplayAbilityTaskKind.TagCondition
+					or GameplayAbilityTaskKind.Any))
 				{
+					continue;
+				}
+
+				if (record.Kind == GameplayAbilityTaskKind.Any)
+				{
+					if (record.Tag.IsValid
+						&& !ConditionHolds(ref record))
+					{
+						// The deadline belonged to the tag condition,
+						// which no longer holds. Fall back to the
+						// timeout instead of losing it, so a race that
+						// was armed and then disarmed still expires.
+						if (record.TimeoutAt <= stepTime)
+						{
+							CompleteTask(
+								slot,
+								GameplayAbilityTaskCompletionReason.Elapsed,
+								default);
+						}
+						else if (record.TimeoutAt
+							< double.PositiveInfinity)
+						{
+							ScheduleDeadline(slot, record.TimeoutAt);
+						}
+
+						continue;
+					}
+
+					CompleteTask(
+						slot,
+						record.Tag.IsValid
+							? GameplayAbilityTaskCompletionReason.ConditionMet
+							: GameplayAbilityTaskCompletionReason.Elapsed,
+						default);
+
 					continue;
 				}
 
@@ -656,10 +829,124 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		_tasks[slot].TagMode = mode;
 		_tasks[slot].Exact = exact;
 
+		LinkTagOwner(_tasks[slot].Owner, slot);
+
 		if (ConditionHolds(ref _tasks[slot]))
 		{
 			ScheduleDeadline(slot, _time);
 		}
+
+		return FinishStart(slot);
+	}
+
+	/// <summary>
+	/// Starts a composite wait task for an ability plan step.
+	/// </summary>
+	internal GameplayAbilityTaskHandle StartWaitAnyTask(
+		GameplayAbilityActivation activation,
+		GameplayWaitAny wait,
+		int planStep)
+	{
+		ThrowIfDisposed();
+
+		if (!TryBeginTask(
+			activation,
+			GameplayAbilityTaskKind.Any,
+			planStep,
+			out int slot))
+		{
+			return GameplayAbilityTaskHandle.None;
+		}
+
+		_tasks[slot].Wait = wait;
+
+		if (wait.HasTimeout)
+		{
+			_tasks[slot].TimeoutAt = _time + wait.TimeoutSeconds;
+		}
+
+		if (wait.HasTag)
+		{
+			_tasks[slot].Tag = wait.Tag;
+			_tasks[slot].TagMode = wait.TagMode;
+			_tasks[slot].Exact = wait.Exact;
+
+			LinkTagOwner(_tasks[slot].Owner, slot);
+		}
+
+		if (wait.HasEvents)
+		{
+			(GameplayTag subscriptionTag, GameplayEventMatch subscriptionMatch) =
+				wait.GetSubscriptionFilter();
+
+			GameplayEventSubscription subscription;
+
+			try
+			{
+				subscription = _events.SubscribeSink(
+					subscriptionTag,
+					subscriptionMatch,
+					_tasks[slot].Owner,
+					default,
+					default,
+					_eventSink,
+					slot);
+			}
+			catch
+			{
+				ReleaseTaskStorage(slot, unlinkOwner: true);
+				throw;
+			}
+
+			_tasks[slot].EventSubscription = subscription;
+		}
+
+		// A tag source that already holds wins immediately; otherwise
+		// the timeout keeps the task in the deadline heap. A race with
+		// neither a tag source nor a timeout is reached only through
+		// events and never enters the heap.
+		if (wait.HasTag && ConditionHolds(ref _tasks[slot]))
+		{
+			ScheduleDeadline(slot, _time);
+		}
+		else if (wait.HasTimeout)
+		{
+			ScheduleDeadline(slot, _tasks[slot].TimeoutAt);
+		}
+
+		return FinishStart(slot);
+	}
+
+	/// <summary>
+	/// Starts a custom task for an ability plan step.
+	/// </summary>
+	internal GameplayAbilityTaskHandle StartCustomTask(
+		GameplayAbilityActivation activation,
+		GameplayAbilityTaskDefinition definition,
+		int planStep)
+	{
+		ThrowIfDisposed();
+		ArgumentNullException.ThrowIfNull(definition);
+
+		if (!ReferenceEquals(definition.System, _abilities))
+		{
+			throw new ArgumentException(
+				"The task definition was registered by another ability " +
+				"system. A definition is scoped to the system whose " +
+				"activations wait on it.",
+				nameof(definition));
+		}
+
+		if (!TryBeginTask(
+			activation,
+			GameplayAbilityTaskKind.Custom,
+			planStep,
+			out int slot))
+		{
+			return GameplayAbilityTaskHandle.None;
+		}
+
+		_tasks[slot].CustomDefinition = definition;
 
 		return FinishStart(slot);
 	}
@@ -705,18 +992,17 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		}
 
 		_world.EntityDestroyed -= HandleEntityDestroyed;
-		_tags.TagsChanged -= HandleTagsChanged;
+		_tags.TagChanged -= HandleTagChanged;
 
 		Changed = null;
 
 		for (int slot = 0; slot < _taskSlotCount; slot++)
 		{
 			GameplayEventSubscription subscription =
-				_tasks[slot].EventSubscription;
-
-			if (!subscription.IsNone)
+				_tasks[slot].EventSubscription; if (!subscription.IsNone && !_events.IsDisposed)
 			{
 				_events.Unsubscribe(subscription);
+
 			}
 		}
 
@@ -732,6 +1018,7 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		_nextSequence = 0;
 		_time = 0d;
 		_advancing = false;
+		_clockClaim = null;
 		_disposed = true;
 
 		GC.SuppressFinalize(this);
@@ -846,14 +1133,12 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		task.EventSubscription = GameplayEventSubscription.None;
 		task.Tag = GameplayTag.None;
 		task.Exact = false;
+		task.Wait = null;
+		task.TimeoutAt = double.PositiveInfinity;
+		task.CustomDefinition = null;
 
 		LinkOwner(owner, slot);
 		LinkActivation(abilitySlot, slot);
-
-		if (kind == GameplayAbilityTaskKind.TagCondition)
-		{
-			LinkTagOwner(owner, slot);
-		}
 
 		_pendingCount++;
 
@@ -910,8 +1195,19 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		ref TaskSlot task = ref _tasks[token];
 
 		if (task.Generation == 0
-			|| task.Kind != GameplayAbilityTaskKind.GameplayEvent
-			|| task.EventSubscription != subscription)
+			|| task.EventSubscription != subscription
+			|| task.Kind is not (
+				GameplayAbilityTaskKind.GameplayEvent
+				or GameplayAbilityTaskKind.Any))
+		{
+			return;
+		}
+
+		// A race subscribes once for a tag set, so the router may
+		// deliver an event the wait does not watch.
+		if (task.Kind == GameplayAbilityTaskKind.Any
+			&& (task.Wait is null
+				|| !task.Wait.MatchesEvent(gameplayEvent.Tag)))
 		{
 			return;
 		}
@@ -940,7 +1236,7 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 			in gameplayEvent);
 	}
 
-	private void HandleTagsChanged(Entity entity)
+	private void HandleTagChanged(Entity entity, GameplayTag changedTag)
 	{
 		if (!TryGetOwnerSlot(entity, out int segmentIndex, out int offset))
 		{
@@ -949,19 +1245,58 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 
 		ref EntityTasks state = ref _owners[segmentIndex]![offset];
 
-		// Tag changes only visit tag-condition tasks, not every task
-		// the entity owns. An entity with a large idle task population
-		// therefore does not pay for a tag change that no task watches.
-		int slot = state.TagHead;
+		// Only a task watching the changed tag itself, or an ancestor of
+		// it, can have its condition change. Exact tasks live in their
+		// own bucket and an ancestor is not an exact match; hierarchical
+		// tasks are visited for the changed tag and every ancestor. A
+		// tag change therefore costs O(tasks watching that tag and its
+		// ancestors), not O(tasks on the entity).
+		VisitTagBucket(state.ExactTagHeads, changedTag);
+
+		if (state.HierarchicalTagHeads is null)
+		{
+			return;
+		}
+
+		VisitTagBucket(state.HierarchicalTagHeads, changedTag);
+
+		foreach (GameplayTag ancestor in
+			GameplayTagRegistry.Shared.GetAncestors(changedTag))
+		{
+			VisitTagBucket(state.HierarchicalTagHeads, ancestor);
+		}
+	}
+
+	private void VisitTagBucket(
+		Dictionary<GameplayTag, int>? heads,
+		GameplayTag tag)
+	{
+		if (heads is null || !heads.TryGetValue(tag, out int slot))
+		{
+			return;
+		}
 
 		while (slot >= 0)
 		{
 			int next = _tasks[slot].NextOnTag;
 			ref TaskSlot task = ref _tasks[slot];
 
-			if (task.HeapIndex < 0 && ConditionHolds(ref task))
+			if (ConditionHolds(ref task))
 			{
-				ScheduleDeadline(slot, _time);
+				// A race may already hold the timeout deadline. Arm it
+				// for now instead, which is earlier and therefore safe,
+				// and replace the old heap entry rather than adding a
+				// second one for the same task.
+				if (task.HeapIndex < 0)
+				{
+					ScheduleDeadline(slot, _time);
+				}
+				else if (task.Kind == GameplayAbilityTaskKind.Any
+					&& task.Deadline > _time)
+				{
+					RemoveDeadline(slot);
+					ScheduleDeadline(slot, _time);
+				}
 			}
 
 			slot = next;
@@ -1089,18 +1424,25 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 	private void LinkTagOwner(Entity owner, int slot)
 	{
 		ref EntityTasks state = ref GetOrCreateOwnerSlot(owner);
-		int head = state.TagHead;
+		ref TaskSlot task = ref _tasks[slot];
+		GameplayTag tag = task.Tag;
+		Dictionary<GameplayTag, int>? heads = task.Exact
+			? state.ExactTagHeads ??= []
+			: state.HierarchicalTagHeads ??= [];
 
-		_tasks[slot].NextOnTag = head;
-		_tasks[slot].PreviousOnTag = -1;
+		int head = heads.TryGetValue(tag, out int existing)
+			? existing
+			: -1;
+
+		task.NextOnTag = head;
+		task.PreviousOnTag = -1;
 
 		if (head >= 0)
 		{
 			_tasks[head].PreviousOnTag = slot;
 		}
 
-		state.TagHead = slot;
-		state.TagCount++;
+		heads[tag] = slot;
 	}
 
 	private void UnlinkTagOwner(int slot)
@@ -1116,6 +1458,15 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		}
 
 		ref EntityTasks state = ref _owners[segmentIndex]![offset];
+		Dictionary<GameplayTag, int>? heads = task.Exact
+			? state.ExactTagHeads
+			: state.HierarchicalTagHeads;
+
+		if (heads is null)
+		{
+			return;
+		}
+
 		int previous = task.PreviousOnTag;
 		int next = task.NextOnTag;
 
@@ -1125,7 +1476,7 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		}
 		else
 		{
-			state.TagHead = next;
+			heads[task.Tag] = next;
 		}
 
 		if (next >= 0)
@@ -1133,13 +1484,18 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 			_tasks[next].PreviousOnTag = previous;
 		}
 
-		if (state.TagCount > 0)
-		{
-			state.TagCount--;
-		}
-
 		task.NextOnTag = -1;
 		task.PreviousOnTag = -1;
+
+		if (heads.TryGetValue(task.Tag, out int head) && head < 0)
+		{
+			// Keep the empty dictionary. Removing it would make every
+			// later wait on this entity allocate a new one, which is a
+			// steady-state allocation in an otherwise allocation-free
+			// task lifecycle. The dictionary is released when the entity
+			// is destroyed or its slot is recycled.
+			heads.Remove(task.Tag);
+		}
 	}
 
 	private void ReleaseTaskStorage(int slot, bool unlinkOwner)
@@ -1147,7 +1503,7 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		ref TaskSlot task = ref _tasks[slot];
 		GameplayEventSubscription subscription = task.EventSubscription;
 
-		if (!subscription.IsNone)
+		if (!subscription.IsNone && !_events.IsDisposed)
 		{
 			_events.Unsubscribe(subscription);
 		}
@@ -1162,7 +1518,10 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 			UnlinkOwner(slot);
 		}
 
-		if (task.Kind == GameplayAbilityTaskKind.TagCondition)
+		if (task.Kind is (
+			GameplayAbilityTaskKind.TagCondition
+			or GameplayAbilityTaskKind.Any)
+			&& task.Tag.IsValid)
 		{
 			UnlinkTagOwner(slot);
 		}
@@ -1192,8 +1551,8 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 
 		state.Head = -1;
 		state.Count = 0;
-		state.TagHead = -1;
-		state.TagCount = 0;
+		state.ExactTagHeads = null;
+		state.HierarchicalTagHeads = null;
 	}
 
 	private void HandleEntityDestroyed(Entity entity)
@@ -1253,8 +1612,8 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 			state.Generation = owner.Generation;
 			state.Head = -1;
 			state.Count = 0;
-			state.TagHead = -1;
-			state.TagCount = 0;
+			state.ExactTagHeads = null;
+			state.HierarchicalTagHeads = null;
 		}
 
 		return ref state;
@@ -1434,6 +1793,9 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 			NextOnTag = -1,
 			PreviousOnTag = -1,
 			EventSubscription = GameplayEventSubscription.None,
+			Wait = null,
+			TimeoutAt = double.PositiveInfinity,
+			CustomDefinition = null,
 			PlanStep = -1
 		};
 
@@ -1443,6 +1805,18 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 	private void ScheduleDeadline(int slot, double deadline)
 	{
 		ref TaskSlot task = ref _tasks[slot];
+
+		// A task created while the advance is delivering completions
+		// must not run in that same advance. A zero-duration task
+		// would otherwise sit at the heap root with a deadline equal
+		// to the current step and starve eligible tasks behind it.
+		// Move it just past the step boundary instead; the next
+		// positive advance completes it. Tasks created before the
+		// advance keep the exact deadline they requested.
+		if (_advancing && deadline <= _time)
+		{
+			deadline = Math.BitIncrement(_time);
+		}
 
 		task.Deadline = deadline;
 		task.Sequence = NextSequence();
@@ -1763,6 +2137,9 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		public GameplayTagWaitMode TagMode;
 		public bool Exact;
 		public GameplayEventSubscription EventSubscription;
+		public GameplayWaitAny? Wait;
+		public double TimeoutAt;
+		public GameplayAbilityTaskDefinition? CustomDefinition;
 	}
 
 	private struct DeadlineEntry
@@ -1790,7 +2167,7 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		public uint Generation;
 		public int Head;
 		public int Count;
-		public int TagHead;
-		public int TagCount;
+		public Dictionary<GameplayTag, int>? ExactTagHeads;
+		public Dictionary<GameplayTag, int>? HierarchicalTagHeads;
 	}
 }

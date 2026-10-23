@@ -11,4 +11,8 @@
     <ProjectReference Include="../Volt.Ecs/Volt.Ecs.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Volt.Gameplay.Tests" />
+  </ItemGroup>
+
 </Project>

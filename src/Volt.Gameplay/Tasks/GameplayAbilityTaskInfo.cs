@@ -19,7 +19,8 @@ public readonly struct GameplayAbilityTaskInfo
 		GameplayAbilityTaskKind kind,
 		int planStep,
 		double deadline,
-		double remainingTime)
+		double remainingTime,
+		GameplayAbilityTaskDefinition? customDefinition)
 	{
 		Handle = handle;
 		Activation = activation;
@@ -28,6 +29,7 @@ public readonly struct GameplayAbilityTaskInfo
 		PlanStep = planStep;
 		Deadline = deadline;
 		RemainingTime = remainingTime;
+		CustomDefinition = customDefinition;
 	}
 
 	/// <summary>
@@ -55,6 +57,12 @@ public readonly struct GameplayAbilityTaskInfo
 	/// task was started by application code.
 	/// </summary>
 	public int PlanStep { get; }
+
+	/// <summary>
+	/// Gets the registered definition of a custom task, or
+	/// <see langword="null"/> for a built-in task.
+	/// </summary>
+	public GameplayAbilityTaskDefinition? CustomDefinition { get; }
 
 	/// <summary>
 	/// Gets the absolute simulation time the task is due, or

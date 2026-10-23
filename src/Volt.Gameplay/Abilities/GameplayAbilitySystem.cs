@@ -2,6 +2,7 @@ using Volt.Ecs;
 using Volt.Gameplay.Attributes;
 using Volt.Gameplay.Effects;
 using Volt.Gameplay.Events;
+using Volt.Gameplay.Simulation;
 using Volt.Gameplay.Tags;
 using Volt.Gameplay.Tasks;
 
@@ -73,7 +74,10 @@ public sealed class GameplayAbilitySystem : IDisposable
 	private readonly CapturePool _tagCancelPool = new();
 	private readonly CapturePool _inputPool = new();
 	private readonly CapturePool _revokePool = new();
+	private readonly Dictionary<string, GameplayAbilityTaskDefinition>
+		_taskDefinitions = new(StringComparer.Ordinal);
 
+	private SimulationClockClaim? _clockClaim;
 	private bool _disposed;
 
 	/// <summary>
@@ -162,6 +166,65 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// to tag changes, and never appear in the deadline heap.
 	/// </remarks>
 	public GameplayAbilityTaskSystem Tasks => _tasks ??= CreateTaskSystem();
+
+	/// <summary>
+	/// Registers a custom task that abilities of this system can wait
+	/// on.
+	/// </summary>
+	/// <param name="name">
+	/// A unique name, used for diagnostics and for identifying a
+	/// pending task through
+	/// <see cref="GameplayAbilityTaskInfo.CustomDefinition"/>.
+	/// </param>
+	/// <returns>The shared definition.</returns>
+	/// <exception cref="ArgumentException">
+	/// The name is empty or only whitespace.
+	/// </exception>
+	/// <exception cref="InvalidOperationException">
+	/// The name is already registered.
+	/// </exception>
+	/// <remarks>
+	/// <para>
+	/// Registering is initialization work. The definition is an
+	/// identity: it carries no callback and no per-activation state, so
+	/// any number of activations can share it.
+	/// </para>
+	/// <para>
+	/// Application code completes a pending custom task through
+	/// <see cref="GameplayAbilityTaskSystem.Complete"/> when the signal
+	/// it owns fires, and observes cancellation through
+	/// <see cref="GameplayAbilityTaskSystem.Changed"/>. Nothing polls
+	/// the task.
+	/// </para>
+	/// </remarks>
+	public GameplayAbilityTaskDefinition RegisterTaskDefinition(
+		string name)
+	{
+		ThrowIfDisposed();
+
+		if (string.IsNullOrWhiteSpace(name))
+		{
+			throw new ArgumentException(
+				"A custom task definition needs a non-empty name.",
+				nameof(name));
+		}
+
+		if (_taskDefinitions.ContainsKey(name))
+		{
+			throw new InvalidOperationException(
+				$"A custom task named '{name}' is already registered " +
+				"on this ability system. Reuse the existing definition.");
+		}
+
+		GameplayAbilityTaskDefinition definition = new(
+			this,
+			_taskDefinitions.Count + 1,
+			name);
+
+		_taskDefinitions.Add(name, definition);
+
+		return definition;
+	}
 
 	/// <summary>
 	/// Grants an ability to an entity.
@@ -705,13 +768,41 @@ public sealed class GameplayAbilitySystem : IDisposable
 				}
 			}
 
-			return CommitActivation(
-				handle,
-				slot,
-				definition,
-				owner,
-				target,
-				level);
+			try
+			{
+				return CommitActivation(
+					handle,
+					slot,
+					definition,
+					owner,
+					target,
+					level);
+			}
+			catch (Exception activationException)
+			{
+				// A notification raised during the commit may throw after
+				// a cost, cooldown, or activation tag was committed. The
+				// activation must not stay active without a plan cursor
+				// or a task that could ever continue it. Cancelling is the
+				// same terminal state a failed plan uses; committed costs
+				// and cooldowns are deliberately not rolled back.
+				try
+				{
+					CancelFailedActivation(handle);
+				}
+				catch (Exception cleanupException)
+				{
+					throw new AggregateException(
+						"An ability activation notification failed and " +
+						"cleanup also failed. Both exceptions are reported; " +
+						"the activation was marked inactive before cleanup " +
+						"notifications ran.",
+						activationException,
+						cleanupException);
+				}
+
+				throw;
+			}
 		}
 		finally
 		{
@@ -890,7 +981,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		if (definition.Plan is not null)
 		{
-			endedByPlan = RunPlan(
+			endedByPlan = RunPlanGuarded(
 				new GameplayAbilityActivation(handle, activationId),
 				0);
 
@@ -1194,6 +1285,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		_events = null;
 		_ownsEvents = false;
+		_clockClaim = null;
 		Changed = null;
 		_abilities = [];
 		_entitySegments = [];
@@ -1201,6 +1293,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 		_tagCancelPool.Clear();
 		_inputPool.Clear();
 		_revokePool.Clear();
+		_taskDefinitions.Clear();
 		_abilitySlotCount = 0;
 		_freeAbilitySlot = -1;
 		_grantedCount = 0;
@@ -1225,10 +1318,85 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		tasks.Changed += HandleTaskChanged;
 
+		if (_clockClaim is not null)
+		{
+			tasks.BeginSimulation(_clockClaim);
+		}
+
 		return tasks;
 	}
 
+	/// <summary>
+	/// Claims task advancement for an attached fixed-step integration.
+	/// </summary>
+	/// <param name="claim">The claiming integration's identity.</param>
+	/// <exception cref="InvalidOperationException">
+	/// Another integration already owns the clock.
+	/// </exception>
+	/// <remarks>
+	/// A task runtime created later inherits the same claim, so an
+	/// ability that first uses a task after registration is still
+	/// advanced by the integration and not by hand.
+	/// </remarks>
+	internal void BeginSimulation(SimulationClockClaim claim)
+	{
+		ArgumentNullException.ThrowIfNull(claim);
+
+		if (_clockClaim is not null)
+		{
+			throw new InvalidOperationException(
+				"These abilities are already advanced by another " +
+				"GameplaySimulation. A clock has one owner.");
+		}
+
+		_clockClaim = claim;
+		_tasks?.BeginSimulation(claim);
+	}
+
+	/// <summary>
+	/// Releases task advancement when its integration is disposed.
+	/// </summary>
+	/// <param name="claim">The releasing integration's identity.</param>
+	/// <remarks>
+	/// A claim these abilities do not hold is left alone, so an
+	/// integration that failed to acquire them cannot detach the owner.
+	/// </remarks>
+	internal void EndSimulation(SimulationClockClaim claim)
+	{
+		if (!ReferenceEquals(_clockClaim, claim))
+		{
+			return;
+		}
+
+		_clockClaim = null;
+		_tasks?.EndSimulation(claim);
+	}
+
+	/// <summary>
+	/// Advances pending tasks from the attached integration without
+	/// creating a task runtime for an ability system that never used
+	/// one.
+	/// </summary>
+	internal void AdvanceTasksFromSimulation(float deltaSeconds)
+	{
+		if (_tasks is not null && !_tasks.IsDisposed)
+		{
+			_tasks.AdvanceFromSimulation(deltaSeconds);
+		}
+	}
+
 	internal World World => _world;
+
+	/// <summary>
+	/// Gets the effect runtime this system applies costs, cooldowns, and
+	/// plan effects through.
+	/// </summary>
+	/// <remarks>
+	/// A fixed-step integration must advance this exact instance.
+	/// Advancing a different effect system in the same world would let
+	/// cooldowns expire on a clock nothing else uses.
+	/// </remarks>
+	internal GameplayEffectSystem EffectRuntime => _effects;
 
 	internal bool TryResolveActivation(
 		GameplayAbilityActivation activation,
@@ -1332,7 +1500,80 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		_abilities[slot].PlanStep = -1;
 
-		RunPlan(activation, change.PlanStep + 1);
+		RunPlanGuarded(activation, change.PlanStep + 1);
+	}
+
+	/// <summary>
+	/// Runs a plan and applies the documented failure policy: an
+	/// exception from a step cancels the activation, releasing every
+	/// task and subscription, before the exception is rethrown.
+	/// </summary>
+	/// <remarks>
+	/// A plan exception must not leave an active ability with no
+	/// pending task and no plan cursor. Cancelling is a terminal state:
+	/// the ability is no longer active, a <c>Cancelled</c> notification
+	/// was raised, and the committed cost and cooldown are not rolled
+	/// back. The original exception is rethrown; if cleanup itself throws
+	/// (a cancellation notification failed), both exceptions are
+	/// reported in an <see cref="AggregateException"/> instead of the
+	/// cleanup failure silently replacing the plan failure.
+	/// </remarks>
+	private bool RunPlanGuarded(
+		GameplayAbilityActivation activation,
+		int stepIndex)
+	{
+		try
+		{
+			return RunPlan(activation, stepIndex);
+		}
+		catch (Exception planException)
+		{
+			try
+			{
+				FailPlan(activation);
+			}
+			catch (Exception cleanupException)
+			{
+				throw new AggregateException(
+					"A gameplay ability plan failed and its cleanup also " +
+					"failed. Both exceptions are reported; the activation " +
+					"was marked inactive before cleanup notifications ran.",
+					planException,
+					cleanupException);
+			}
+
+			throw;
+		}
+	}
+
+	private void FailPlan(GameplayAbilityActivation activation)
+	{
+		if (!TryResolveActivation(activation, out int slot, out _, out _))
+		{
+			return;
+		}
+
+		// Clear the cursor before cancellation notifications run, so a
+		// task cancellation cannot try to resume the broken plan. The
+		// activation is cancelled rather than silently aborted: game
+		// code observes the same terminal notification as any other
+		// interruption, and the already committed cost and cooldown
+		// follow the normal transaction policy.
+		_abilities[slot].PlanStep = -1;
+
+		EndActivation(slot, GameplayAbilityChangeKind.Cancelled);
+	}
+
+	private void CancelFailedActivation(GameplayAbilityHandle handle)
+	{
+		if (!TryResolve(handle, out int slot) || !_abilities[slot].Active)
+		{
+			return;
+		}
+
+		_abilities[slot].PlanStep = -1;
+
+		EndActivation(slot, GameplayAbilityChangeKind.Cancelled);
 	}
 
 	private bool RunPlan(
@@ -1445,6 +1686,66 @@ public sealed class GameplayAbilitySystem : IDisposable
 							target));
 
 						stepIndex++;
+						break;
+					}
+				case GameplayAbilityPlanStepKind.WaitAny:
+					{
+						// Claim the step before creating the task, so a
+						// Started handler that completes the race advances
+						// from inside the start.
+						_abilities[slot].PlanStep = stepIndex;
+
+						GameplayAbilityTaskHandle task =
+							Tasks.StartWaitAnyTask(
+								activation,
+								step.Wait!,
+								stepIndex);
+
+						return HandleWaitStepStarted(
+							activation,
+							stepIndex,
+							task);
+					}
+				case GameplayAbilityPlanStepKind.WaitCustom:
+					{
+						_abilities[slot].PlanStep = stepIndex;
+
+						GameplayAbilityTaskHandle task =
+							Tasks.StartCustomTask(
+								activation,
+								step.CustomTask!,
+								stepIndex);
+
+						return HandleWaitStepStarted(
+							activation,
+							stepIndex,
+							task);
+					}
+				case GameplayAbilityPlanStepKind.Branch:
+					{
+						// Conditions read live state at the moment the
+						// step runs, so a callback that changed tags or
+						// attributes after the previous step is observed
+						// here.
+						GameplayConditionContext conditionContext = new(
+							_tags,
+							_attributes,
+							owner,
+							target,
+							_world.IsAlive(target));
+
+						if (!step.Condition!.Evaluate(in conditionContext))
+						{
+							stepIndex = step.TargetStep;
+							break;
+						}
+
+						stepIndex++;
+						break;
+					}
+				case GameplayAbilityPlanStepKind.Goto:
+					{
+						stepIndex = step.TargetStep;
 						break;
 					}
 				default:

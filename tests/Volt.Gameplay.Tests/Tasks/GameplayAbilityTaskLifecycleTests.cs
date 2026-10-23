@@ -247,6 +247,34 @@ public sealed class GameplayAbilityTaskLifecycleTests
 	}
 
 	[Fact]
+	public void ExternalEventDisposal_DoesNotBreakTaskCleanup()
+	{
+		using AbilityRuntime runtime = new();
+		Entity actor = runtime.CreateActor();
+
+		GameplayAbilityActivation activation =
+			TaskTestSupport.ActivateChannel(
+				runtime,
+				actor,
+				out GameplayAbilityHandle handle);
+
+		runtime.Tasks.WaitEvent(activation, EventSchema.AttackHit);
+
+		Assert.Equal(1, runtime.Events.SubscriptionCount);
+
+		runtime.Events.Dispose();
+
+		// The task still exists and its handle still resolves, but the
+		// router can no longer deliver. Cancelling the activation must
+		// not throw ObjectDisposedException from subscription cleanup.
+		Assert.Equal(1, runtime.Tasks.PendingTaskCount);
+		Assert.True(runtime.Abilities.End(handle));
+		Assert.Equal(0, runtime.Tasks.PendingTaskCount);
+
+		runtime.Tasks.Dispose();
+	}
+
+	[Fact]
 	public void Dispose_ReleasesTasksAndEventSubscriptions()
 	{
 		using World world = new();

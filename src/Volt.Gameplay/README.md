@@ -390,16 +390,194 @@ instead of touching a recycled slot.
 
 A plan is data, and every step runs on the same low-level task runtime
 as application code. `Wait` and `WaitTag` use a deadline heap;
-`WaitEvent` uses the event router; a tag change visits only the
-owner's tag-condition tasks, not its duration or event tasks. Ending an
-ability releases all of its tasks before the ability notification, and
-the `Cancelled` task notifications follow the release. A zero-duration
-task completes on the next positive `Advance`, a zero step is a pause,
-and tasks created during an advance wait for the next advance.
+`WaitEvent` uses the event router. Tag-condition tasks are indexed by
+the watched tag and by exact or hierarchical matching, so a tag change
+visits only the tasks watching that tag or an ancestor, not every task
+on the owner. Ending an ability releases all of its tasks before the
+ability notification, and the `Cancelled` task notifications follow the
+release. A zero-duration task completes on the next positive
+`Advance`, a zero step is a pause, and tasks created during an advance
+wait for the next advance.
+
+Chained waits follow the fixed-step rule: a task created by a
+completion callback starts from the end-of-step clock and is eligible
+on the next advance. That makes the fixed-step loop the deterministic
+path for long chains; a single large manual advance is not equivalent
+to several fixed steps. If a plan step or activation notification
+throws, the activation is cancelled, its tasks and subscriptions are
+released, committed costs and cooldowns remain, and the exception is
+rethrown. A cleanup failure is reported with the original in an
+`AggregateException`; an ability is never left active with no plan
+cursor and no pending task.
+
+## Conditional plans
+
+```csharp
+GameplayCondition wounded = GameplayCondition.OwnerAttribute(
+    health,
+    GameplayAttributeComparison.LessThan,
+    30f);
+
+GameplayCondition vulnerable = GameplayCondition.All(
+    wounded,
+    GameplayCondition.TargetHasTag(stunned));
+
+GameplayAbilityDefinition finisher = GameplayAbilityDefinition
+    .Create("Ability.Finisher")
+    .Plan(
+        GameplayAbilityPlan
+            .Create()
+            .If(vulnerable)
+            .ApplyEffect(executeEffect)
+            .Else()
+            .ApplyEffect(standardEffect)
+            .EndIf()
+            .End()
+            .Build())
+    .Build();
+```
+
+`GameplayCondition` is an immutable tree evaluated against the live
+owner, target, tags, and cached attributes when the branch step runs, so
+a plan can branch on state a previous step produced. Conditions cover
+owner and target tags (exact or hierarchical), missing tags, target
+aliveness, owner and target attribute comparisons, and nested
+`All`/`Any`/`Not`. A destroyed target fails every target condition; use
+`TargetAlive` to test it explicitly.
+
+`If`/`Else`/`EndIf` compile to forward jumps inside the flat plan array,
+so there is no per-activation control-flow object and no second
+interpreter. `Build` rejects unclosed blocks, misplaced `Else`/`EndIf`,
+and jumps that do not move forward, so a plan cannot loop. Conditions,
+tags, and attributes are validated at authoring time; a null child,
+empty `All`/`Any`, non-finite constant, or unknown attribute throws.
+
+## Custom tasks
+
+```csharp
+GameplayAbilityTaskDefinition swing = abilities.RegisterTaskDefinition("Swing");
+
+GameplayAbilityDefinition attack = GameplayAbilityDefinition
+    .Create("Ability.Attack")
+    .Plan(
+        GameplayAbilityPlan
+            .Create()
+            .WaitCustom(swing)
+            .ApplyEffect(hitEffect)
+            .End()
+            .Build())
+    .Build();
+
+// The application owns the signal; the runtime owns the ownership
+// checks, cancellation, and slot reuse.
+GameplayAbilityTaskHandle task = abilities.Tasks.WaitCustom(activation, swing);
+
+abilities.Tasks.Complete(task);   // or abilities.Tasks.Cancel(task)
+```
+
+A custom task is a registered definition plus one ordinary task slot.
+It is not in the deadline heap and has no subscription, so dormant
+custom tasks are never scanned or polled per step. The
+definition is scoped to the ability system that registered it; passing
+another system's definition throws instead of creating a task. Handles
+are generation- and activation-checked, so a stale handle cannot
+complete a task started by a newer activation, and ability end,
+`CancelOnTags`, revocation, and owner destruction all release the slot.
+Completion notifies after the state is released, and a throwing handler
+leaves no half-released task behind. Applications own external signal
+subscriptions; they must release them on terminal task notifications
+and owner destruction.
+
+See `GameplaySpec.md` section 5.19 for the full lifetime and exception
+policy.
+
+## Composite waits
+
+```csharp
+GameplayWaitAny guard = GameplayWaitAny
+    .Create()
+    .WithTimeout(0.4f)
+    .OnEvent(incomingHit)
+    .OnTag(stunned, GameplayTagWaitMode.Present);
+
+GameplayAbilityPlan plan = GameplayAbilityPlan
+    .Create()
+    .WaitAny(guard)
+    .ApplyEffect(counterEffect)
+    .End()
+    .Build();
+```
+
+A composite `Any` wait stores one timeout, one event subscription for up
+to eight event tags, and one tag condition in a single task record, so
+the first source to fire wins and the losers are released with it. No
+child tasks and no group bookkeeping are involved.
+
+- The timeout reports `Elapsed`; an event or tag source reports
+  `ConditionMet`, carrying the event for event waits.
+- Watched events share one subscription at the nearest common ancestor
+  of their tags (or the wildcard when they have none) and are filtered
+  against the watched set, so unrelated events do not complete the wait.
+- A tag source that already holds completes on the next advance, and a
+  tag change that makes it hold re-arms the wait; if it flips back first,
+  the original timeout is restored.
+- A tag flipped by an effect expiry completes the wait in the same
+  fixed step's task phase.
+- An empty wait, more than eight event tags, or an invalid tag throws at
+  authoring time.
+
+There is no composite `All`. Sequential level-triggered tag waits are
+the supported `All` idiom; see section 5.20 for why a general `All`
+group is deferred.
+
+## Fixed-step simulation
+
+```csharp
+using Volt.Core.Timing;
+using Volt.Gameplay.Simulation;
+
+GameLoop loop = new();
+GameplaySimulation simulation = new(loop, abilities, effects);
+
+// Once per rendered frame; zero or more fixed steps run inside.
+loop.Advance();
+```
+
+`GameplaySimulation` is the optional bridge from the engine loop to
+gameplay. It registers one post-fixed-update callback, so the order in
+every executed fixed step is:
+
+1. Game fixed-update callbacks and scheduled simulation callbacks.
+2. Effects advance: expiries, periods, and tag changes.
+3. Tasks advance: duration and tag deadlines complete; plans continue.
+4. Remaining post-fixed callbacks.
+
+Event waits complete synchronously when their event is published, as
+they do without the integration. A task started by game fixed-update
+logic can complete in that same step; a task created by a completion
+callback waits for the next step. Pause, single-step, time scaling, and
+catch-up are the loop's semantics: the integration advances once for
+every executed fixed step and never invents a second clock.
+
+While attached, calling `effects.Advance` or `tasks.Advance` directly
+throws `InvalidOperationException`, so the same clock cannot be
+advanced twice in a step. Dispose `GameplaySimulation` to unregister
+the callback and return to manual control. It does not own the world or
+the stores, and it does not create a task runtime until an ability
+uses one.
+
+Construction requires the exact effect system the abilities apply
+costs, cooldowns, and plan effects through; a different instance in the
+same world is rejected, because advancing it would leave the ability
+clocks unmoved. A clock claim also carries the identity of its
+integration, so construction that fails part way through releases only
+the claims it took and never detaches an integration that already owns
+the clock.
 
 Run `samples/Volt.GameplayDemo` for the complete charged-dash example,
 including a stun interruption, overlapping abilities, stale handles,
-and owner destruction.
+owner destruction, pause, single-step, time scaling, and clean
+shutdown.
 
 ## Projects
 
@@ -437,7 +615,12 @@ and owner destruction.
 | `GameplayAbilityTaskInfo` | Read-only snapshot of one pending task |
 | `GameplayAbilityPlan` | Immutable authored wait and action sequence |
 | `GameplayAbilityPlanBuilder` | Fluent, validating plan authoring path |
+| `GameplayCondition` | Immutable tag and attribute condition tree |
+| `GameplayAttributeComparison` | Comparison operator for attribute conditions |
+| `GameplayAbilityTaskDefinition` | Registered name for an application-owned task |
+| `GameplayWaitAny` | Immutable composite wait over a timeout, events, and a tag |
 | `GameplayAbilityActivation` | Grant plus activation id, used as task ownership |
+| `GameplaySimulation` | Optional fixed-step driver for effects and tasks |
 
 ## Verification
 
@@ -454,6 +637,14 @@ dotnet run -c Release -- --filter '*GameplayAbilityTaskBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityTaskIdleBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityTaskScalingBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityTaskDestructionBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayTagWaitScalingBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayEventSparseBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationEventBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAuthoringBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAuthoringPopulationBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationTaskBurstBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationEffectBurstBenchmarks*'
 
 dotnet run --project samples/Volt.GameplayDemo -c Release
 ```
