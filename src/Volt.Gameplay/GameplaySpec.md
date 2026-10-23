@@ -1751,6 +1751,12 @@ step throws.
   binary min-heap ordered by `(deadline, creation sequence)`, with a
   per-task heap index for O(log n) cancellation. No captured delegate
   is created per task.
+- `DIFF` `Volt.Core.Timing.SimulationScheduler` schedules registered
+  delegates against the fixed-step clock. Reusing it would require a
+  delegate or capture per task and would not expose the per-entry
+  cancellation and generation checks a task handle needs. The task
+  heap stores values only and supports O(log n) removal; the caller
+  drives it with the same scaled step.
 
 **Rule.** Task creation never completes a task synchronously. A zero
 duration task is scheduled at the current simulation time and completes
