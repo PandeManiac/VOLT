@@ -465,7 +465,8 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 	/// advance, even when their deadline has already passed. That keeps
 	/// a completion handler from extending one step without bound, and
 	/// it matches the one-frame latency of a zero-duration timer.
-	/// </para>		/// <para>
+	/// </para>
+	/// <para>
 	/// A large step processes every deadline that was pending when the
 	/// call started, in order. Completions run at the end-of-step
 	/// clock; a task created by one of those completions is deferred
@@ -474,8 +475,8 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 	/// large step is subdivided: one <c>Advance(10)</c> completes one
 	/// link of a callback chain, while ten <c>Advance(1)</c> calls
 	/// give each link an advance to run in. This matches the fixed
-	/// step loop and <see cref="Volt.Core.Timing.SimulationScheduler"/>,
-	/// where work
+	/// step loop and
+	/// <see cref="Volt.Core.Timing.SimulationScheduler"/>, where work
 	/// registered during a step is eligible on the following step.
 	/// </para>
 	/// </remarks>
