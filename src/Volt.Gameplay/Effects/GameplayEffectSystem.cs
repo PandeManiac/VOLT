@@ -970,27 +970,63 @@ public sealed class GameplayEffectSystem : IDisposable
 
 		GameplayModifierHandle[] handles = EnsureModifierCapacity(slot, count);
 		uint generation = effect.Generation;
+		Entity target = effect.Target;
 
 		_effects[slot].ModifierCount = 0;
+		bool stackChanged = false;
 
 		for (int index = 0; index < count; index++)
 		{
 			GameplayEffectModifier modifier = definition.Modifiers[index];
+			int stackCount = _effects[slot].StackCount;
 
-			handles[index] = _attributes.AddModifier(
-				_effects[slot].Target,
+			// The attribute notification is raised from inside
+			// AddModifier, before the returned handle can be published
+			// in the effect. A listener may stack the instance, inhibit
+			// it, remove it, or clear the attribute. Reconcile the
+			// handle instead of assuming the instance stayed in the
+			// same state.
+			GameplayModifierHandle handle = _attributes.AddModifier(
+				target,
 				modifier.Attribute,
 				modifier.Operation,
-				definition.GetStackedMagnitude(
-					index,
-					_effects[slot].StackCount));
+				definition.GetStackedMagnitude(index, stackCount));
 
 			if (!IsLive(slot, generation))
 			{
+				// The instance ended while the notification was running.
+				// Its removal could not see this handle because the count
+				// had not been published yet, so withdraw it here. If the
+				// effect slot was reused, the handle is either stale or
+				// belongs to an unrelated instance and does nothing.
+				_attributes.RemoveModifier(handle);
 				return;
 			}
 
+			if (_effects[slot].Inhibited)
+			{
+				// Inhibition removed the previously published handles.
+				// This one was still pending and must follow them.
+				_attributes.RemoveModifier(handle);
+				return;
+			}
+
+			handles[index] = handle;
 			_effects[slot].ModifierCount = index + 1;
+
+			if (_effects[slot].StackCount != stackCount)
+			{
+				stackChanged = true;
+			}
+		}
+
+		if (stackChanged)
+		{
+			// A notification during AddModifier stacked the instance
+			// before its handle was published. The magnitude was
+			// computed for the old count; refresh it once all handles
+			// are visible. The ordinary path does no extra pass.
+			RefreshModifierMagnitudes(slot, generation);
 		}
 	}
 
@@ -1032,14 +1068,20 @@ public sealed class GameplayEffectSystem : IDisposable
 
 		GameplayEffectDefinition definition = effect.Definition;
 		GameplayModifierHandle[] handles = effect.Modifiers!;
-		int stackCount = effect.StackCount;
 		int count = effect.ModifierCount;
 
 		for (int index = 0; index < count; index++)
 		{
+			// Read the stack count per handle. SetModifierMagnitude
+			// raises a notification, so a listener may stack the
+			// instance again while this loop is running; the nested
+			// refresh then writes the newer value. Re-reading here
+			// prevents this outer pass from restoring an older one.
 			_attributes.SetModifierMagnitude(
 				handles[index],
-				definition.GetStackedMagnitude(index, stackCount));
+				definition.GetStackedMagnitude(
+					index,
+					_effects[slot].StackCount));
 
 			if (!IsLive(slot, generation))
 			{
@@ -1113,6 +1155,16 @@ public sealed class GameplayEffectSystem : IDisposable
 		if (inhibit)
 		{
 			RemoveModifiers(slot);
+
+			// Removing a modifier raises an attribute notification. A
+			// listener may remove this instance, and the slot may then
+			// be handed to a replacement effect. Do not withdraw the
+			// replacement's tags by looking the old index up again.
+			if (!IsLive(slot, generation))
+			{
+				return;
+			}
+
 			RemoveGrantedTags(slot);
 
 			if (IsLive(slot, generation))
