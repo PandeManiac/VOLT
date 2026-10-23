@@ -206,7 +206,11 @@ One binary min-heap holds every expiry and periodic deadline, ordered
 by due time and then by scheduling order. Advancing time processes only
 what is due, so 100,000 idle effects cost the same 1.7 ns per step as an
 empty world, and a large step replays every tick in order, matching the
-result of many small steps. Nothing is polled per frame.
+result of many small steps. Nothing is polled per frame. If a
+destruction handler recycles the target index before the effect system
+sees the old destruction, the first effect linked to the replacement
+retires the old chain and its deadlines; there is no world scan and no
+per-frame cleanup.
 
 Definitions are validated when built: an unregistered attribute, a
 non-finite magnitude, an instant effect with a period, a stack limit
@@ -269,9 +273,11 @@ The cooldown is applied before the cost, and both are checked again at
 commit. A cooldown that refuses to apply rejects the activation before
 payment; a cost that becomes unaffordable or refuses to apply rolls the
 cooldown back, so a failed commit pays nothing. An activation that a
-notification ends before payment also rolls the cooldown back. A failed
-commit raises no `Activated` or `Cancelled` notification; the result
-carries the failure.
+notification ends before payment also rolls the cooldown back. Rollback
+is operation-specific: a new cooldown is removed, while a stacked
+existing cooldown keeps its previous stack count, source, and deadline.
+A failed commit raises no `Activated` or `Cancelled` notification; the
+result carries the failure.
 
 Handles are scoped to the ability system that created them as well as
 generation-checked, so two systems over one world cannot resolve each
@@ -329,12 +335,14 @@ cd benchmarks/Volt.Benchmarks
 dotnet run -c Release -- --filter '*GameplayTagBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityScalingBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayLifecycleBenchmarks*'
 ```
 
 The test suite includes differential tests that reproduce Unreal's own
 tag and query test expectations, effect and ability behavior read from
-the 5.8.4 source, lifecycle and invalid-input cases, re-entrancy cases,
-a concurrent-registration test, and allocation guards asserting that
-warmed-up matching, container mutation, effect application, effect
-ticking, ability granting, and ability activation allocate zero managed
-bytes.
+the 5.8.4 source, lifecycle and invalid-input cases, adversarial
+destruction ordering, cross-store recycling, re-entrancy and notification
+exception cases, a concurrent-registration test, and allocation guards
+asserting that warmed-up matching, container mutation, effect
+application, effect ticking, ability granting, ability activation, and
+entity recycling with live gameplay state allocate zero managed bytes.

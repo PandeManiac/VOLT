@@ -373,12 +373,21 @@ ancestors.
 handle cannot observe or mutate the state of a later entity that
 reuses the index.
 
+**Rule.** If an earlier destruction handler recycles the index and
+tags the replacement before this store observes the old destruction,
+the first write to the new generation retires the old entries and
+dense membership before adding the new grant. The replacement appears
+once in dense enumeration and `TaggedEntityCount` stays exact.
+
 - `DIFF`: Unreal's ability system owns its count container and is
   destroyed with its owner. VOLT stores tags beside entity slots, so
   it adds two safeguards Unreal's loose container does not have:
   `World.EntityDestroyed` clears the slot immediately, and every
   access validates the entity generation, so a recycled index is a
-  different entity even before the destruction callback runs.
+  different entity even before the destruction callback runs. The
+  generation transition is also a retirement boundary, because a
+  callback may populate the replacement before the destruction
+  callback reaches this store.
 - `SRC` (generation precedent): `EntityAllocator` already guarantees
   that a stale handle never equals a newer occupant of the same
   slot. The tag store follows the same rule instead of trusting that
@@ -654,9 +663,17 @@ attribute and does not read another.
 their modifiers without raising change notifications. A stale entity
 handle cannot read or write the next occupant's values.
 
+**Rule.** If a destruction handler recycles the index and writes
+attributes to the replacement before this store observes the old
+destruction, the first write to the new generation retires the old
+entry array and dense membership first. The replacement's first write
+therefore creates one clean entry, not a duplicate dense index.
+
 **Rule.** A modifier handle carries the entity, attribute, slot, and
-slot generation. Removing advances the slot generation, so a stale
-handle cannot remove a modifier that reuses the slot.
+slot generation. Removing advances the slot generation. Clearing an
+entity also advances every used modifier generation before reusing the
+storage, so a stale handle cannot remove a modifier installed later
+even though the entity generation did not change.
 
 - `SRC`/`UTEST` analog: `ScheduledHandle` and `Entity` already use
   generation counters for this purpose. The modifier handle follows
@@ -685,6 +702,9 @@ handle cannot remove a modifier that reuses the slot.
 | Add a zero-magnitude `AddBase` | no event | `DIFF` |
 | Remove an already removed modifier | false, no change | `UTEST` analog |
 | Destroy an entity with modifiers | state released, no event | `DIFF` |
+| Replacement modified before the destruction callback | one dense entry, old modifiers retired | `DIFF` |
+| Clear then add a modifier on the same entity | old handle rejected; arrays reused | `DIFF` |
+| Insert an attribute before another | modifier storage is not shared | `DIFF` |
 | Write to a dead entity | throws | `DIFF` |
 | Read from a dead entity | default value | `DIFF` |
 | Unregistered attribute anywhere | throws | `DIFF` |
@@ -959,6 +979,14 @@ the way the attribute and tag stores release their own state. No
 `Removed` notification is raised, because the values no longer exist
 for anyone to observe.
 
+**Rule.** Destruction notification order is not a safety guarantee. If
+a handler recycles the target index and affects the replacement before
+this system observes the old destruction, the first link for the new
+generation retires every instance still owned by the old generation.
+The old slots return to the freelist, the active count is decremented,
+and old heap entries become stale without a world scan. Only the
+replacement's instances remain linked.
+
 **Rule.** A handle carries the target, the slot, and the slot
 generation. Removing an instance advances the generation, so a stale
 handle cannot remove a later instance that reused the slot.
@@ -998,6 +1026,7 @@ instance ends during its own application, `Apply` reports `Discarded`.
 | Inhibited effect reaches its duration | expires | `SRC` |
 | Entity destroyed with active effects | silent release, no notification | `DIFF` |
 | Entity index reused | new occupant sees no effects | `DIFF` |
+| Index recycled before the destruction notification | old instances retired; old deadlines cannot execute | `DIFF` |
 | Stale effect handle | removal rejected | `DIFF` |
 | Handler applies an effect during application | both instances active | `DIFF` |
 | Handler destroys the entity during application | `Discarded`, no leak | `DIFF` |
@@ -1171,9 +1200,11 @@ its tags nor a live instance rejects the activation with
   reason it rejects a cost that will not apply.
 - `DIFF` Unreal's `CommitAbility` ignores a failed cooldown application
   and still charges the cost. VOLT binds the two: a cooldown failure
-  aborts before payment, and a cost failure removes the cooldown it
-  just applied. The cost is the commit point because it is the only
-  irreversible side effect.
+  aborts before payment, and a cost failure reverses the cooldown
+  change the activation made. The cost is the commit point because it
+  is the only irreversible side effect. Rollback removes a new
+  instance, or restores a pre-existing stack's count, source, deadline,
+  period, and heap order when the activation stacked one.
 - `DIFF` an applied cooldown that is inhibited still counts as
   applied. Its tags are withdrawn, so the ability can activate again,
   but the remaining-time query reports the inhibited instance exactly
@@ -1236,6 +1267,7 @@ activation that is revoked, cancelled, or whose owner is destroyed by
 such a handler reports `EndedDuringActivation`. If it ends before the
 cost is paid, reversible state such as the cooldown is rolled back;
 if it ends after the commit point, the paid cost and cooldown remain.
+A stacked cooldown is restored to its prior stack rather than removed.
 
 - `DIFF` this mirrors the effect system's `Discarded` status. Unreal
   has no return value for an activation, only the ability's own
@@ -1355,6 +1387,7 @@ it without bound.
 | Activation by input | every grant bound to the input is attempted | `SRC` |
 | Cost requirement invalidated during commit | `RejectedByCost`, no cost or cooldown | `DIFF` |
 | Cost spent by a cancellation callback | `RejectedByCost`, cooldown rolled back | `DIFF` |
+| Failed activation stacked an existing cooldown | stack count, source, and deadline restored | `DIFF` |
 | Cooldown requirement invalidated during commit | `RejectedByCooldown`, no cost | `DIFF` |
 | Cooldown removed during application | `RejectedByCooldown`, no cost | `DIFF` |
 | Activation ended during cooldown application | `EndedDuringActivation`, cooldown rolled back, no cost | `DIFF` |
@@ -1424,6 +1457,62 @@ duplicate benchmark project names. The cancellation benchmarks
 deliberately include the activation pass that seeds the active set in
 the measured method, so they report activation plus cancellation
 rather than cancellation alone.
+
+## 4.10 Cross-store lifecycle contract
+
+**Rule.** `World.DestroyEntity` commits the destruction and releases
+the index before it invokes `EntityDestroyed`. The first handler may
+create a replacement at the same index and assign tags, attributes,
+effects, or abilities to it. Every gameplay store therefore treats a
+generation change as a retirement boundary: it releases the previous
+generation's entries, dense membership, modifiers, effect chain, or
+grants before storing state for the replacement. A store callback that
+later receives the old destruction sees a generation mismatch and must
+not touch the new generation.
+
+**Rule.** Cleanup traversals capture the generation of the instance or
+the next slot before invoking user code. A callback that removes an
+instance, recycles a slot, or populates a replacement cannot cause the
+outer traversal to remove the replacement's state or clear its newly
+linked list.
+
+**Rule.** Notifications are delivered after their mutation commits. An
+exception from a handler propagates to the caller; the committed change
+remains observable, except where an operation defines a rollback (the
+ability cooldown commit). Internal traversal guards are released in
+`finally` blocks, so a throwing notification cannot leave `Advance`
+re-entrancy blocked or an entity stuck in the effect refresh state. The
+stores do not promise atomic rollback of arbitrary user callbacks.
+
+- `DIFF` Unreal's destruction and effect notification model has no
+  equivalent of a recycled index becoming observable between the
+  destruction commit and a store's callback. VOLT makes the lifetime
+  rule explicit because its stores are separate from the world.
+- `UTEST` `CrossStoreLifecycleTests`, `GameplayEffectRecyclingTests`,
+  and `GameplayNotificationExceptionTests` cover the combined order,
+  successive generations, and post-exception invariants.
+
+| Cross-store case | Expected | Evidence |
+| --- | --- | --- |
+| Replacement tagged first | one dense entry; old tags retired | `UTEST` |
+| Replacement attributed first | one dense entry; old modifiers retired | `UTEST` |
+| Replacement gets a duration effect first | old effects retired; new effect active | `UTEST` |
+| Replacement gets an infinite effect first | old infinite instance cannot leak | `UTEST` |
+| Replacement granted an ability first | old grants and active count released | `UTEST` |
+| Every store populated together | only the replacement's state remains | `UTEST` |
+| Multiple generations before any store callback | only the newest generation remains | `UTEST` |
+| Removal callback reuses the next effect slot | the new instance survives | `UTEST` |
+| Throwing tag or attribute notification | mutation committed; clear/remove still works | `UTEST` |
+| Throwing expiry notification | effect removed; next `Advance` works | `UTEST` |
+| Throwing refresh notification | refresh flag reset; later tag changes evaluate | `UTEST` |
+| Recycle an untracked entity | 74 ns, 0 B | `BENCH` |
+| Recycle a tag + attribute + four-effect entity | 443 ns, 0 B | `BENCH` |
+
+The churn rows use `GameplayLifecycleBenchmarks` in process. The tracked
+case destroys the entity, creates the replacement, tags it, sets an
+attribute, and applies four infinite effects before the stores observe
+the destruction. The attribute store retains its modifier arrays across
+the generation boundary, and both cases allocate zero managed bytes.
 
 # Part 5 — Cues, events, and replication preparation
 
