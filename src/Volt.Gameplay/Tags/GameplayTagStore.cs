@@ -628,11 +628,19 @@ public sealed class GameplayTagStore : IDisposable
 		if (slot.Generation != entity.Generation)
 		{
 			// The index was never used, or it belonged to an older
-			// generation whose destruction may never have been
-			// observed. The previous contents are unreachable and are
-			// discarded; the entry array is reused.
+			// generation whose destruction may not have been observed
+			// yet. Retire the old state before adopting the new
+			// generation: simply resetting the fields would leave the
+			// old dense entry behind, and a replacement that tags
+			// itself first would then be counted twice. Generation zero
+			// is the uninitialized slot; its dense index is also zero by
+			// default and must not be mistaken for a real membership.
+			if (slot.Generation != 0)
+			{
+				ClearSlot(ref slot);
+			}
+
 			slot.Generation = entity.Generation;
-			slot.Count = 0;
 			slot.DenseIndex = -1;
 			slot.Entries ??= new TagEntry[InitialEntryCapacity];
 		}
@@ -679,9 +687,9 @@ public sealed class GameplayTagStore : IDisposable
 		{
 			Array.Clear(slot.Entries, 0, slot.Count);
 			slot.Count = 0;
-
-			ReleaseDenseIndex(ref slot);
 		}
+
+		ReleaseDenseIndex(ref slot);
 	}
 
 	private void ReleaseDenseIndex(ref Slot slot)

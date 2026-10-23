@@ -179,6 +179,61 @@ public sealed class GameplayTagStoreTests
 	}
 
 	[Fact]
+	public void ReplacementTaggedBeforeDestructionCallback_RetiresOldDenseState()
+	{
+		using World world = new();
+
+		Entity first = world.CreateEntity();
+		Entity other = world.CreateEntity();
+
+		GameplayTagStore? store = null;
+		Entity? replacement = null;
+
+		// Subscribed before the store, so the replacement exists and
+		// is tagged while the old generation's dense entry still does.
+		world.EntityDestroyed += destroyed =>
+		{
+			if (destroyed != first)
+			{
+				return;
+			}
+
+			replacement = world.CreateEntity();
+			store!.AddTag(replacement.Value, TagSchema.StatusStunned);
+		};
+
+		using GameplayTagStore actual = new(world);
+		store = actual;
+
+		store.AddTag(first, TagSchema.StatusBurning);
+		store.AddTag(other, TagSchema.StatusBurning);
+
+		Assert.Equal(2, store.TaggedEntityCount);
+
+		Assert.True(world.DestroyEntity(first));
+
+		Assert.NotNull(replacement);
+		Assert.Equal(first.Index, replacement.Value.Index);
+		Assert.NotEqual(first.Generation, replacement.Value.Generation);
+		Assert.Equal(2, store.TaggedEntityCount);
+
+		Assert.False(store.HasTag(replacement.Value, TagSchema.StatusBurning));
+		Assert.True(store.HasTag(replacement.Value, TagSchema.StatusStunned));
+		Assert.True(store.HasTag(other, TagSchema.StatusBurning));
+
+		Entity[] buffer = new Entity[store.TaggedEntityCount];
+
+		Assert.Equal(2, store.CopyTaggedEntities(buffer));
+		Assert.Equal(2, buffer.Distinct().Count());
+		Assert.Contains(other, buffer);
+		Assert.Contains(replacement.Value, buffer);
+		Assert.DoesNotContain(first, buffer);
+
+		Assert.False(store.RemoveTag(first, TagSchema.StatusStunned));
+		Assert.True(store.HasTag(replacement.Value, TagSchema.StatusStunned));
+	}
+
+	[Fact]
 	public void StaleHandle_CannotRemoveOrClearNewEntityTags()
 	{
 		using World world = new();

@@ -1009,12 +1009,21 @@ public sealed class GameplayAttributeStore : IDisposable
 		GameplayAttributeDefinition definition =
 			GameplayAttributeRegistry.Shared.GetDefinition(attribute);
 
+		// A cleared slot keeps its modifier arrays for reuse. Carry the
+		// array at this position into a newly appended entry instead of
+		// allocating a fresh one; its old modifiers were invalidated by
+		// ClearSlot. Never steal the array of an entry that is about to
+		// be shifted right, or two attributes would share modifier slots.
+		Modifier[] modifiers = insertion >= slot.Count
+			? slot.Entries[insertion].Modifiers ?? []
+			: [];
+
 		slot.Entries[insertion] = new AttributeEntry
 		{
 			Attribute = attribute,
 			BaseValue = definition.DefaultBaseValue,
 			CurrentValue = definition.DefaultBaseValue,
-			Modifiers = [],
+			Modifiers = modifiers,
 			ModifierSlotCount = 0,
 			ActiveModifierCount = 0
 		};
@@ -1087,8 +1096,18 @@ public sealed class GameplayAttributeStore : IDisposable
 
 		if (slot.Generation != entity.Generation)
 		{
+			// The old generation may not have observed its destruction
+			// notification yet. Retire its state, including the dense
+			// membership, before adopting the replacement; resetting
+			// the fields alone would leave a phantom entry behind.
+			// Generation zero is the uninitialized slot; its dense index
+			// is also zero by default and is not a real membership.
+			if (slot.Generation != 0)
+			{
+				ClearSlot(ref slot);
+			}
+
 			slot.Generation = entity.Generation;
-			slot.Count = 0;
 			slot.DenseIndex = -1;
 			slot.Entries ??= new AttributeEntry[InitialEntryCapacity];
 		}
@@ -1131,12 +1150,33 @@ public sealed class GameplayAttributeStore : IDisposable
 
 	private void ClearSlot(ref Slot slot)
 	{
-		if (slot.Count == 0)
+		for (int entryIndex = 0; entryIndex < slot.Count; entryIndex++)
 		{
-			return;
-		}
+			ref AttributeEntry entry = ref slot.Entries[entryIndex];
 
-		Array.Clear(slot.Entries, 0, slot.Count);
+			for (int modifierIndex = 0;
+				modifierIndex < entry.ModifierSlotCount;
+				modifierIndex++)
+			{
+				ref Modifier modifier = ref entry.Modifiers[modifierIndex];
+
+				// Advance every used slot, including inactive ones,
+				// so a handle from before the clear can never match a
+				// modifier installed later in the same physical slot.
+				if (modifier.Generation != 0)
+				{
+					modifier.Generation = NextGeneration(
+						modifier.Generation);
+				}
+
+				modifier.Active = false;
+				modifier.Magnitude = 0f;
+				modifier.Sequence = 0;
+			}
+
+			entry.ModifierSlotCount = 0;
+			entry.ActiveModifierCount = 0;
+		}
 
 		slot.Count = 0;
 
