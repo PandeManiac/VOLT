@@ -34,6 +34,7 @@ public sealed class GameplayAbilityDefinitionBuilder
 	private GameplayTagSet _cancelOnTags = GameplayTagSet.Empty;
 	private bool _canRetrigger;
 	private bool _endsOnActivate = true;
+	private GameplayAbilityPlan? _plan;
 
 	internal GameplayAbilityDefinitionBuilder(string name)
 	{
@@ -241,6 +242,26 @@ public sealed class GameplayAbilityDefinitionBuilder
 	}
 
 	/// <summary>
+	/// Sets the task sequence that runs while the ability is active.
+	/// </summary>
+	/// <param name="plan">The authored plan.</param>
+	/// <remarks>
+	/// Attaching a plan turns off "ends on activate": the plan's wait
+	/// steps are what keep the ability alive, and its end step (or the
+	/// end of the plan) ends it. Calling <see cref="EndOnActivate"/> with
+	/// <see langword="true"/> afterwards is rejected by <see cref="Build"/>.
+	/// </remarks>
+	public GameplayAbilityDefinitionBuilder Plan(GameplayAbilityPlan plan)
+	{
+		ArgumentNullException.ThrowIfNull(plan);
+
+		_plan = plan;
+		_endsOnActivate = false;
+
+		return this;
+	}
+
+	/// <summary>
 	/// Validates and creates the definition.
 	/// </summary>
 	/// <returns>The immutable definition.</returns>
@@ -267,6 +288,14 @@ public sealed class GameplayAbilityDefinitionBuilder
 				"cost is paid once and is never tracked; use an " +
 				"instant effect without a period.",
 				nameof(_costEffect));
+		}
+
+		if (_plan is not null && _endsOnActivate)
+		{
+			throw new InvalidOperationException(
+				$"The ability '{_name}' has a plan but ends on activate, " +
+				$"so the plan could never run. Remove the plan or set " +
+				$"EndOnActivate(false).");
 		}
 
 		if (_cooldownEffect is not null)
@@ -317,6 +346,7 @@ public sealed class GameplayAbilityDefinitionBuilder
 			_blockAbilitiesWithTags,
 			_cancelOnTags,
 			_canRetrigger,
-			_endsOnActivate);
+			_endsOnActivate,
+			_plan);
 	}
 }

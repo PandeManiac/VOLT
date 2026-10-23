@@ -18,13 +18,15 @@ public readonly struct GameplayAbilityActivationResult
 		GameplayAbilityHandle handle,
 		Entity owner,
 		Entity target,
-		int level)
+		int level,
+		uint activationId)
 	{
 		Status = status;
 		Handle = handle;
 		Owner = owner;
 		Target = target;
 		Level = level;
+		ActivationId = activationId;
 	}
 
 	/// <summary>
@@ -52,6 +54,21 @@ public readonly struct GameplayAbilityActivationResult
 	/// Gets the level of the grant.
 	/// </summary>
 	public int Level { get; }
+
+	/// <summary>
+	/// Gets the serial number of the activation this attempt committed,
+	/// or zero when the attempt did not commit.
+	/// </summary>
+	public uint ActivationId { get; }
+
+	/// <summary>
+	/// Gets the activation token that tasks and plans bind to, or
+	/// <see cref="GameplayAbilityActivation.None"/> when the attempt did
+	/// not commit.
+	/// </summary>
+	public GameplayAbilityActivation Activation => ActivationId == 0
+		? GameplayAbilityActivation.None
+		: new GameplayAbilityActivation(Handle, ActivationId);
 
 	/// <summary>
 	/// Gets whether the ability activated, whether or not it is still

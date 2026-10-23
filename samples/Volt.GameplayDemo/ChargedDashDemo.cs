@@ -1,0 +1,479 @@
+using Volt.Ecs;
+using Volt.Gameplay.Abilities;
+using Volt.Gameplay.Attributes;
+using Volt.Gameplay.Effects;
+using Volt.Gameplay.Events;
+using Volt.Gameplay.Tags;
+using Volt.Gameplay.Tasks;
+
+namespace Volt.GameplayDemo;
+
+/// <summary>
+/// A deterministic, graphics-free walkthrough of event-driven
+/// abilities.
+/// </summary>
+/// <remarks>
+/// The demonstration advances simulation time explicitly, so every
+/// printed value is reproducible. It covers the normal charged dash,
+/// a stun during the wind-up, overlapping abilities with independent
+/// task ownership, the application-facing task API, and owner
+/// destruction with pending tasks. Any violated expectation throws and
+/// the process exits with a non-zero status.
+/// </remarks>
+internal sealed class ChargedDashDemo : IDisposable
+{
+	private readonly World _world;
+	private readonly GameplayAttributeStore _attributes;
+	private readonly GameplayTagStore _tags;
+	private readonly GameplayEffectSystem _effects;
+	private readonly GameplayEventSystem _events;
+	private readonly GameplayAbilitySystem _abilities;
+	private readonly GameplayAbilityHandle _dash;
+	private readonly GameplayAbilityHandle _focus;
+	private readonly GameplayAbilityHandle _overcharge;
+	private readonly Entity _player;
+
+	private int _assertions;
+
+	internal ChargedDashDemo()
+	{
+		_world = new World();
+		_attributes = new GameplayAttributeStore(_world);
+		_tags = new GameplayTagStore(_world);
+		_effects = new GameplayEffectSystem(_world, _attributes, _tags);
+		_events = new GameplayEventSystem(_world);
+		_abilities = new GameplayAbilitySystem(
+			_world,
+			_tags,
+			_effects,
+			_attributes,
+			_events);
+
+		_player = _world.CreateEntity();
+
+		_dash = _abilities.GiveAbility(_player, DemoSchema.ChargedDash);
+		_focus = _abilities.GiveAbility(_player, DemoSchema.Focus);
+		_overcharge = _abilities.GiveAbility(_player, DemoSchema.Overcharge);
+	}
+
+	private GameplayAbilityTaskSystem Tasks => _abilities.Tasks;
+
+	public void Run()
+	{
+		Console.WriteLine("VOLT gameplay demo: event-driven Charged Dash");
+
+		RunChargedDash();
+		RunInterruptedWindUp();
+		RunOverlappingAbilities();
+		RunApplicationTasks();
+		RunOwnerDestruction();
+
+		Console.WriteLine();
+		Console.WriteLine(
+			$"All {_assertions} assertions passed in {Tasks.Time:0.00} " +
+			$"simulation seconds.");
+	}
+
+	public void Dispose()
+	{
+		_abilities.Dispose();
+		_events.Dispose();
+		_effects.Dispose();
+		_tags.Dispose();
+		_attributes.Dispose();
+		_world.Dispose();
+	}
+
+	private void RunChargedDash()
+	{
+		Begin("1. Normal charged dash");
+
+		Report($"stamina before activation: {Stamina:0}");
+
+		GameplayAbilityActivationResult activation =
+			_abilities.TryActivate(_dash);
+
+		Require(activation.Succeeded, "the charged dash did not activate");
+		Require(
+			_abilities.IsActive(_dash),
+			"the charged dash ended during activation");
+
+		Report(
+			$"activated: stamina={Stamina:0}, " +
+			$"cooldown={_abilities.IsOnCooldown(_player, DemoSchema.ChargedDash)}, " +
+			$"pendingTasks={Tasks.PendingTaskCount}");
+
+		Require(Stamina == 40f, "the dash cost was not paid");
+		Require(
+			_abilities.IsOnCooldown(_player, DemoSchema.ChargedDash),
+			"the dash cooldown was not applied");
+		Require(
+			Tasks.PendingTaskCount == 1,
+			"the plan did not start its wind-up task");
+
+		Advance(0.2f);
+
+		Report(
+			$"t={Tasks.Time:0.00}: wind-up pending=" +
+			$"{Tasks.PendingTaskCount}, speed={Speed:0}, " +
+			$"dashing={IsDashing}");
+
+		Require(
+			Tasks.PendingTaskCount == 1,
+			"the wind-up task ended before its deadline");
+		Require(!IsDashing, "the dash buff applied during the wind-up");
+		Require(Speed == 10f, "the dash buff changed speed early");
+
+		Advance(0.05f);
+
+		Report(
+			$"t={Tasks.Time:0.00}: wind-up done, waiting for " +
+			$"Event.Dash.Released, pendingTasks={Tasks.PendingTaskCount}");
+
+		Require(
+			Tasks.PendingTaskCount == 1,
+			"the plan did not start the release wait");
+
+		int delivered = _events.Publish(
+			new GameplayEvent(DemoSchema.EventDashReleased, _player, _player));
+
+		Report(
+			$"released: delivered={delivered}, dashing={IsDashing}, " +
+			$"speed={Speed:0}, pendingTasks={Tasks.PendingTaskCount}");
+
+		Require(delivered == 1, "the release event had no waiting task");
+		Require(IsDashing, "the dash buff was not applied on release");
+		Require(Speed == 15f, "the dash buff did not raise speed");
+		Require(
+			Tasks.PendingTaskCount == 1,
+			"the plan did not start the buff-completion wait");
+
+		Advance(0.5f);
+
+		Report(
+			$"t={Tasks.Time:0.00}: buff expired, active=" +
+			$"{_abilities.IsActive(_dash)}, pendingTasks=" +
+			$"{Tasks.PendingTaskCount}, speed={Speed:0}, " +
+			$"stamina={Stamina:0}");
+
+		Require(!_abilities.IsActive(_dash), "the charged dash did not end");
+		Require(Tasks.PendingTaskCount == 0, "the plan leaked a task");
+		Require(!IsDashing, "the dash buff did not expire");
+		Require(Speed == 10f, "speed did not return to its base value");
+		Require(Stamina == 40f, "the paid cost changed after the dash");
+
+		Advance(0.3f);
+
+		Require(
+			!_abilities.IsOnCooldown(_player, DemoSchema.ChargedDash),
+			"the cooldown did not expire");
+	}
+
+	private void RunInterruptedWindUp()
+	{
+		Begin("2. Stun during the wind-up");
+
+		GameplayAbilityActivationResult activation =
+			_abilities.TryActivate(_dash);
+
+		Require(activation.Succeeded, "the second dash did not activate");
+		Require(
+			Tasks.PendingTaskCount == 1,
+			"the second dash did not start its wind-up");
+
+		Span<GameplayAbilityTaskHandle> tasks =
+			stackalloc GameplayAbilityTaskHandle[4];
+
+		int count = Tasks.CopyTasks(_player, tasks);
+
+		Require(count == 1, "the wind-up task was not discoverable");
+
+		GameplayAbilityTaskHandle windUp = tasks[0];
+
+		Advance(0.1f);
+
+		GameplayEffectApplyResult stun =
+			_effects.Apply(_player, DemoSchema.Stun, _player);
+
+		Require(
+			stun.Status == GameplayEffectApplyStatus.Applied,
+			"the stun effect did not apply");
+
+		Report(
+			$"stunned at t={Tasks.Time:0.00}: active=" +
+			$"{_abilities.IsActive(_dash)}, pendingTasks=" +
+			$"{Tasks.PendingTaskCount}, stamina={Stamina:0}, " +
+			$"cooldown={_abilities.IsOnCooldown(_player, DemoSchema.ChargedDash)}");
+
+		Require(
+			!_abilities.IsActive(_dash),
+			"the stun did not cancel the charged dash");
+		Require(
+			Tasks.PendingTaskCount == 0,
+			"the cancelled activation kept its wind-up task");
+		Require(
+			Stamina == 30f,
+			"the committed cost was rolled back on cancellation");
+		Require(
+			_abilities.IsOnCooldown(_player, DemoSchema.ChargedDash),
+			"the committed cooldown was rolled back on cancellation");
+		Require(
+			!Tasks.Cancel(windUp),
+			"the stale wind-up handle still resolved");
+
+		Advance(5f);
+
+		int lateDelivery = _events.Publish(
+			new GameplayEvent(DemoSchema.EventDashReleased, _player, _player));
+
+		Report(
+			$"advanced to t={Tasks.Time:0.00} and released late: " +
+			$"delivered={lateDelivery}, dashing={IsDashing}, active=" +
+			$"{_abilities.IsActive(_dash)}, pendingTasks=" +
+			$"{Tasks.PendingTaskCount}");
+
+		Require(lateDelivery == 0, "the dead wind-up still listened");
+		Require(!IsDashing, "the late release applied the dash buff");
+		Require(!_abilities.IsActive(_dash), "the late release restarted dash");
+		Require(Tasks.PendingTaskCount == 0, "a stale task survived the advance");
+
+		bool removed = _effects.Remove(stun.Handle);
+
+		Require(removed, "the stun effect could not be removed");
+		Require(!IsStunned, "the stun tag survived effect removal");
+	}
+
+	private void RunOverlappingAbilities()
+	{
+		Begin("3. Overlapping abilities and independent task ownership");
+
+		GameplayAbilityActivationResult dash =
+			_abilities.TryActivate(_dash);
+
+		GameplayAbilityActivationResult focus =
+			_abilities.TryActivate(_focus);
+
+		Require(dash.Succeeded, "the overlapping dash did not activate");
+		Require(focus.Succeeded, "the focus ability did not activate");
+
+		Report(
+			$"both active: dash={_abilities.IsActive(_dash)}, " +
+			$"focus={_abilities.IsActive(_focus)}, " +
+			$"pendingTasks={Tasks.PendingTaskCount}");
+
+		Require(
+			Tasks.PendingTaskCount == 2,
+			"the two activations did not own one task each");
+
+		bool cancelled = _abilities.Cancel(_dash);
+
+		Report(
+			$"cancelled dash: success={cancelled}, dashActive=" +
+			$"{_abilities.IsActive(_dash)}, focusActive=" +
+			$"{_abilities.IsActive(_focus)}, pendingTasks=" +
+			$"{Tasks.PendingTaskCount}");
+
+		Require(cancelled, "the overlapping dash could not be cancelled");
+		Require(
+			!_abilities.IsActive(_dash),
+			"the dash remained active after cancellation");
+		Require(
+			_abilities.IsActive(_focus),
+			"cancelling the dash also ended the focus ability");
+		Require(
+			Tasks.PendingTaskCount == 1,
+			"the focus ability lost its task with the dash");
+
+		Advance(0.5f);
+
+		Report(
+			$"t={Tasks.Time:0.00}: focusActive=" +
+			$"{_abilities.IsActive(_focus)}, speed={Speed:0}, " +
+			$"pendingTasks={Tasks.PendingTaskCount}");
+
+		Require(!_abilities.IsActive(_focus), "the focus ability did not end");
+		Require(Speed == 12f, "the focus buff did not apply");
+		Require(Tasks.PendingTaskCount == 0, "the focus plan leaked a task");
+
+		Advance(1f);
+
+		Require(Speed == 10f, "the focus buff did not expire");
+	}
+
+	private void RunApplicationTasks()
+	{
+		Begin("4. Application tasks and stale handles");
+
+		GameplayAbilityActivationResult activation =
+			_abilities.TryActivate(_overcharge);
+
+		Require(activation.Succeeded, "the overcharge did not activate");
+		Require(
+			_abilities.TryGetActivation(_overcharge, out var first),
+			"the overcharge activation token was unavailable");
+
+		GameplayAbilityTaskHandle task = Tasks.WaitDuration(first, 0.4f);
+
+		Require(!task.IsNone, "the duration task was not created");
+		Require(
+			Tasks.TryGetTask(task, out GameplayAbilityTaskInfo info),
+			"the duration task could not be inspected");
+
+		Report(
+			$"started task: kind={info.Kind}, planStep={info.PlanStep}, " +
+			$"remaining={info.RemainingTime:0.00}s");
+
+		Require(
+			info.PlanStep < 0,
+			"an application task was attributed to a plan step");
+		Require(
+			Math.Abs(info.RemainingTime - 0.4) < 0.0001,
+			"the task reported the wrong remaining time");
+
+		Advance(0.2f);
+
+		Require(
+			Tasks.TryGetTask(task, out info)
+				&& Math.Abs(info.RemainingTime - 0.2) < 0.0001,
+			"the task remaining time did not advance");
+
+		Advance(0.2f);
+
+		Require(
+			!Tasks.TryGetTask(task, out _),
+			"the completed task still resolved");
+		Require(
+			!Tasks.Cancel(task),
+			"the completed task was cancelled twice");
+		Require(
+			_abilities.IsActive(_overcharge),
+			"a task completion ended the application ability");
+
+		_abilities.End(_overcharge);
+
+		Require(
+			_abilities.TryActivate(_overcharge).Succeeded,
+			"the overcharge did not reactivate");
+
+		Require(
+			_abilities.TryGetActivation(_overcharge, out var second),
+			"the second overcharge activation was unavailable");
+
+		GameplayAbilityTaskHandle stale = Tasks.WaitDuration(second, 1f);
+
+		Require(_abilities.End(_overcharge), "the overcharge did not end");
+		Require(
+			!Tasks.TryGetTask(stale, out _),
+			"ending the ability left its task resolvable");
+		Require(
+			!Tasks.Cancel(stale),
+			"a task of the ended activation was still cancellable");
+
+		_abilities.TryActivate(_overcharge);
+
+		Require(
+			_abilities.TryGetActivation(_overcharge, out var third),
+			"the third overcharge activation was unavailable");
+
+		GameplayAbilityTaskHandle current = Tasks.WaitDuration(third, 1f);
+
+		Report(
+			$"stale cancel refused={!Tasks.Cancel(stale)}, " +
+			$"current task pending={Tasks.TryGetTask(current, out _)}");
+
+		Require(
+			!Tasks.Cancel(stale),
+			"the old task handle cancelled the new activation");
+		Require(
+			Tasks.TryGetTask(current, out _),
+			"the stale handle disturbed the new task");
+		Require(Tasks.Cancel(current), "the current task was not cancellable");
+		Require(_abilities.End(_overcharge), "the overcharge did not clean up");
+	}
+
+	private void RunOwnerDestruction()
+	{
+		Begin("5. Owner destruction with pending tasks");
+
+		Entity victim = _world.CreateEntity();
+
+		GameplayAbilityHandle handle =
+			_abilities.GiveAbility(victim, DemoSchema.ChargedDash);
+
+		GameplayAbilityActivationResult activation =
+			_abilities.TryActivate(handle);
+
+		Require(activation.Succeeded, "the victim dash did not activate");
+		Require(
+			Tasks.GetPendingTaskCount(victim) == 1,
+			"the victim dash did not start a task");
+
+		Advance(0.1f);
+
+		int before = Tasks.PendingTaskCount;
+
+		Require(
+			_world.DestroyEntity(victim),
+			"the victim entity could not be destroyed");
+
+		Report(
+			$"destroyed owner: pendingBefore={before}, " +
+			$"ownerTasks={Tasks.GetPendingTaskCount(victim)}, " +
+			$"totalTasks={Tasks.PendingTaskCount}");
+
+		Require(
+			Tasks.GetPendingTaskCount(victim) == 0,
+			"the destroyed owner kept pending tasks");
+		Require(!_world.IsAlive(victim), "the destroyed entity is still alive");
+
+		Advance(1f);
+
+		int lateDelivery = _events.Publish(
+			new GameplayEvent(DemoSchema.EventDashReleased, victim, victim));
+
+		Require(lateDelivery == 0, "the destroyed owner still listened");
+		Require(
+			Tasks.PendingTaskCount == 0,
+			"a task survived its owner's destruction");
+	}
+
+	private float Stamina =>
+		_attributes.GetCurrentValue(_player, DemoSchema.Stamina);
+
+	private float Speed =>
+		_attributes.GetCurrentValue(_player, DemoSchema.Speed);
+
+	private bool IsDashing =>
+		_tags.HasTag(_player, DemoSchema.StatusDashing);
+
+	private bool IsStunned =>
+		_tags.HasTag(_player, DemoSchema.StatusStunned);
+
+	private void Advance(float seconds)
+	{
+		_effects.Advance(seconds);
+		Tasks.Advance(seconds);
+	}
+
+	private static void Begin(string title)
+	{
+		Console.WriteLine();
+		Console.WriteLine($"=== {title} ===");
+	}
+
+	private static void Report(string message)
+	{
+		Console.WriteLine($"    {message}");
+	}
+
+	private void Require(bool condition, string message)
+	{
+		if (!condition)
+		{
+			throw new InvalidOperationException(
+				$"Demo assertion failed: {message}.");
+		}
+
+		_assertions++;
+	}
+}

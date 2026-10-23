@@ -1,0 +1,34 @@
+# Volt.GameplayDemo
+
+A deterministic, graphics-free demonstration of event-driven gameplay
+abilities and ability tasks. No graphics device, window, or platform
+package is required.
+
+```bash
+dotnet run --project samples/Volt.GameplayDemo -c Release
+```
+
+The sample builds a small content set from `DemoSchema`: stamina and
+speed attributes, a dash cost, a cooldown, a temporary dash buff, a
+stun, and three abilities. It then advances simulation time manually
+and prints every observable transition.
+
+## Scenarios
+
+1. **Charged Dash**: pays 10 stamina, runs a 0.25 s wind-up, waits for
+   `VoltDemo.Event.Dash.Released`, applies a 0.5 s speed buff, waits for
+   the buff's `Status.Dashing` tag to disappear, and ends.
+2. **Interrupted wind-up**: a stun cancels the dash. The paid cost and
+   cooldown remain, the pending task is released, its handle is stale,
+   and advancing time plus a late release event cannot revive it.
+3. **Overlapping abilities**: charged dash and focus own one task each.
+   Cancelling the dash leaves the focus activation and its task intact.
+4. **Application tasks**: an ability with no plan starts a duration task
+   directly, inspects it, completes it, and shows that the completed
+   handle is stale. Ending an ability cancels its task, and a handle
+   from that activation cannot cancel the next activation's task.
+5. **Owner destruction**: destroying an entity with a pending task
+   releases it and leaves no listener behind.
+
+Every expectation is an assertion. The process exits with status 1 and
+prints the failing assertion if the behavior changes.

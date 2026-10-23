@@ -27,7 +27,8 @@ public readonly struct GameplayAbilityChange
 		GameplayAbilityDefinition definition,
 		Entity owner,
 		Entity target,
-		int level)
+		int level,
+		uint activationId)
 	{
 		Kind = kind;
 		Handle = handle;
@@ -35,6 +36,7 @@ public readonly struct GameplayAbilityChange
 		Owner = owner;
 		Target = target;
 		Level = level;
+		ActivationId = activationId;
 	}
 
 	/// <summary>
@@ -71,6 +73,12 @@ public readonly struct GameplayAbilityChange
 	/// Gets the level of the grant.
 	/// </summary>
 	public int Level { get; }
+
+	/// <summary>
+	/// Gets the activation serial number the change belongs to, or zero
+	/// when the change is not about an activation (grant or revoke).
+	/// </summary>
+	public uint ActivationId { get; }
 
 	/// <inheritdoc />
 	public override string ToString()

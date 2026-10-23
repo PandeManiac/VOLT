@@ -1,7 +1,9 @@
 using Volt.Ecs;
 using Volt.Gameplay.Attributes;
 using Volt.Gameplay.Effects;
+using Volt.Gameplay.Events;
 using Volt.Gameplay.Tags;
+using Volt.Gameplay.Tasks;
 
 namespace Volt.Gameplay.Abilities;
 
@@ -54,6 +56,10 @@ public sealed class GameplayAbilitySystem : IDisposable
 	private readonly uint _allocatorId;
 	private readonly uint _systemId;
 
+	private GameplayEventSystem? _events;
+	private GameplayAbilityTaskSystem? _tasks;
+	private bool _ownsEvents;
+
 	private AbilitySlot[] _abilities = new AbilitySlot[InitialAbilityCapacity];
 	private int _abilitySlotCount;
 	private int _freeAbilitySlot = -1;
@@ -93,7 +99,8 @@ public sealed class GameplayAbilitySystem : IDisposable
 		World world,
 		GameplayTagStore tags,
 		GameplayEffectSystem effects,
-		GameplayAttributeStore attributes)
+		GameplayAttributeStore attributes,
+		GameplayEventSystem? events = null)
 	{
 		ArgumentNullException.ThrowIfNull(world);
 		ArgumentNullException.ThrowIfNull(tags);
@@ -106,6 +113,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 		_attributes = attributes;
 		_allocatorId = world.AllocatorId;
 		_systemId = AllocateSystemId();
+		_events = events;
 
 		_world.EntityDestroyed += HandleEntityDestroyed;
 		_tags.TagsChanged += HandleTagsChanged;
@@ -132,6 +140,28 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// Gets the number of active abilities.
 	/// </summary>
 	public int ActiveAbilityCount => _activeCount;
+
+	/// <summary>
+	/// Gets the event runtime abilities use for plans and task waits.
+	/// </summary>
+	/// <remarks>
+	/// When the constructor was given an event system, this is that
+	/// system and the caller keeps ownership. Otherwise the first access
+	/// creates one, and this system disposes it. Sharing one event
+	/// system between the ability runtime and application listeners is
+	/// the normal setup.
+	/// </remarks>
+	public GameplayEventSystem Events => _events ??= CreateEventSystem();
+
+	/// <summary>
+	/// Gets the task runtime for this ability system.
+	/// </summary>
+	/// <remarks>
+	/// The task runtime is created on first use, so abilities that never
+	/// start a task and have no plan never allocate one, never subscribe
+	/// to tag changes, and never appear in the deadline heap.
+	/// </remarks>
+	public GameplayAbilityTaskSystem Tasks => _tasks ??= CreateTaskSystem();
 
 	/// <summary>
 	/// Grants an ability to an entity.
@@ -198,7 +228,10 @@ public sealed class GameplayAbilitySystem : IDisposable
 		_abilities[slot].Active = false;
 		_abilities[slot].Activating = false;
 		_abilities[slot].Revoking = false;
+		_abilities[slot].Ending = false;
 		_abilities[slot].ActivationId = 0;
+		_abilities[slot].TaskHead = -1;
+		_abilities[slot].PlanStep = -1;
 
 		Link(owner, slot);
 
@@ -235,7 +268,8 @@ public sealed class GameplayAbilitySystem : IDisposable
 		ThrowIfDisposed();
 
 		if (!TryResolve(handle, out int slot)
-			|| _abilities[slot].Revoking)
+			|| _abilities[slot].Revoking
+			|| _abilities[slot].Ending)
 		{
 			return false;
 		}
@@ -556,7 +590,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 				_abilities[slot].Level);
 		}
 
-		if (_abilities[slot].Activating)
+		if (_abilities[slot].Activating || _abilities[slot].Ending)
 		{
 			return Rejected(
 				GameplayAbilityActivationStatus.AlreadyActive,
@@ -696,9 +730,12 @@ public sealed class GameplayAbilitySystem : IDisposable
 		Entity target,
 		int level)
 	{
+		uint activationId = NextActivationId();
+
 		_abilities[slot].Active = true;
 		_abilities[slot].Target = target;
-		_abilities[slot].ActivationId = NextActivationId();
+		_abilities[slot].ActivationId = activationId;
+		_abilities[slot].PlanStep = -1;
 
 		_activeCount++;
 
@@ -827,12 +864,13 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		if (!IsStillActive(handle, owner, out slot))
 		{
-			return Rejected(
+			return new GameplayAbilityActivationResult(
 				GameplayAbilityActivationStatus.EndedDuringActivation,
 				handle,
 				owner,
 				target,
-				level);
+				level,
+				activationId);
 		}
 
 		if (definition.EndsOnActivate)
@@ -844,7 +882,30 @@ public sealed class GameplayAbilitySystem : IDisposable
 				handle,
 				owner,
 				target,
-				level);
+				level,
+				activationId);
+		}
+
+		bool endedByPlan = false;
+
+		if (definition.Plan is not null)
+		{
+			endedByPlan = RunPlan(
+				new GameplayAbilityActivation(handle, activationId),
+				0);
+
+			if (!IsStillActive(handle, owner, out slot))
+			{
+				return new GameplayAbilityActivationResult(
+					endedByPlan
+						? GameplayAbilityActivationStatus.ActivatedAndEnded
+						: GameplayAbilityActivationStatus.EndedDuringActivation,
+					handle,
+					owner,
+					target,
+					level,
+					activationId);
+			}
 		}
 
 		return new GameplayAbilityActivationResult(
@@ -852,7 +913,8 @@ public sealed class GameplayAbilitySystem : IDisposable
 			handle,
 			owner,
 			target,
-			level);
+			level,
+			activationId);
 	}
 
 	private bool CooldownBecameActive(
@@ -1019,6 +1081,39 @@ public sealed class GameplayAbilitySystem : IDisposable
 	}
 
 	/// <summary>
+	/// Gets the token of the grant's current activation.
+	/// </summary>
+	/// <param name="handle">The handle of the grant.</param>
+	/// <param name="activation">The activation token.</param>
+	/// <returns>
+	/// <see langword="true"/> when the grant is currently active.
+	/// </returns>
+	/// <remarks>
+	/// Tasks and plans bind to this token rather than to the grant, so
+	/// a later activation of the same grant is a different owner. A
+	/// handler that started before a retrigger keeps the old token and
+	/// cannot affect the new activation through it.
+	/// </remarks>
+	public bool TryGetActivation(
+		GameplayAbilityHandle handle,
+		out GameplayAbilityActivation activation)
+	{
+		ThrowIfDisposed();
+
+		if (!TryResolve(handle, out int slot) || !_abilities[slot].Active)
+		{
+			activation = GameplayAbilityActivation.None;
+			return false;
+		}
+
+		activation = new GameplayAbilityActivation(
+			CreateHandle(slot),
+			_abilities[slot].ActivationId);
+
+		return true;
+	}
+
+	/// <summary>
 	/// Determines whether an ability is on cooldown for an entity.
 	/// </summary>
 	/// <param name="owner">The entity.</param>
@@ -1085,6 +1180,20 @@ public sealed class GameplayAbilitySystem : IDisposable
 		_world.EntityDestroyed -= HandleEntityDestroyed;
 		_tags.TagsChanged -= HandleTagsChanged;
 
+		if (_tasks is not null)
+		{
+			_tasks.Changed -= HandleTaskChanged;
+			_tasks.Dispose();
+			_tasks = null;
+		}
+
+		if (_ownsEvents)
+		{
+			_events?.Dispose();
+		}
+
+		_events = null;
+		_ownsEvents = false;
 		Changed = null;
 		_abilities = [];
 		_entitySegments = [];
@@ -1102,6 +1211,274 @@ public sealed class GameplayAbilitySystem : IDisposable
 		GC.SuppressFinalize(this);
 	}
 
+	private GameplayEventSystem CreateEventSystem()
+	{
+		_events = new GameplayEventSystem(_world);
+		_ownsEvents = true;
+
+		return _events;
+	}
+
+	private GameplayAbilityTaskSystem CreateTaskSystem()
+	{
+		GameplayAbilityTaskSystem tasks = new(this, Events, _tags);
+
+		tasks.Changed += HandleTaskChanged;
+
+		return tasks;
+	}
+
+	internal World World => _world;
+
+	internal bool TryResolveActivation(
+		GameplayAbilityActivation activation,
+		out int slot,
+		out Entity owner,
+		out Entity target)
+	{
+		slot = -1;
+		owner = default;
+		target = default;
+
+		if (activation.IsNone
+			|| !TryResolveGrant(activation.Ability, out slot, out owner))
+		{
+			return false;
+		}
+
+		ref AbilitySlot ability = ref _abilities[slot];
+
+		if (!ability.Active || ability.ActivationId != activation.Id)
+		{
+			return false;
+		}
+
+		target = ability.Target;
+
+		return true;
+	}
+
+	internal bool TryResolveGrant(
+		GameplayAbilityHandle handle,
+		out int slot,
+		out Entity owner)
+	{
+		owner = default;
+
+		if (!TryResolve(handle, out slot))
+		{
+			return false;
+		}
+
+		owner = _abilities[slot].Owner;
+
+		return true;
+	}
+
+	internal uint GetActivationId(int slot)
+	{
+		return _abilities[slot].ActivationId;
+	}
+
+	internal int GetTaskHead(int slot)
+	{
+		return (uint)slot < (uint)_abilitySlotCount
+			? _abilities[slot].TaskHead
+			: -1;
+	}
+
+	internal void SetTaskHead(int slot, int head)
+	{
+		if ((uint)slot < (uint)_abilitySlotCount)
+		{
+			_abilities[slot].TaskHead = head;
+		}
+	}
+
+	private void HandleTaskChanged(GameplayAbilityTaskChange change)
+	{
+		// Application tasks use a negative step and never drive a plan.
+		if (change.PlanStep < 0)
+		{
+			return;
+		}
+
+		GameplayAbilityActivation activation = change.Activation;
+
+		if (!TryResolveActivation(activation, out int slot, out _, out _)
+			|| _abilities[slot].PlanStep != change.PlanStep)
+		{
+			return;
+		}
+
+		if (change.Kind == GameplayAbilityTaskChangeKind.Cancelled)
+		{
+			// A plan step that is cancelled by game code cannot resume,
+			// so the ability ends normally instead of staying active
+			// forever without a pending task. Cancellation caused by the
+			// ability itself already cleared the cursor before the task
+			// notification was raised.
+			_abilities[slot].PlanStep = -1;
+
+			EndActivation(slot, GameplayAbilityChangeKind.Ended);
+
+			return;
+		}
+
+		if (change.Kind != GameplayAbilityTaskChangeKind.Completed)
+		{
+			return;
+		}
+
+		_abilities[slot].PlanStep = -1;
+
+		RunPlan(activation, change.PlanStep + 1);
+	}
+
+	private bool RunPlan(
+		GameplayAbilityActivation activation,
+		int stepIndex)
+	{
+		while (true)
+		{
+			if (!TryResolveActivation(
+				activation,
+				out int slot,
+				out Entity owner,
+				out Entity target))
+			{
+				return false;
+			}
+
+			GameplayAbilityPlan? plan = _abilities[slot].Definition.Plan;
+
+			if (plan is null)
+			{
+				return false;
+			}
+
+			if (stepIndex >= plan.Count)
+			{
+				EndActivation(slot, GameplayAbilityChangeKind.Ended);
+
+				return true;
+			}
+
+			_abilities[slot].PlanStep = -1;
+
+			GameplayAbilityPlanStep step = plan[stepIndex];
+
+			switch (step.Kind)
+			{
+				case GameplayAbilityPlanStepKind.WaitDuration:
+					{
+						// Claim the step before creating the task. A Started
+						// handler may publish the event that completes an event
+						// task, which advances the plan from inside the start.
+						_abilities[slot].PlanStep = stepIndex;
+
+						GameplayAbilityTaskHandle task = Tasks.StartDurationTask(
+							activation,
+							step.DurationSeconds,
+							stepIndex);
+
+						return HandleWaitStepStarted(
+							activation,
+							stepIndex,
+							task);
+					}
+				case GameplayAbilityPlanStepKind.WaitEvent:
+					{
+						_abilities[slot].PlanStep = stepIndex;
+
+						GameplayAbilityTaskHandle task =
+							Tasks.StartGameplayEventTask(
+								activation,
+								step.Tag,
+								step.Match,
+								default,
+								default,
+								stepIndex);
+
+						return HandleWaitStepStarted(
+							activation,
+							stepIndex,
+							task);
+					}
+				case GameplayAbilityPlanStepKind.WaitTag:
+					{
+						_abilities[slot].PlanStep = stepIndex;
+
+						GameplayAbilityTaskHandle task =
+							Tasks.StartTagConditionTask(
+								activation,
+								step.Tag,
+								step.WaitMode,
+								step.Exact,
+								stepIndex);
+
+						return HandleWaitStepStarted(
+							activation,
+							stepIndex,
+							task);
+					}
+				case GameplayAbilityPlanStepKind.ApplyEffect:
+					{
+						Entity effectTarget =
+							step.EffectTarget == GameplayAbilityEffectTarget.Owner
+								? owner
+								: target;
+
+						if (_world.IsAlive(effectTarget))
+						{
+							_effects.Apply(effectTarget, step.Effect!, owner);
+						}
+
+						stepIndex++;
+						break;
+					}
+				case GameplayAbilityPlanStepKind.PublishEvent:
+					{
+						Events.Publish(new GameplayEvent(
+							step.Tag,
+							owner,
+							target));
+
+						stepIndex++;
+						break;
+					}
+				default:
+					{
+						EndActivation(slot, GameplayAbilityChangeKind.Ended);
+
+						return true;
+					}
+			}
+		}
+	}
+
+	private bool HandleWaitStepStarted(
+		GameplayAbilityActivation activation,
+		int stepIndex,
+		GameplayAbilityTaskHandle task)
+	{
+		if (!task.IsNone && _tasks is not null && _tasks.IsPending(task))
+		{
+			return false;
+		}
+
+		// The task was never created, or its Started notification ended
+		// it. A completed step may already have advanced the plan, so
+		// only clear the cursor when it still names this step.
+		if (TryResolveActivation(activation, out int slot, out _, out _)
+			&& _abilities[slot].PlanStep == stepIndex)
+		{
+			_abilities[slot].PlanStep = -1;
+		}
+
+		return false;
+	}
+
 	private static GameplayAbilityActivationResult Rejected(
 		GameplayAbilityActivationStatus status,
 		GameplayAbilityHandle handle,
@@ -1114,7 +1491,8 @@ public sealed class GameplayAbilitySystem : IDisposable
 			handle,
 			owner,
 			target,
-			level);
+			level,
+			0);
 	}
 
 	private bool CostIsMet(
@@ -1336,11 +1714,39 @@ public sealed class GameplayAbilitySystem : IDisposable
 			return false;
 		}
 
-		// Mark the ability inactive before the notification reaches
-		// user code, so a handler that queries it sees it ended.
+		// Build the ability notification before any user code can see
+		// the ending. A task cancellation handler may revoke the grant
+		// and recycle its slot; the payload must still describe the
+		// activation that ended.
+		GameplayAbilityChange change = CreateChange(kind, slot);
+		GameplayAbilityActivation activation = new(
+			CreateHandle(slot),
+			_abilities[slot].ActivationId);
+
+		// Ending blocks a nested activation from a task cancellation
+		// handler. Without it, a handler could start a new activation
+		// before the old one's Ended notification was raised.
+		_abilities[slot].Ending = true;
+
 		MarkInactive(slot);
 
-		RaiseChange(kind, slot);
+		try
+		{
+			if (_tasks is not null && !_tasks.IsDisposed)
+			{
+				_tasks.CancelActivation(activation);
+			}
+		}
+		finally
+		{
+			if (TryResolveGrant(activation.Ability, out int current, out _)
+				&& _abilities[current].ActivationId == activation.Id)
+			{
+				_abilities[current].Ending = false;
+			}
+
+			Changed?.Invoke(change);
+		}
 
 		return true;
 	}
@@ -1351,7 +1757,19 @@ public sealed class GameplayAbilitySystem : IDisposable
 		// cancelled: it is rolled back silently, like a failed check.
 		if (_abilities[slot].Active)
 		{
+			GameplayAbilityActivation activation = new(
+				CreateHandle(slot),
+				_abilities[slot].ActivationId);
+
 			MarkInactive(slot);
+
+			// A callback during the commit may have started tasks even
+			// though Activated was never observed. Release them without
+			// notifications: the activation never became observable.
+			if (_tasks is not null && !_tasks.IsDisposed)
+			{
+				_tasks.CancelActivationSilently(activation);
+			}
 		}
 	}
 
@@ -1370,6 +1788,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 		Entity owner = _abilities[slot].Owner;
 
 		_abilities[slot].Active = false;
+		_abilities[slot].PlanStep = -1;
 
 		_activeCount--;
 
@@ -1669,7 +2088,9 @@ public sealed class GameplayAbilitySystem : IDisposable
 		{
 			Generation = generation,
 			NextOnEntity = _freeAbilitySlot,
-			PreviousOnEntity = -1
+			PreviousOnEntity = -1,
+			TaskHead = -1,
+			PlanStep = -1
 		};
 
 		_freeAbilitySlot = slot;
@@ -1852,7 +2273,8 @@ public sealed class GameplayAbilitySystem : IDisposable
 			ability.Definition,
 			ability.Owner,
 			ability.Target,
-			ability.Level);
+			ability.Level,
+			ability.ActivationId);
 	}
 
 	private void RaiseChange(GameplayAbilityChangeKind kind, int slot)
@@ -1958,9 +2380,12 @@ public sealed class GameplayAbilitySystem : IDisposable
 		public int PreviousOnEntity;
 		public uint Generation;
 		public uint ActivationId;
+		public int TaskHead;
+		public int PlanStep;
 		public bool Active;
 		public bool Activating;
 		public bool Revoking;
+		public bool Ending;
 	}
 
 	private struct EntityAbilities
