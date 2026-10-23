@@ -74,6 +74,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 	private readonly CapturePool _inputPool = new();
 	private readonly CapturePool _revokePool = new();
 
+	private bool _simulationDriven;
 	private bool _disposed;
 
 	/// <summary>
@@ -705,13 +706,41 @@ public sealed class GameplayAbilitySystem : IDisposable
 				}
 			}
 
-			return CommitActivation(
-				handle,
-				slot,
-				definition,
-				owner,
-				target,
-				level);
+			try
+			{
+				return CommitActivation(
+					handle,
+					slot,
+					definition,
+					owner,
+					target,
+					level);
+			}
+			catch (Exception activationException)
+			{
+				// A notification raised during the commit may throw after
+				// a cost, cooldown, or activation tag was committed. The
+				// activation must not stay active without a plan cursor
+				// or a task that could ever continue it. Cancelling is the
+				// same terminal state a failed plan uses; committed costs
+				// and cooldowns are deliberately not rolled back.
+				try
+				{
+					CancelFailedActivation(handle);
+				}
+				catch (Exception cleanupException)
+				{
+					throw new AggregateException(
+						"An ability activation notification failed and " +
+						"cleanup also failed. Both exceptions are reported; " +
+						"the activation was marked inactive before cleanup " +
+						"notifications ran.",
+						activationException,
+						cleanupException);
+				}
+
+				throw;
+			}
 		}
 		finally
 		{
@@ -890,7 +919,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		if (definition.Plan is not null)
 		{
-			endedByPlan = RunPlan(
+			endedByPlan = RunPlanGuarded(
 				new GameplayAbilityActivation(handle, activationId),
 				0);
 
@@ -1194,6 +1223,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		_events = null;
 		_ownsEvents = false;
+		_simulationDriven = false;
 		Changed = null;
 		_abilities = [];
 		_entitySegments = [];
@@ -1225,7 +1255,50 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		tasks.Changed += HandleTaskChanged;
 
+		if (_simulationDriven)
+		{
+			tasks.BeginSimulation();
+		}
+
 		return tasks;
+	}
+
+	/// <summary>
+	/// Claims task advancement for an attached fixed-step integration.
+	/// </summary>
+	internal void BeginSimulation()
+	{
+		if (_simulationDriven)
+		{
+			throw new InvalidOperationException(
+				"These abilities are already advanced by another " +
+				"GameplaySimulation. A clock has one owner.");
+		}
+
+		_simulationDriven = true;
+		_tasks?.BeginSimulation();
+	}
+
+	/// <summary>
+	/// Releases task advancement when its integration is disposed.
+	/// </summary>
+	internal void EndSimulation()
+	{
+		_simulationDriven = false;
+		_tasks?.EndSimulation();
+	}
+
+	/// <summary>
+	/// Advances pending tasks from the attached integration without
+	/// creating a task runtime for an ability system that never used
+	/// one.
+	/// </summary>
+	internal void AdvanceTasksFromSimulation(float deltaSeconds)
+	{
+		if (_tasks is not null && !_tasks.IsDisposed)
+		{
+			_tasks.AdvanceFromSimulation(deltaSeconds);
+		}
 	}
 
 	internal World World => _world;
@@ -1332,7 +1405,80 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		_abilities[slot].PlanStep = -1;
 
-		RunPlan(activation, change.PlanStep + 1);
+		RunPlanGuarded(activation, change.PlanStep + 1);
+	}
+
+	/// <summary>
+	/// Runs a plan and applies the documented failure policy: an
+	/// exception from a step cancels the activation, releasing every
+	/// task and subscription, before the exception is rethrown.
+	/// </summary>
+	/// <remarks>
+	/// A plan exception must not leave an active ability with no
+	/// pending task and no plan cursor. Cancelling is a terminal state:
+	/// the ability is no longer active, a <c>Cancelled</c> notification
+	/// was raised, and the committed cost and cooldown are not rolled
+	/// back. The original exception is rethrown; if cleanup itself throws
+	/// (a cancellation notification failed), both exceptions are
+	/// reported in an <see cref="AggregateException"/> instead of the
+	/// cleanup failure silently replacing the plan failure.
+	/// </remarks>
+	private bool RunPlanGuarded(
+		GameplayAbilityActivation activation,
+		int stepIndex)
+	{
+		try
+		{
+			return RunPlan(activation, stepIndex);
+		}
+		catch (Exception planException)
+		{
+			try
+			{
+				FailPlan(activation);
+			}
+			catch (Exception cleanupException)
+			{
+				throw new AggregateException(
+					"A gameplay ability plan failed and its cleanup also " +
+					"failed. Both exceptions are reported; the activation " +
+					"was marked inactive before cleanup notifications ran.",
+					planException,
+					cleanupException);
+			}
+
+			throw;
+		}
+	}
+
+	private void FailPlan(GameplayAbilityActivation activation)
+	{
+		if (!TryResolveActivation(activation, out int slot, out _, out _))
+		{
+			return;
+		}
+
+		// Clear the cursor before cancellation notifications run, so a
+		// task cancellation cannot try to resume the broken plan. The
+		// activation is cancelled rather than silently aborted: game
+		// code observes the same terminal notification as any other
+		// interruption, and the already committed cost and cooldown
+		// follow the normal transaction policy.
+		_abilities[slot].PlanStep = -1;
+
+		EndActivation(slot, GameplayAbilityChangeKind.Cancelled);
+	}
+
+	private void CancelFailedActivation(GameplayAbilityHandle handle)
+	{
+		if (!TryResolve(handle, out int slot) || !_abilities[slot].Active)
+		{
+			return;
+		}
+
+		_abilities[slot].PlanStep = -1;
+
+		EndActivation(slot, GameplayAbilityChangeKind.Cancelled);
 	}
 
 	private bool RunPlan(

@@ -44,6 +44,9 @@ public sealed class GameplayEventSystem : IDisposable
 	private const int SegmentShift = 10;
 	private const int SegmentSize = 1 << SegmentShift;
 	private const int SegmentMask = SegmentSize - 1;
+	private const int BucketSegmentShift = 10;
+	private const int BucketSegmentSize = 1 << BucketSegmentShift;
+	private const int BucketSegmentMask = BucketSegmentSize - 1;
 	private const int InitialSubscriptionCapacity = 16;
 	private const int InitialCaptureCapacity = 8;
 	private const int MaxDispatchDepth = 16;
@@ -60,7 +63,7 @@ public sealed class GameplayEventSystem : IDisposable
 	private int _freeSubscriptionSlot = -1;
 	private int _subscriptionCount;
 
-	private int[] _buckets = [];
+	private int[]?[] _buckets = [];
 	private EntitySubscriptions[]?[] _owners = [];
 
 	private readonly List<CaptureBuffer> _captureBuffers = [];
@@ -94,6 +97,11 @@ public sealed class GameplayEventSystem : IDisposable
 	/// Gets the number of live subscriptions.
 	/// </summary>
 	public int SubscriptionCount => _subscriptionCount;
+
+	/// <summary>
+	/// Gets whether the system has been disposed.
+	/// </summary>
+	internal bool IsDisposed => _disposed;
 
 	/// <summary>
 	/// Subscribes a delegate to an event tag.
@@ -391,8 +399,6 @@ public sealed class GameplayEventSystem : IDisposable
 		int slot = AcquireSubscriptionSlot();
 		int bucket = GetBucketIndex(tag);
 
-		EnsureBucketCapacity(bucket);
-
 		ref SubscriptionSlot subscription = ref _subscriptions[slot];
 
 		subscription.Tag = tag;
@@ -460,12 +466,14 @@ public sealed class GameplayEventSystem : IDisposable
 		CaptureBuffer buffer,
 		int count)
 	{
-		if ((uint)bucket >= (uint)_buckets.Length)
+		int[]? segment = GetBucketSegment(bucket);
+
+		if (segment is null)
 		{
 			return count;
 		}
 
-		int slot = _buckets[bucket];
+		int slot = segment[bucket & BucketSegmentMask];
 
 		while (slot >= 0)
 		{
@@ -516,31 +524,41 @@ public sealed class GameplayEventSystem : IDisposable
 	private void LinkBucket(int slot, int bucket)
 	{
 		ref SubscriptionSlot subscription = ref _subscriptions[slot];
+		int[] segment = GetOrCreateBucketSegment(bucket);
+		ref int head = ref segment[bucket & BucketSegmentMask];
 
-		subscription.NextInBucket = _buckets[bucket];
+		subscription.NextInBucket = head;
 		subscription.PreviousInBucket = -1;
 
-		if (_buckets[bucket] >= 0)
+		if (head >= 0)
 		{
-			_subscriptions[_buckets[bucket]].PreviousInBucket = slot;
+			_subscriptions[head].PreviousInBucket = slot;
 		}
 
-		_buckets[bucket] = slot;
+		head = slot;
 	}
 
 	private void UnlinkBucket(int slot)
 	{
 		ref SubscriptionSlot subscription = ref _subscriptions[slot];
 		int bucket = GetBucketIndex(subscription.Tag);
+		int[]? segment = GetBucketSegment(bucket);
+
+		if (segment is null)
+		{
+			return;
+		}
+
+		ref int head = ref segment[bucket & BucketSegmentMask];
 
 		if (subscription.PreviousInBucket >= 0)
 		{
 			_subscriptions[subscription.PreviousInBucket].NextInBucket =
 				subscription.NextInBucket;
 		}
-		else if ((uint)bucket < (uint)_buckets.Length)
+		else
 		{
-			_buckets[bucket] = subscription.NextInBucket;
+			head = subscription.NextInBucket;
 		}
 
 		if (subscription.NextInBucket >= 0)
@@ -734,18 +752,38 @@ public sealed class GameplayEventSystem : IDisposable
 		return tag.IsValid ? checked((int)tag.Id) : 0;
 	}
 
-	private void EnsureBucketCapacity(int bucket)
+	private int[]? GetBucketSegment(int bucket)
 	{
-		if (bucket < _buckets.Length)
+		int segmentIndex = bucket >> BucketSegmentShift;
+
+		return (uint)segmentIndex < (uint)_buckets.Length
+			? _buckets[segmentIndex]
+			: null;
+	}
+
+	private int[] GetOrCreateBucketSegment(int bucket)
+	{
+		int segmentIndex = bucket >> BucketSegmentShift;
+
+		if (segmentIndex >= _buckets.Length)
 		{
-			return;
+			Array.Resize(
+				ref _buckets,
+				Math.Max(
+					segmentIndex + 1,
+					Math.Max(4, _buckets.Length * 2)));
 		}
 
-		int previous = _buckets.Length;
-		int capacity = Math.Max(bucket + 1, Math.Max(4, _buckets.Length * 2));
+		int[]? segment = _buckets[segmentIndex];
 
-		Array.Resize(ref _buckets, capacity);
-		_buckets.AsSpan(previous).Fill(-1);
+		if (segment is null)
+		{
+			segment = new int[BucketSegmentSize];
+			segment.AsSpan().Fill(-1);
+			_buckets[segmentIndex] = segment;
+		}
+
+		return segment;
 	}
 
 	private GameplayEventSubscription CreateHandle(int slot)

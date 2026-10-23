@@ -66,6 +66,7 @@ public sealed class GameplayEffectSystem : IDisposable
 	private double _time;
 	private long _nextOrder = 1;
 	private bool _advancing;
+	private bool _simulationDriven;
 	private bool _disposed;
 
 	/// <summary>
@@ -127,6 +128,14 @@ public sealed class GameplayEffectSystem : IDisposable
 	/// Gets the number of active, tracked effect instances.
 	/// </summary>
 	public int ActiveEffectCount => _activeEffectCount;
+
+	/// <summary>
+	/// Gets whether the clock is owned by a
+	/// <see cref="Simulation.GameplaySimulation"/>.
+	/// </summary>
+	internal bool IsSimulationDriven => _simulationDriven;
+
+	internal World World => _world;
 
 	/// <summary>
 	/// Applies an effect definition to an entity.
@@ -488,6 +497,54 @@ public sealed class GameplayEffectSystem : IDisposable
 	{
 		ThrowIfDisposed();
 
+		if (_simulationDriven)
+		{
+			throw new InvalidOperationException(
+				"This effect system is advanced by a " +
+				"GameplaySimulation attached to the fixed-step loop. " +
+				"Calling Advance manually would advance the same clock " +
+				"twice in one step. Detach the integration or use its " +
+				"loop to advance simulation time.");
+		}
+
+		AdvanceCore(deltaTime);
+	}
+
+	/// <summary>
+	/// Advances the clock from the attached simulation integration.
+	/// </summary>
+	internal void AdvanceFromSimulation(float deltaTime)
+	{
+		ThrowIfDisposed();
+
+		AdvanceCore(deltaTime);
+	}
+
+	/// <summary>
+	/// Claims the clock for one fixed-step integration.
+	/// </summary>
+	internal void BeginSimulation()
+	{
+		if (_simulationDriven)
+		{
+			throw new InvalidOperationException(
+				"This effect system is already advanced by another " +
+				"GameplaySimulation. A clock has one owner.");
+		}
+
+		_simulationDriven = true;
+	}
+
+	/// <summary>
+	/// Releases the clock when its integration is disposed.
+	/// </summary>
+	internal void EndSimulation()
+	{
+		_simulationDriven = false;
+	}
+
+	private void AdvanceCore(float deltaTime)
+	{
 		if (!float.IsFinite(deltaTime) || deltaTime < 0f)
 		{
 			throw new ArgumentOutOfRangeException(
@@ -549,6 +606,7 @@ public sealed class GameplayEffectSystem : IDisposable
 		_effectSlotCount = 0;
 		_freeEffectSlot = -1;
 		_activeEffectCount = 0;
+		_simulationDriven = false;
 		_disposed = true;
 
 		GC.SuppressFinalize(this);

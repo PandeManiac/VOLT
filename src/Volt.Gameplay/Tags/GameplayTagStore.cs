@@ -107,6 +107,21 @@ public sealed class GameplayTagStore : IDisposable
 	public event Action<Entity>? TagsChanged;
 
 	/// <summary>
+	/// Reports the exact tag whose grant was just added or removed.
+	/// </summary>
+	/// <remarks>
+	/// This is an internal, allocation-free companion to
+	/// <see cref="TagsChanged"/>. The general event reports only the
+	/// entity, which forces a listener that watches many tags to
+	/// re-evaluate every condition. The task runtime uses this event to
+	/// visit only the tasks indexed by the changed tag and its
+	/// ancestors. It is raised after the mutation is committed and
+	/// before <see cref="TagsChanged"/>, so dependent bookkeeping is
+	/// current before user notifications can mutate the entity again.
+	/// </remarks>
+	internal event Action<Entity, GameplayTag>? TagChanged;
+
+	/// <summary>
 	/// Gets the number of entities that currently have at least one
 	/// tag.
 	/// </summary>
@@ -175,6 +190,7 @@ public sealed class GameplayTagStore : IDisposable
 			AppendTaggedIndex((int)entity.Index);
 		}
 
+		TagChanged?.Invoke(entity, tag);
 		TagsChanged?.Invoke(entity);
 
 		return true;
@@ -237,6 +253,7 @@ public sealed class GameplayTagStore : IDisposable
 			ReleaseDenseIndex(ref slot);
 		}
 
+		TagChanged?.Invoke(entity, tag);
 		TagsChanged?.Invoke(entity);
 
 		return true;
@@ -579,6 +596,7 @@ public sealed class GameplayTagStore : IDisposable
 		_world.EntityDestroyed -= HandleEntityDestroyed;
 
 		TagsChanged = null;
+		TagChanged = null;
 		_segments = [];
 		_taggedCount = 0;
 		_disposed = true;
