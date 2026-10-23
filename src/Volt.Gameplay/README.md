@@ -262,7 +262,27 @@ and finally the already-active rule. Each failure is reported as a
 `GameplayAbilityActivationStatus` and changes nothing. Costs and
 cooldowns are effects, so a cooldown is simply the tags its effect
 grants: an external effect that grants the same tag blocks the ability
-too, and cooldown time is read from the effect instance.
+too, and cooldown time is the longest remaining duration among all
+effects that grant those tags.
+
+The cooldown is applied before the cost, and both are checked again at
+commit. A cooldown that refuses to apply rejects the activation before
+payment; a cost that becomes unaffordable or refuses to apply rolls the
+cooldown back, so a failed commit pays nothing. An activation that a
+notification ends before payment also rolls the cooldown back. A failed
+commit raises no `Activated` or `Cancelled` notification; the result
+carries the failure.
+
+Handles are scoped to the ability system that created them as well as
+generation-checked, so two systems over one world cannot resolve each
+other's grants. Notifications may re-enter the system: an activation or
+revocation in progress refuses a nested activation or a second
+revocation of the same grant, and bulk cancellation, revocation, and
+input activation operate on the grants present when they start. A
+grant added by a callback survives the operation that triggered it.
+Destroying an owner releases its grants even if another destruction
+handler recycles the entity index before this system observes the
+destruction.
 
 An ability ends on activation by default, because a data definition has
 no tasks to keep it alive; call `EndOnActivate(false)` for one that
@@ -296,7 +316,7 @@ grants the ability's own cancel tag all throw before reaching gameplay.
 | `GameplayAbilityDefinition` | Immutable ability: requirements, cost, cooldown, block and cancel tags |
 | `GameplayAbilityDefinitionBuilder` | Fluent, validating authoring path |
 | `GameplayAbilitySystem` | Grants, activation checks, blocking, and cancellation |
-| `GameplayAbilityHandle` | Generation-checked handle to a grant |
+| `GameplayAbilityHandle` | System- and generation-checked handle to a grant |
 | `GameplayAbilityChange` | Notification payload for every ability transition |
 | `GrantedGameplayAbility` | Read-only snapshot of one grant |
 
@@ -308,6 +328,7 @@ dotnet test tests/Volt.Gameplay.Tests -c Release
 cd benchmarks/Volt.Benchmarks
 dotnet run -c Release -- --filter '*GameplayTagBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAbilityScalingBenchmarks*'
 ```
 
 The test suite includes differential tests that reproduce Unreal's own

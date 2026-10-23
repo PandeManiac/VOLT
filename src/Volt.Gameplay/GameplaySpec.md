@@ -1062,14 +1062,21 @@ independent grants.
   effect definitions have constant magnitudes, so the level is
   reported on grants and notifications only.
 
-**Rule.** A handle is generation-checked. Revoking a grant or
-destroying its owner retires the handle, and a later grant that reuses
-the slot is not reachable through it.
+**Rule.** A handle is scoped to the system that created it and is
+generation-checked. The handle embeds the system identity, the owner,
+the slot, and the slot generation. Revoking a grant or destroying its
+owner retires the handle, and a later grant that reuses the slot is not
+reachable through it. A handle from another system is rejected even
+when that system uses the same world, owner, slot, and generation.
 
-- `DIFF` Unreal's `FGameplayAbilitySpecHandle` is a slot index plus a
-  serial number allocated from a shared counter. VOLT embeds the owner
-  and a per-slot generation, so a handle from another world can never
-  resolve.
+- `SRC` Unreal's `FGameplayAbilitySpecHandle` is a slot index plus a
+  serial number allocated from a shared counter. The owning ability
+  system component is implicit, so the same numeric handle in a
+  different component is not meaningful.
+- `DIFF` VOLT can create more than one ability system over one world,
+  so a bare slot and generation would alias. The handle carries a
+  process-unique system id, and `TryResolve` compares it first. The id
+  is never reused until the 32-bit counter wraps.
 
 ## 4.2 Activation checks
 
@@ -1121,8 +1128,10 @@ soon as the blocking ability ends.
 **Rule.** An activation is rejected with `RejectedByCost` when the cost
 effect's own application requirements are unmet, or when an additive
 cost modifier would take the owner's current attribute value below
-zero. Only `AddBase` modifiers are checked. An affordable cost executes
-once against the owner's base value.
+zero. Only `AddBase` modifiers are checked. The check runs before the
+activation commits and again immediately before payment, after
+cancellation and cooldown application have run. An affordable cost
+executes once against the owner's base value.
 
 - `SRC` `UGameplayAbility::CheckCost` delegates to
   `FActiveGameplayEffectsContainer::CanApplyAttributeModifiers`, which
@@ -1134,31 +1143,57 @@ once against the owner's base value.
   effect's tag requirements; a rejecting cost simply applies nothing
   and activation continues for free. VOLT treats that as a failed cost
   so an ability can never activate without paying.
-- `DIFF` Unreal also relies on attribute clamping for the actual
-  payment. VOLT applies the same instant effect, so a cost that lands
-  exactly on zero clamps and stays there.
+- `DIFF` Unreal checks affordability once, before activation callbacks.
+  VOLT re-checks immediately before payment because a `Cancelled`
+  handler or the cooldown's modifiers may have spent the resource in
+  the meantime. This turns a would-be clamped payment into a rejected
+  activation with the cooldown rolled back.
+- `DIFF` Unreal relies on attribute clamping for the actual payment.
+  VOLT applies the same instant effect, so a cost that lands exactly
+  on zero clamps and stays there.
 
 ## 4.5 Cooldowns
 
-**Rule.** Activation applies the cooldown effect to the owner. The
-owner is on cooldown while any of the cooldown effect's granted tags is
-present, whatever granted it. The remaining time is the cooldown
-effect's remaining duration, or infinity for an infinite cooldown.
+**Rule.** The cooldown effect's application requirements are part of
+the activation check. Activation then applies the cooldown before the
+cost. A cooldown that refuses to apply, is discarded, or leaves neither
+its tags nor a live instance rejects the activation with
+`RejectedByCooldown` before any cost is paid.
 
 - `SRC` `UGameplayAbility::GetCooldownTags` returns the cooldown
   effect's granted tags; `CheckCooldown` calls
   `HasAnyMatchingGameplayTags` on the owner; `ApplyCooldown` applies
-  the effect to the owner.
+  the effect to the owner. `CommitAbility` applies the cooldown before
+  the cost.
+- `DIFF` Unreal never checks the cooldown effect's own application
+  requirements in `CanActivateAbility`; a rejected cooldown leaves the
+  ability usable. VOLT rejects the activation instead, for the same
+  reason it rejects a cost that will not apply.
+- `DIFF` Unreal's `CommitAbility` ignores a failed cooldown application
+  and still charges the cost. VOLT binds the two: a cooldown failure
+  aborts before payment, and a cost failure removes the cooldown it
+  just applied. The cost is the commit point because it is the only
+  irreversible side effect.
+- `DIFF` an applied cooldown that is inhibited still counts as
+  applied. Its tags are withdrawn, so the ability can activate again,
+  but the remaining-time query reports the inhibited instance exactly
+  as Unreal's `GetActiveEffectsTimeRemaining` does.
+
+**Rule.** The owner is on cooldown while any of the cooldown effect's
+granted tags is present, whatever granted it. The remaining time is the
+longest remaining duration among all active effects that grant one of
+those tags, or infinity for an infinite instance.
+
 - `SRC` `GetCooldownTimeRemaining` builds
   `FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(cooldownTags)` and
   returns the largest remaining duration among matching active
   effects. `GetActiveEffectsTimeRemaining` does not skip inhibited
   effects.
-- `DIFF` VOLT looks up its own cooldown effect instance instead of
-  querying by tags. The tags block reactivation, so at most one
-  instance of it can exist; a cooldown that is inhibited reports its
-  remaining time but does not count as "on cooldown", because its
-  tags are withdrawn.
+- `DIFF` none. VOLT now performs the same tag query through
+  `GameplayEffectSystem.GetMaxRemainingDuration`; an unrelated effect
+  that grants a cooldown tag contributes its duration. A matching tag
+  that no effect owns still blocks activation but reports zero
+  remaining time, as in Unreal.
 
 ## 4.6 Lifecycle, ending, and cancellation
 
@@ -1198,12 +1233,79 @@ re-evaluates it.
 **Rule.** Notifications are delivered after the change is committed,
 and handlers may grant, revoke, activate, and cancel abilities. An
 activation that is revoked, cancelled, or whose owner is destroyed by
-such a handler reports `EndedDuringActivation`; the attempt did commit,
-but no active ability remains.
+such a handler reports `EndedDuringActivation`. If it ends before the
+cost is paid, reversible state such as the cooldown is rolled back;
+if it ends after the commit point, the paid cost and cooldown remain.
 
 - `DIFF` this mirrors the effect system's `Discarded` status. Unreal
   has no return value for an activation, only the ability's own
   `IsActive` state.
+
+**Rule.** A commit that fails its cost or cooldown is rolled back
+without an ability notification. It raises neither `Activated` nor
+`Cancelled`; the failure is reported by the activation result, and the
+grant remains as it was before the attempt. Notifications are only
+raised for changes that actually happened.
+
+- `DIFF` Unreal's `CommitAbility` ends the instance, so listeners can
+  observe an `EndAbility` for an activation that never succeeded. VOLT
+  keeps a failed commit indistinguishable from a failed pre-check, as
+  far as the `Changed` stream is concerned.
+
+**Rule.** Each grant has an activation identity, and an activation
+marks its grant while it owns it. A notification cannot start a
+nested activation of the same grant; the nested attempt reports
+`AlreadyActive`. This includes the `Ended` notification raised by a
+retrigger, the cancellation of a target, and every effect callback
+during the commit.
+
+- `DIFF` Unreal has no return value for a nested `TryActivateAbility`
+  and no explicit activation guard; a handler that reactivates during
+  `EndAbility` starts a second activation. VOLT rejects it so one
+  attempt cannot apply its cost twice or increment the active count
+  twice.
+
+**Rule.** A grant being revoked cannot be reactivated. Revocation marks
+the grant before its `Cancelled` notification, a nested
+`RevokeAbility` of the same handle returns `false`, and the outer call
+completes the removal. The active count therefore never releases an
+active grant without its `Cancelled` cleanup.
+
+- `DIFF` Unreal's `ClearAbility` has no re-entrancy guard. VOLT's guard
+  makes the outer revocation authoritative and keeps a handler from
+  resurrecting the grant between cleanup and release.
+
+**Rule.** Bulk operations scope themselves to the grants that exist
+when they start. `CancelAll`, `CancelByTags`, tag-driven cancellation,
+`RevokeAll`, and input activation capture that set once; a grant added
+by a notification is not part of the operation, and a grant that was
+cancelled and then reactivated is identified by its new activation id
+and is not cancelled a second time.
+
+- `DIFF` Unreal's `CancelAbilities` builds `AbilitiesToCancel` first,
+  which gives cancellations the same snapshot scope. VOLT implements
+  the snapshot with reusable capture buffers, so it is allocation-free
+  after warmup and survives nested operations by taking another buffer
+  from the same pool.
+
+**Rule.** Tag-change notifications are coalesced. A handler that adds
+or removes tags during a `Cancelled` notification sets a pending flag
+instead of recursing, and the runtime runs another cancellation pass
+for the newest tag state. The number of passes is bounded.
+
+- `DIFF` the effect system uses the same coalescing pattern for ongoing
+  requirements; Unreal has no automatic tag-driven cancellation.
+
+**Rule.** Destroying an owner releases its grants silently. If an
+earlier `EntityDestroyed` handler recycles the entity index and grants
+to the replacement before this system observes the old destruction,
+the first operation that establishes state for the new generation
+releases the old grants. Slots, grants, and active counters therefore
+cannot outlive an owner even when notification order is adversarial.
+
+- `DIFF` Unreal has no world-wide destruction notification; the
+  component's owner is destroyed as a whole. VOLT keys grants by
+  entity and must handle index reuse explicitly.
 
 ## 4.7 Determinism
 
@@ -1211,7 +1313,12 @@ There is no ability clock. Cooldown expiry is an effect deadline, so
 time scaling, pausing, and deterministic ordering are inherited from
 the effect system. Each new grant is pushed onto the front of its
 owner's list, so input activation and `CopyAbilities` walk the newest
-grant first, and cancelling by tags walks the same order.
+grant first, and every captured bulk operation walks the same order.
+Capture happens before the first notification, so the scope of a call
+is fixed by the state at its start rather than by callback timing.
+Tag-driven cancellation runs at most eight coalesced passes per
+external tag change; a handler that keeps changing tags cannot extend
+it without bound.
 
 ## 4.8 Edge-case matrix
 
@@ -1242,36 +1349,81 @@ grant first, and cancelling by tags walks the same order.
 | Revoke an active grant | `Cancelled` then `Revoked` | `SRC` |
 | Owner destroyed | grants released silently | `DIFF` |
 | Entity index reused | new occupant has no grants | `DIFF` |
+| Index recycled before the destruction notification | old grants released; counters match the new owner | `DIFF` |
 | Activation revoked by a handler | `EndedDuringActivation` | `DIFF` |
 | Owner destroyed by a handler | `EndedDuringActivation` | `DIFF` |
 | Activation by input | every grant bound to the input is attempted | `SRC` |
+| Cost requirement invalidated during commit | `RejectedByCost`, no cost or cooldown | `DIFF` |
+| Cost spent by a cancellation callback | `RejectedByCost`, cooldown rolled back | `DIFF` |
+| Cooldown requirement invalidated during commit | `RejectedByCooldown`, no cost | `DIFF` |
+| Cooldown removed during application | `RejectedByCooldown`, no cost | `DIFF` |
+| Activation ended during cooldown application | `EndedDuringActivation`, cooldown rolled back, no cost | `DIFF` |
+| Commit aborted after a failed effect | no `Activated` or `Cancelled` | `DIFF` |
+| Reactivation from a revocation's `Cancelled` | `NotGranted`, no active leak | `DIFF` |
+| Nested revoke from `Cancelled` | `false`; the outer revoke completes | `DIFF` |
+| Grant added by a revocation callback | survives `RevokeAll` | `DIFF` |
+| Ability activated by a cancellation callback | survives `CancelAll`/`CancelByTags` | `DIFF` |
+| Ability activated during tag cancellation | survives that pass | `DIFF` |
+| Grant added during input activation | not attempted by that press | `DIFF` |
+| Nested activation from a retrigger's `Ended` | `AlreadyActive`, one active instance | `DIFF` |
+| Handle from another system on the same world | `NotGranted`; handles differ | `DIFF` |
+| External timed cooldown effect | remaining time is its duration | `SRC` |
+| Inhibited cooldown instance | remaining time reported, no tag block | `SRC` |
+| Matching tag with no effect behind it | on cooldown, remaining zero | `SRC` |
 
 ## 4.9 Performance
 
 Same machine and job as the earlier parts, in process, with a grant on
 every entity in a populated world and a separate set of actors for the
-measured operations.
+measured operations. Allocations are zero on every warmed-up path, as
+asserted by the allocation guards as well as the benchmark columns.
 
 | Workload | 1,000 | 100,000 | Allocated |
 | --- | ---: | ---: | ---: |
-| Activate and end a lasting ability | 21.9 ns | 22.5 ns | 0 B |
-| Activate with a cost | 57.5 ns | 57.0 ns | 0 B |
-| Activate while on cooldown | 21.9 ns | 22.1 ns | 0 B |
-| Activate with an unmet requirement | 20.8 ns | 21.0 ns | 0 B |
-| Activate while blocked | 22.4 ns | 21.8 ns | 0 B |
-| Activate by input | 33.8 ns | 33.4 ns | 0 B |
-| Give and revoke | 13.5 ns | 13.3 ns | 0 B |
-| `GetAbilityCount` | 0.69 ns | 0.70 ns | 0 B |
-| Cooldown time remaining | 2.07 ns | 2.05 ns | 0 B |
+| Activate and end a lasting ability | 46.3 ns | 45.2 ns | 0 B |
+| Activate with a cost (32 cost, 32 gain) | 101.0 ns | 100.4 ns | 0 B |
+| Activate with an unaffordable cost | 35.0 ns | 34.9 ns | 0 B |
+| Activate while on cooldown | 35.5 ns | 35.3 ns | 0 B |
+| Activate with an unmet requirement | 30.9 ns | 30.9 ns | 0 B |
+| Activate while blocked | 36.3 ns | 36.8 ns | 0 B |
+| Activate by input | 56.0 ns | 58.0 ns | 0 B |
+| Give and revoke | 15.9 ns | 15.5 ns | 0 B |
+| `GetAbilityCount` | 0.72 ns | 0.71 ns | 0 B |
+| Cooldown time remaining | 5.24 ns | 5.21 ns | 0 B |
 
-Every measured path is flat in world size: an ability operation touches
-only its owner's grant list and the owner's tags, never the
-population. Give and revoke allocate nothing once a slot and its owner
-segment are warm, and an activation allocates nothing at all.
+The cost workload alternates `-64` and `+64` on a value of `1e9`, whose
+float unit in the last place is 64. Every activation therefore changes
+the stored value, and the pair returns to the exact starting value; the
+rejection workload starts at zero and never pays. The earlier `-0.001`
+cost could not change the value at that magnitude.
+
+| Grants on one owner | Input | Blocked (last blocker) | Activate all + cancel all | Activate all + cancel by tag |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 54.1 ns | 40.1 ns | 52.5 ns | 115.1 ns |
+| 8 | 369.9 ns | 79.1 ns | 414.0 ns | 520.5 ns |
+| 32 | 1,522.0 ns | 225.4 ns | 1,604.6 ns | 1,960.1 ns |
+| 64 | 2,938.3 ns | 400.5 ns | 3,255.1 ns | 3,720.6 ns |
+| 256 | 12,144.0 ns | 1,535.7 ns | 13,183.2 ns | 14,404.6 ns |
+
+Input activation and both cancellation workloads are linear in the
+grant count: about 47 ns per input grant and 51 to 56 ns per grant for
+the combined activation-and-cancellation rows at 256 grants, flat from
+1 to 256. The block scan is linear in the active blockers, about 6.0 ns
+per blocker at 256. The cancellation rows include the activation pass
+that puts the grants into the active state; the input row is that
+activation baseline.**Fixed in this audit.** Input activation and bulk cancellation
+rescanned the owner's grant list from its head after every callback,
+which was quadratic in the grant count. Both now capture the scoped
+handles once into a reusable per-system buffer, so the 256-grant cases
+take about 12 to 13 microseconds including activation. The regression
+benchmarks above stay flat from 1 to 256 grants.
 
 **Limitation.** These ran with the in-process toolchain, for the same
 reason as the earlier parts: untracked experiment workspaces contain
-duplicate benchmark project names.
+duplicate benchmark project names. The cancellation benchmarks
+deliberately include the activation pass that seeds the active set in
+the measured method, so they report activation plus cancellation
+rather than cancellation alone.
 
 # Part 5 — Cues, events, and replication preparation
 
