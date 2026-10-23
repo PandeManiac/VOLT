@@ -33,5 +33,25 @@ public enum GameplayAbilityPlanStepKind : byte
 	/// <summary>
 	/// Ends the ability normally.
 	/// </summary>
-	End = 5
+	End = 5,
+
+	/// <summary>
+	/// Waits for the first of several sources.
+	/// </summary>
+	WaitAny = 6,
+
+	/// <summary>
+	/// Waits for a registered custom task.
+	/// </summary>
+	WaitCustom = 7,
+
+	/// <summary>
+	/// Continues at another step when a condition does not hold.
+	/// </summary>
+	Branch = 8,
+
+	/// <summary>
+	/// Continues at another step unconditionally.
+	/// </summary>
+	Goto = 9
 }

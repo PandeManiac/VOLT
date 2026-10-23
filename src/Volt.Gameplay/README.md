@@ -410,6 +410,126 @@ rethrown. A cleanup failure is reported with the original in an
 `AggregateException`; an ability is never left active with no plan
 cursor and no pending task.
 
+## Conditional plans
+
+```csharp
+GameplayCondition wounded = GameplayCondition.OwnerAttribute(
+    health,
+    GameplayAttributeComparison.LessThan,
+    30f);
+
+GameplayCondition vulnerable = GameplayCondition.All(
+    wounded,
+    GameplayCondition.TargetHasTag(stunned));
+
+GameplayAbilityDefinition finisher = GameplayAbilityDefinition
+    .Create("Ability.Finisher")
+    .Plan(
+        GameplayAbilityPlan
+            .Create()
+            .If(vulnerable)
+            .ApplyEffect(executeEffect)
+            .Else()
+            .ApplyEffect(standardEffect)
+            .EndIf()
+            .End()
+            .Build())
+    .Build();
+```
+
+`GameplayCondition` is an immutable tree evaluated against the live
+owner, target, tags, and cached attributes when the branch step runs, so
+a plan can branch on state a previous step produced. Conditions cover
+owner and target tags (exact or hierarchical), missing tags, target
+aliveness, owner and target attribute comparisons, and nested
+`All`/`Any`/`Not`. A destroyed target fails every target condition; use
+`TargetAlive` to test it explicitly.
+
+`If`/`Else`/`EndIf` compile to forward jumps inside the flat plan array,
+so there is no per-activation control-flow object and no second
+interpreter. `Build` rejects unclosed blocks, misplaced `Else`/`EndIf`,
+and jumps that do not move forward, so a plan cannot loop. Conditions,
+tags, and attributes are validated at authoring time; a null child,
+empty `All`/`Any`, non-finite constant, or unknown attribute throws.
+
+## Custom tasks
+
+```csharp
+GameplayAbilityTaskDefinition swing = abilities.RegisterTaskDefinition("Swing");
+
+GameplayAbilityDefinition attack = GameplayAbilityDefinition
+    .Create("Ability.Attack")
+    .Plan(
+        GameplayAbilityPlan
+            .Create()
+            .WaitCustom(swing)
+            .ApplyEffect(hitEffect)
+            .End()
+            .Build())
+    .Build();
+
+// The application owns the signal; the runtime owns the ownership
+// checks, cancellation, and slot reuse.
+GameplayAbilityTaskHandle task = abilities.Tasks.WaitCustom(activation, swing);
+
+abilities.Tasks.Complete(task);   // or abilities.Tasks.Cancel(task)
+```
+
+A custom task is a registered definition plus one ordinary task slot.
+It is not in the deadline heap and has no subscription, so dormant
+custom tasks are never scanned or polled per step. The
+definition is scoped to the ability system that registered it; passing
+another system's definition throws instead of creating a task. Handles
+are generation- and activation-checked, so a stale handle cannot
+complete a task started by a newer activation, and ability end,
+`CancelOnTags`, revocation, and owner destruction all release the slot.
+Completion notifies after the state is released, and a throwing handler
+leaves no half-released task behind. Applications own external signal
+subscriptions; they must release them on terminal task notifications
+and owner destruction.
+
+See `GameplaySpec.md` section 5.19 for the full lifetime and exception
+policy.
+
+## Composite waits
+
+```csharp
+GameplayWaitAny guard = GameplayWaitAny
+    .Create()
+    .WithTimeout(0.4f)
+    .OnEvent(incomingHit)
+    .OnTag(stunned, GameplayTagWaitMode.Present);
+
+GameplayAbilityPlan plan = GameplayAbilityPlan
+    .Create()
+    .WaitAny(guard)
+    .ApplyEffect(counterEffect)
+    .End()
+    .Build();
+```
+
+A composite `Any` wait stores one timeout, one event subscription for up
+to eight event tags, and one tag condition in a single task record, so
+the first source to fire wins and the losers are released with it. No
+child tasks and no group bookkeeping are involved.
+
+- The timeout reports `Elapsed`; an event or tag source reports
+  `ConditionMet`, carrying the event for event waits.
+- Watched events share one subscription at the nearest common ancestor
+  of their tags (or the wildcard when they have none) and are filtered
+  against the watched set, so unrelated events do not complete the wait.
+- A tag source that already holds completes on the next advance, and a
+  tag change that makes it hold re-arms the wait; if it flips back first,
+  the original timeout is restored.
+- A tag flipped by an effect expiry completes the wait in the same
+  fixed step's task phase.
+- An empty wait, more than eight event tags, or an invalid tag throws at
+  authoring time.
+
+There is no composite `All`. Sequential level-triggered tag waits are
+the supported `All` idiom; see section 5.20 for why a general `All`
+group is deferred.
+
 ## Fixed-step simulation
 
 ```csharp
@@ -495,6 +615,10 @@ shutdown.
 | `GameplayAbilityTaskInfo` | Read-only snapshot of one pending task |
 | `GameplayAbilityPlan` | Immutable authored wait and action sequence |
 | `GameplayAbilityPlanBuilder` | Fluent, validating plan authoring path |
+| `GameplayCondition` | Immutable tag and attribute condition tree |
+| `GameplayAttributeComparison` | Comparison operator for attribute conditions |
+| `GameplayAbilityTaskDefinition` | Registered name for an application-owned task |
+| `GameplayWaitAny` | Immutable composite wait over a timeout, events, and a tag |
 | `GameplayAbilityActivation` | Grant plus activation id, used as task ownership |
 | `GameplaySimulation` | Optional fixed-step driver for effects and tasks |
 
@@ -517,6 +641,8 @@ dotnet run -c Release -- --filter '*GameplayTagWaitScalingBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayEventSparseBenchmarks*'
 dotnet run -c Release -- --filter '*GameplaySimulationBenchmarks*'
 dotnet run -c Release -- --filter '*GameplaySimulationEventBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAuthoringBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAuthoringPopulationBenchmarks*'
 dotnet run -c Release -- --filter '*GameplaySimulationTaskBurstBenchmarks*'
 dotnet run -c Release -- --filter '*GameplaySimulationEffectBurstBenchmarks*'
 

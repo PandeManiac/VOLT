@@ -26,5 +26,16 @@ public enum GameplayAbilityTaskKind : byte
 	/// Completes when a tag condition holds, re-evaluated on tag
 	/// changes rather than polled.
 	/// </summary>
-	TagCondition = 2
+	TagCondition = 2,
+
+	/// <summary>
+	/// Completes when the first of several sources fires: a timeout, a
+	/// watched gameplay event, or a watched tag condition.
+	/// </summary>
+	Any = 3,
+
+	/// <summary>
+	/// Completes when application code completes its handle.
+	/// </summary>
+	Custom = 4
 }

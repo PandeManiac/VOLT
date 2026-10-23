@@ -27,17 +27,35 @@ internal static class DemoSchema
 	internal static readonly GameplayTag AbilityOvercharge =
 		Register($"{Root}.Ability.Overcharge");
 
+	internal static readonly GameplayTag AbilityCounter =
+		Register($"{Root}.Ability.Counter");
+
 	internal static readonly GameplayTag CooldownDash =
 		Register($"{Root}.Cooldown.Dash");
 
 	internal static readonly GameplayTag EventDashReleased =
 		Register($"{Root}.Event.Dash.Released");
 
+	internal static readonly GameplayTag EventIncomingHit =
+		Register($"{Root}.Event.Incoming.Hit");
+
+	internal static readonly GameplayTag EventCounterLanded =
+		Register($"{Root}.Event.Counter.Landed");
+
 	internal static readonly GameplayTag StatusDashing =
 		Register($"{Root}.Status.Dashing");
 
 	internal static readonly GameplayTag StatusStunned =
 		Register($"{Root}.Status.Stunned");
+
+	internal static readonly GameplayTag StatusGuarding =
+		Register($"{Root}.Status.Guarding");
+
+	internal static readonly GameplayTag StatusCounterEnhanced =
+		Register($"{Root}.Status.Counter.Enhanced");
+
+	internal static readonly GameplayTag StatusCounterStandard =
+		Register($"{Root}.Status.Counter.Standard");
 
 	internal static readonly GameplayAttribute Stamina =
 		GameplayAttributeRegistry.Shared.Register(
@@ -96,6 +114,42 @@ internal static class DemoSchema
 			.Create("Demo.Effect.Stun")
 			.Infinite()
 			.GrantTags(StatusStunned)
+			.Build();
+
+	internal static readonly GameplayEffectDefinition CounterCost =
+		GameplayEffectDefinition
+			.Create("Demo.Effect.CounterCost")
+			.Instant()
+			.Modifier(
+				Stamina,
+				GameplayModifierOperation.AddBase,
+				-5f)
+			.Build();
+
+	/// <summary>
+	/// The defensive wind-up. Its tag is what the ability waits on
+	/// after the counter lands, so the tag-condition wait completes in
+	/// the same fixed step the effect expires in.
+	/// </summary>
+	internal static readonly GameplayEffectDefinition CounterGuard =
+		GameplayEffectDefinition
+			.Create("Demo.Effect.CounterGuard")
+			.HasDuration(0.5f)
+			.GrantTags(StatusGuarding)
+			.Build();
+
+	internal static readonly GameplayEffectDefinition CounterEnhanced =
+		GameplayEffectDefinition
+			.Create("Demo.Effect.CounterEnhanced")
+			.HasDuration(1f)
+			.GrantTags(StatusCounterEnhanced)
+			.Build();
+
+	internal static readonly GameplayEffectDefinition CounterStandard =
+		GameplayEffectDefinition
+			.Create("Demo.Effect.CounterStandard")
+			.HasDuration(1f)
+			.GrantTags(StatusCounterStandard)
 			.Build();
 
 	/// <summary>

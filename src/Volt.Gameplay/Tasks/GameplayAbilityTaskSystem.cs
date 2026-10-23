@@ -242,6 +242,70 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 	}
 
 	/// <summary>
+	/// Starts a task that completes when the first of several sources
+	/// fires.
+	/// </summary>
+	/// <param name="activation">The owning activation.</param>
+	/// <param name="wait">The composite wait description.</param>
+	/// <returns>
+	/// The task handle, or <see cref="GameplayAbilityTaskHandle.None"/>
+	/// when the activation is no longer active.
+	/// </returns>
+	/// <exception cref="ArgumentNullException">
+	/// The wait is <see langword="null"/>.
+	/// </exception>
+	/// <exception cref="InvalidOperationException">
+	/// The wait has no source.
+	/// </exception>
+	/// <remarks>
+	/// The task holds every source in one record: the timeout is one
+	/// deadline, the watched events are one subscription filtered by
+	/// the wait's tag set, and the tag condition is one entry in the
+	/// owner's tag index. Completing or cancelling it releases all of
+	/// them, so a race never leaves a losing source subscribed.
+	/// </remarks>
+	public GameplayAbilityTaskHandle WaitAny(
+		GameplayAbilityActivation activation,
+		GameplayWaitAny wait)
+	{
+		ThrowIfDisposed();
+		ArgumentNullException.ThrowIfNull(wait);
+		wait.Validate();
+
+		return StartWaitAnyTask(activation, wait, -1);
+	}
+
+	/// <summary>
+	/// Starts a registered custom task that completes when application
+	/// code completes its handle.
+	/// </summary>
+	/// <param name="activation">The owning activation.</param>
+	/// <param name="definition">The registered definition.</param>
+	/// <returns>
+	/// The task handle, or <see cref="GameplayAbilityTaskHandle.None"/>
+	/// when the activation is no longer active.
+	/// </returns>
+	/// <exception cref="ArgumentNullException">
+	/// The definition is <see langword="null"/>.
+	/// </exception>
+	/// <exception cref="ArgumentException">
+	/// The definition belongs to another ability system.
+	/// </exception>
+	/// <remarks>
+	/// A custom task is event-driven: the application completes the
+	/// handle when its own signal fires. The runtime never polls it, so
+	/// a dormant custom task costs one slot and one owner-list link.
+	/// </remarks>
+	public GameplayAbilityTaskHandle WaitCustom(
+		GameplayAbilityActivation activation,
+		GameplayAbilityTaskDefinition definition)
+	{
+		ThrowIfDisposed();
+
+		return StartCustomTask(activation, definition, -1);
+	}
+
+	/// <summary>
 	/// Cancels one pending task.
 	/// </summary>
 	/// <param name="handle">The task handle.</param>
@@ -396,7 +460,8 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 			record.Kind,
 			record.PlanStep,
 			record.Deadline,
-			remaining);
+			remaining,
+			record.CustomDefinition);
 
 		return true;
 	}
@@ -603,8 +668,44 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 
 				if (record.Kind is not (
 					GameplayAbilityTaskKind.Duration
-					or GameplayAbilityTaskKind.TagCondition))
+					or GameplayAbilityTaskKind.TagCondition
+					or GameplayAbilityTaskKind.Any))
 				{
+					continue;
+				}
+
+				if (record.Kind == GameplayAbilityTaskKind.Any)
+				{
+					if (record.Tag.IsValid
+						&& !ConditionHolds(ref record))
+					{
+						// The deadline belonged to the tag condition,
+						// which no longer holds. Fall back to the
+						// timeout instead of losing it, so a race that
+						// was armed and then disarmed still expires.
+						if (record.TimeoutAt <= stepTime)
+						{
+							CompleteTask(
+								slot,
+								GameplayAbilityTaskCompletionReason.Elapsed,
+								default);
+						}
+						else if (record.TimeoutAt
+							< double.PositiveInfinity)
+						{
+							ScheduleDeadline(slot, record.TimeoutAt);
+						}
+
+						continue;
+					}
+
+					CompleteTask(
+						slot,
+						record.Tag.IsValid
+							? GameplayAbilityTaskCompletionReason.ConditionMet
+							: GameplayAbilityTaskCompletionReason.Elapsed,
+						default);
+
 					continue;
 				}
 
@@ -734,6 +835,118 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		{
 			ScheduleDeadline(slot, _time);
 		}
+
+		return FinishStart(slot);
+	}
+
+	/// <summary>
+	/// Starts a composite wait task for an ability plan step.
+	/// </summary>
+	internal GameplayAbilityTaskHandle StartWaitAnyTask(
+		GameplayAbilityActivation activation,
+		GameplayWaitAny wait,
+		int planStep)
+	{
+		ThrowIfDisposed();
+
+		if (!TryBeginTask(
+			activation,
+			GameplayAbilityTaskKind.Any,
+			planStep,
+			out int slot))
+		{
+			return GameplayAbilityTaskHandle.None;
+		}
+
+		_tasks[slot].Wait = wait;
+
+		if (wait.HasTimeout)
+		{
+			_tasks[slot].TimeoutAt = _time + wait.TimeoutSeconds;
+		}
+
+		if (wait.HasTag)
+		{
+			_tasks[slot].Tag = wait.Tag;
+			_tasks[slot].TagMode = wait.TagMode;
+			_tasks[slot].Exact = wait.Exact;
+
+			LinkTagOwner(_tasks[slot].Owner, slot);
+		}
+
+		if (wait.HasEvents)
+		{
+			(GameplayTag subscriptionTag, GameplayEventMatch subscriptionMatch) =
+				wait.GetSubscriptionFilter();
+
+			GameplayEventSubscription subscription;
+
+			try
+			{
+				subscription = _events.SubscribeSink(
+					subscriptionTag,
+					subscriptionMatch,
+					_tasks[slot].Owner,
+					default,
+					default,
+					_eventSink,
+					slot);
+			}
+			catch
+			{
+				ReleaseTaskStorage(slot, unlinkOwner: true);
+				throw;
+			}
+
+			_tasks[slot].EventSubscription = subscription;
+		}
+
+		// A tag source that already holds wins immediately; otherwise
+		// the timeout keeps the task in the deadline heap. A race with
+		// neither a tag source nor a timeout is reached only through
+		// events and never enters the heap.
+		if (wait.HasTag && ConditionHolds(ref _tasks[slot]))
+		{
+			ScheduleDeadline(slot, _time);
+		}
+		else if (wait.HasTimeout)
+		{
+			ScheduleDeadline(slot, _tasks[slot].TimeoutAt);
+		}
+
+		return FinishStart(slot);
+	}
+
+	/// <summary>
+	/// Starts a custom task for an ability plan step.
+	/// </summary>
+	internal GameplayAbilityTaskHandle StartCustomTask(
+		GameplayAbilityActivation activation,
+		GameplayAbilityTaskDefinition definition,
+		int planStep)
+	{
+		ThrowIfDisposed();
+		ArgumentNullException.ThrowIfNull(definition);
+
+		if (!ReferenceEquals(definition.System, _abilities))
+		{
+			throw new ArgumentException(
+				"The task definition was registered by another ability " +
+				"system. A definition is scoped to the system whose " +
+				"activations wait on it.",
+				nameof(definition));
+		}
+
+		if (!TryBeginTask(
+			activation,
+			GameplayAbilityTaskKind.Custom,
+			planStep,
+			out int slot))
+		{
+			return GameplayAbilityTaskHandle.None;
+		}
+
+		_tasks[slot].CustomDefinition = definition;
 
 		return FinishStart(slot);
 	}
@@ -920,6 +1133,9 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		task.EventSubscription = GameplayEventSubscription.None;
 		task.Tag = GameplayTag.None;
 		task.Exact = false;
+		task.Wait = null;
+		task.TimeoutAt = double.PositiveInfinity;
+		task.CustomDefinition = null;
 
 		LinkOwner(owner, slot);
 		LinkActivation(abilitySlot, slot);
@@ -979,8 +1195,19 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		ref TaskSlot task = ref _tasks[token];
 
 		if (task.Generation == 0
-			|| task.Kind != GameplayAbilityTaskKind.GameplayEvent
-			|| task.EventSubscription != subscription)
+			|| task.EventSubscription != subscription
+			|| task.Kind is not (
+				GameplayAbilityTaskKind.GameplayEvent
+				or GameplayAbilityTaskKind.Any))
+		{
+			return;
+		}
+
+		// A race subscribes once for a tag set, so the router may
+		// deliver an event the wait does not watch.
+		if (task.Kind == GameplayAbilityTaskKind.Any
+			&& (task.Wait is null
+				|| !task.Wait.MatchesEvent(gameplayEvent.Tag)))
 		{
 			return;
 		}
@@ -1054,9 +1281,22 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 			int next = _tasks[slot].NextOnTag;
 			ref TaskSlot task = ref _tasks[slot];
 
-			if (task.HeapIndex < 0 && ConditionHolds(ref task))
+			if (ConditionHolds(ref task))
 			{
-				ScheduleDeadline(slot, _time);
+				// A race may already hold the timeout deadline. Arm it
+				// for now instead, which is earlier and therefore safe,
+				// and replace the old heap entry rather than adding a
+				// second one for the same task.
+				if (task.HeapIndex < 0)
+				{
+					ScheduleDeadline(slot, _time);
+				}
+				else if (task.Kind == GameplayAbilityTaskKind.Any
+					&& task.Deadline > _time)
+				{
+					RemoveDeadline(slot);
+					ScheduleDeadline(slot, _time);
+				}
 			}
 
 			slot = next;
@@ -1278,7 +1518,10 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 			UnlinkOwner(slot);
 		}
 
-		if (task.Kind == GameplayAbilityTaskKind.TagCondition)
+		if (task.Kind is (
+			GameplayAbilityTaskKind.TagCondition
+			or GameplayAbilityTaskKind.Any)
+			&& task.Tag.IsValid)
 		{
 			UnlinkTagOwner(slot);
 		}
@@ -1550,6 +1793,9 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 			NextOnTag = -1,
 			PreviousOnTag = -1,
 			EventSubscription = GameplayEventSubscription.None,
+			Wait = null,
+			TimeoutAt = double.PositiveInfinity,
+			CustomDefinition = null,
 			PlanStep = -1
 		};
 
@@ -1891,6 +2137,9 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		public GameplayTagWaitMode TagMode;
 		public bool Exact;
 		public GameplayEventSubscription EventSubscription;
+		public GameplayWaitAny? Wait;
+		public double TimeoutAt;
+		public GameplayAbilityTaskDefinition? CustomDefinition;
 	}
 
 	private struct DeadlineEntry
