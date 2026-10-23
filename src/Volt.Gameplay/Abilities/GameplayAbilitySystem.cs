@@ -2,6 +2,7 @@ using Volt.Ecs;
 using Volt.Gameplay.Attributes;
 using Volt.Gameplay.Effects;
 using Volt.Gameplay.Events;
+using Volt.Gameplay.Simulation;
 using Volt.Gameplay.Tags;
 using Volt.Gameplay.Tasks;
 
@@ -74,7 +75,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 	private readonly CapturePool _inputPool = new();
 	private readonly CapturePool _revokePool = new();
 
-	private bool _simulationDriven;
+	private SimulationClockClaim? _clockClaim;
 	private bool _disposed;
 
 	/// <summary>
@@ -1223,7 +1224,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		_events = null;
 		_ownsEvents = false;
-		_simulationDriven = false;
+		_clockClaim = null;
 		Changed = null;
 		_abilities = [];
 		_entitySegments = [];
@@ -1255,9 +1256,9 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 		tasks.Changed += HandleTaskChanged;
 
-		if (_simulationDriven)
+		if (_clockClaim is not null)
 		{
-			tasks.BeginSimulation();
+			tasks.BeginSimulation(_clockClaim);
 		}
 
 		return tasks;
@@ -1266,26 +1267,47 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// <summary>
 	/// Claims task advancement for an attached fixed-step integration.
 	/// </summary>
-	internal void BeginSimulation()
+	/// <param name="claim">The claiming integration's identity.</param>
+	/// <exception cref="InvalidOperationException">
+	/// Another integration already owns the clock.
+	/// </exception>
+	/// <remarks>
+	/// A task runtime created later inherits the same claim, so an
+	/// ability that first uses a task after registration is still
+	/// advanced by the integration and not by hand.
+	/// </remarks>
+	internal void BeginSimulation(SimulationClockClaim claim)
 	{
-		if (_simulationDriven)
+		ArgumentNullException.ThrowIfNull(claim);
+
+		if (_clockClaim is not null)
 		{
 			throw new InvalidOperationException(
 				"These abilities are already advanced by another " +
 				"GameplaySimulation. A clock has one owner.");
 		}
 
-		_simulationDriven = true;
-		_tasks?.BeginSimulation();
+		_clockClaim = claim;
+		_tasks?.BeginSimulation(claim);
 	}
 
 	/// <summary>
 	/// Releases task advancement when its integration is disposed.
 	/// </summary>
-	internal void EndSimulation()
+	/// <param name="claim">The releasing integration's identity.</param>
+	/// <remarks>
+	/// A claim these abilities do not hold is left alone, so an
+	/// integration that failed to acquire them cannot detach the owner.
+	/// </remarks>
+	internal void EndSimulation(SimulationClockClaim claim)
 	{
-		_simulationDriven = false;
-		_tasks?.EndSimulation();
+		if (!ReferenceEquals(_clockClaim, claim))
+		{
+			return;
+		}
+
+		_clockClaim = null;
+		_tasks?.EndSimulation(claim);
 	}
 
 	/// <summary>
@@ -1302,6 +1324,17 @@ public sealed class GameplayAbilitySystem : IDisposable
 	}
 
 	internal World World => _world;
+
+	/// <summary>
+	/// Gets the effect runtime this system applies costs, cooldowns, and
+	/// plan effects through.
+	/// </summary>
+	/// <remarks>
+	/// A fixed-step integration must advance this exact instance.
+	/// Advancing a different effect system in the same world would let
+	/// cooldowns expire on a clock nothing else uses.
+	/// </remarks>
+	internal GameplayEffectSystem EffectRuntime => _effects;
 
 	internal bool TryResolveActivation(
 		GameplayAbilityActivation activation,

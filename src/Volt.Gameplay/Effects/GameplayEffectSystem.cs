@@ -1,5 +1,6 @@
 using Volt.Ecs;
 using Volt.Gameplay.Attributes;
+using Volt.Gameplay.Simulation;
 using Volt.Gameplay.Tags;
 
 namespace Volt.Gameplay.Effects;
@@ -66,7 +67,7 @@ public sealed class GameplayEffectSystem : IDisposable
 	private double _time;
 	private long _nextOrder = 1;
 	private bool _advancing;
-	private bool _simulationDriven;
+	private SimulationClockClaim? _clockClaim;
 	private bool _disposed;
 
 	/// <summary>
@@ -133,7 +134,7 @@ public sealed class GameplayEffectSystem : IDisposable
 	/// Gets whether the clock is owned by a
 	/// <see cref="Simulation.GameplaySimulation"/>.
 	/// </summary>
-	internal bool IsSimulationDriven => _simulationDriven;
+	internal bool IsSimulationDriven => _clockClaim is not null;
 
 	internal World World => _world;
 
@@ -497,7 +498,7 @@ public sealed class GameplayEffectSystem : IDisposable
 	{
 		ThrowIfDisposed();
 
-		if (_simulationDriven)
+		if (_clockClaim is not null)
 		{
 			throw new InvalidOperationException(
 				"This effect system is advanced by a " +
@@ -523,24 +524,40 @@ public sealed class GameplayEffectSystem : IDisposable
 	/// <summary>
 	/// Claims the clock for one fixed-step integration.
 	/// </summary>
-	internal void BeginSimulation()
+	/// <param name="claim">The claiming integration's identity.</param>
+	/// <exception cref="InvalidOperationException">
+	/// Another integration already owns the clock.
+	/// </exception>
+	internal void BeginSimulation(SimulationClockClaim claim)
 	{
-		if (_simulationDriven)
+		ArgumentNullException.ThrowIfNull(claim);
+
+		if (_clockClaim is not null)
 		{
 			throw new InvalidOperationException(
 				"This effect system is already advanced by another " +
 				"GameplaySimulation. A clock has one owner.");
 		}
 
-		_simulationDriven = true;
+		_clockClaim = claim;
 	}
 
 	/// <summary>
 	/// Releases the clock when its integration is disposed.
 	/// </summary>
-	internal void EndSimulation()
+	/// <param name="claim">The releasing integration's identity.</param>
+	/// <remarks>
+	/// A claim this system does not hold is left alone, so an
+	/// integration that failed to acquire it cannot detach the owner.
+	/// </remarks>
+	internal void EndSimulation(SimulationClockClaim claim)
 	{
-		_simulationDriven = false;
+		if (!ReferenceEquals(_clockClaim, claim))
+		{
+			return;
+		}
+
+		_clockClaim = null;
 	}
 
 	private void AdvanceCore(float deltaTime)
@@ -606,7 +623,7 @@ public sealed class GameplayEffectSystem : IDisposable
 		_effectSlotCount = 0;
 		_freeEffectSlot = -1;
 		_activeEffectCount = 0;
-		_simulationDriven = false;
+		_clockClaim = null;
 		_disposed = true;
 
 		GC.SuppressFinalize(this);

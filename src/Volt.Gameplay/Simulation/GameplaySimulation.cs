@@ -48,6 +48,7 @@ public sealed class GameplaySimulation : IDisposable
 	private readonly GameplayEffectSystem _effects;
 	private readonly GameplayAbilitySystem _abilities;
 	private readonly PostFixedUpdateCallback _callback;
+	private readonly SimulationClockClaim _claim = new();
 
 	private long _fixedSteps;
 	private bool _disposed;
@@ -62,15 +63,24 @@ public sealed class GameplaySimulation : IDisposable
 	/// An argument is <see langword="null"/>.
 	/// </exception>
 	/// <exception cref="ArgumentException">
-	/// The services belong to different worlds.
+	/// The effect system is not the one the ability system applies its
+	/// costs, cooldowns, and plan effects through.
 	/// </exception>
 	/// <exception cref="InvalidOperationException">
 	/// The effect or ability system is already driven by another
 	/// integration, or the loop is currently advancing.
 	/// </exception>
 	/// <remarks>
+	/// <para>
 	/// The integration does not own the stores. Dispose it before
 	/// disposing the ability system or the effect system.
+	/// </para>
+	/// <para>
+	/// A failed construction releases only the claims it acquired. An
+	/// integration that already owns a clock keeps it, so a rejected
+	/// second attempt cannot leave the first one running without its
+	/// double-advance protection.
+	/// </para>
 	/// </remarks>
 	public GameplaySimulation(
 		GameLoop loop,
@@ -81,12 +91,13 @@ public sealed class GameplaySimulation : IDisposable
 		ArgumentNullException.ThrowIfNull(abilities);
 		ArgumentNullException.ThrowIfNull(effects);
 
-		if (!ReferenceEquals(abilities.World, effects.World))
+		if (!ReferenceEquals(abilities.EffectRuntime, effects))
 		{
 			throw new ArgumentException(
-				"The ability and effect systems belong to different " +
-				"worlds. Gameplay services for one simulation must share " +
-				"a world.",
+				"The supplied effect system is not the one these " +
+				"abilities apply costs, cooldowns, and plan effects " +
+				"through. Advancing a different instance would leave the " +
+				"ability clocks unmoved even though both share a world.",
 				nameof(effects));
 		}
 
@@ -95,17 +106,18 @@ public sealed class GameplaySimulation : IDisposable
 		_effects = effects;
 		_callback = Advance;
 
-		_effects.BeginSimulation();
-
 		try
 		{
-			_abilities.BeginSimulation();
+			_effects.BeginSimulation(_claim);
+			_abilities.BeginSimulation(_claim);
 			_loop.RegisterPostFixedUpdate(_callback);
 		}
 		catch
 		{
-			_abilities.EndSimulation();
-			_effects.EndSimulation();
+			// Both releases are claim-checked, so a clock this
+			// construction never acquired is left with its owner.
+			_abilities.EndSimulation(_claim);
+			_effects.EndSimulation(_claim);
 
 			throw;
 		}
@@ -157,8 +169,8 @@ public sealed class GameplaySimulation : IDisposable
 		}
 
 		_loop.UnregisterPostFixedUpdate(_callback);
-		_abilities.EndSimulation();
-		_effects.EndSimulation();
+		_abilities.EndSimulation(_claim);
+		_effects.EndSimulation(_claim);
 		_disposed = true;
 
 		GC.SuppressFinalize(this);

@@ -388,6 +388,13 @@ public sealed class GameplaySimulationTests
 				runtime.Abilities,
 				runtime.Effects));
 
+		// The rejected attempt never acquired either clock, so the
+		// first integration's claims survive it.
+		Assert.Throws<InvalidOperationException>(
+			() => runtime.Effects.Advance(1f));
+		Assert.Throws<InvalidOperationException>(
+			() => runtime.Tasks.Advance(1f));
+
 		runtime.Step();
 
 		Assert.Equal(1, runtime.Simulation.FixedStepCount);

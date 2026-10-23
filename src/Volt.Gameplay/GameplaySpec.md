@@ -2350,10 +2350,28 @@ manual advancement.
 
 **Ownership.** The integration does not own the world or stores.
 Dispose it before the ability and effect systems. It holds no static
-state, so independent worlds and loops are independent. A second
-integration over the same services is rejected before it changes any
-clock claim. Disposing the integration does not cancel pending tasks or
-remove subscriptions; it only stops automatic advancement.
+state, so independent worlds and loops are independent.
+
+A clock claim carries the identity of the integration that took it. The
+effect, task, and ability systems release a claim only when the
+releasing integration is the one holding it, so construction that fails
+part way through releases just the claims it acquired and cannot detach
+another integration. A rejected second integration therefore leaves the
+first one running with its double-advance protection intact.
+
+Construction also requires the supplied effect system to be the exact
+instance the ability system applies costs, cooldowns, and plan effects
+through. Sharing a world is not sufficient: advancing a different
+effect system would leave the ability clocks unmoved even though costs
+and cooldowns are read from this one. The claim is checked when it is
+released and when an advance starts, never per entity or per task, so
+the guarantee costs nothing on the hot path.
+
+A task runtime created after registration inherits the claim, so an
+ability that first uses a task later in the session is still advanced
+by the loop instead of by hand. Disposing the integration does not
+cancel pending tasks or remove subscriptions; it only stops automatic
+advancement.
 
 - `DIFF` Unreal has no directly equivalent fixed-step gameplay driver
   in the referenced documentation; this ordering is a VOLT design for a
@@ -2364,6 +2382,9 @@ remove subscriptions; it only stops automatic advancement.
   updates, pause, single step, render-only frames, time scale, zero
   time scale, catch-up, double-advance rejection, teardown, a second
   integration, and destruction during a fixed step.
+  `GameplaySimulationOwnershipTests` covers foreign-claim release,
+  rejection of an effect system the abilities do not use, failed
+  callback registration, and independent worlds.
 
 ## 5.17 Performance additions
 

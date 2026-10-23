@@ -446,6 +446,14 @@ the callback and return to manual control. It does not own the world or
 the stores, and it does not create a task runtime until an ability
 uses one.
 
+Construction requires the exact effect system the abilities apply
+costs, cooldowns, and plan effects through; a different instance in the
+same world is rejected, because advancing it would leave the ability
+clocks unmoved. A clock claim also carries the identity of its
+integration, so construction that fails part way through releases only
+the claims it took and never detaches an integration that already owns
+the clock.
+
 Run `samples/Volt.GameplayDemo` for the complete charged-dash example,
 including a stun interruption, overlapping abilities, stale handles,
 owner destruction, pause, single-step, time scaling, and clean

@@ -1,6 +1,7 @@
 using Volt.Ecs;
 using Volt.Gameplay.Abilities;
 using Volt.Gameplay.Events;
+using Volt.Gameplay.Simulation;
 using Volt.Gameplay.Tags;
 
 namespace Volt.Gameplay.Tasks;
@@ -68,7 +69,7 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 	private uint _nextSequence;
 	private double _time;
 	private bool _advancing;
-	private bool _simulationDriven;
+	private SimulationClockClaim? _clockClaim;
 
 	private DeadlineEntry[] _deadlines =
 		new DeadlineEntry[InitialDeadlineCapacity];
@@ -484,7 +485,7 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 	{
 		ThrowIfDisposed();
 
-		if (_simulationDriven)
+		if (_clockClaim is not null)
 		{
 			throw new InvalidOperationException(
 				"This task system is advanced by a " +
@@ -510,24 +511,40 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 	/// <summary>
 	/// Claims the clock for one fixed-step integration.
 	/// </summary>
-	internal void BeginSimulation()
+	/// <param name="claim">The claiming integration's identity.</param>
+	/// <exception cref="InvalidOperationException">
+	/// Another integration already owns the clock.
+	/// </exception>
+	internal void BeginSimulation(SimulationClockClaim claim)
 	{
-		if (_simulationDriven)
+		ArgumentNullException.ThrowIfNull(claim);
+
+		if (_clockClaim is not null)
 		{
 			throw new InvalidOperationException(
 				"This task system is already advanced by another " +
 				"GameplaySimulation. A clock has one owner.");
 		}
 
-		_simulationDriven = true;
+		_clockClaim = claim;
 	}
 
 	/// <summary>
 	/// Releases the clock when its integration is disposed.
 	/// </summary>
-	internal void EndSimulation()
+	/// <param name="claim">The releasing integration's identity.</param>
+	/// <remarks>
+	/// A claim this system does not hold is left alone, so an
+	/// integration that failed to acquire it cannot detach the owner.
+	/// </remarks>
+	internal void EndSimulation(SimulationClockClaim claim)
 	{
-		_simulationDriven = false;
+		if (!ReferenceEquals(_clockClaim, claim))
+		{
+			return;
+		}
+
+		_clockClaim = null;
 	}
 
 	private void AdvanceCore(float deltaSeconds)
@@ -788,7 +805,7 @@ public sealed class GameplayAbilityTaskSystem : IDisposable
 		_nextSequence = 0;
 		_time = 0d;
 		_advancing = false;
-		_simulationDriven = false;
+		_clockClaim = null;
 		_disposed = true;
 
 		GC.SuppressFinalize(this);
