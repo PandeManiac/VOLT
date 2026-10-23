@@ -346,3 +346,11 @@ exception cases, a concurrent-registration test, and allocation guards
 asserting that warmed-up matching, container mutation, effect
 application, effect ticking, ability granting, ability activation, and
 entity recycling with live gameplay state allocate zero managed bytes.
+
+`LifecycleStressHarness` adds a seed-replayable state machine over all
+four stores. It generates operations at the top level and from
+notifications, recycles entity and effect slots, retains stale handles,
+and checks an independent tag/attribute/effect/ability model after every
+operation. The permanent matrix is 128 seeds at 500 operations under
+both destruction callback orders; failures report the seed, operation,
+trace, and store dump, and a failing prefix can be replayed exactly.

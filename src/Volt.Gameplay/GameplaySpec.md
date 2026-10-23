@@ -1484,13 +1484,70 @@ ability cooldown commit). Internal traversal guards are released in
 re-entrancy blocked or an entity stuck in the effect refresh state. The
 stores do not promise atomic rollback of arbitrary user callbacks.
 
+**Rule.** A modifier installation is not complete until its handle is
+published. `GameplayAttributeStore.AddModifier` raises its change from
+inside the call, so a listener can stack the effect, inhibit it, remove
+it, or clear the attribute before the effect system receives the
+handle. After the call returns, the effect system revalidates the
+instance and its inhibition state; a handle belonging to an ended or
+inhibited instance is withdrawn immediately, and a surviving handle is
+refreshed against the instance's current stack count. A stack applied
+from that notification therefore changes the magnitude rather than
+leaving the old one behind.
+
+**Rule.** Inhibition cleanup revalidates the instance generation after
+withdrawing modifiers. Removing a modifier raises an attribute
+notification; a listener may remove the inhibited instance and let a
+replacement acquire the same effect slot. The tag-withdrawal step must
+not run against that replacement. The same rule applies to every
+cleanup path that invokes user code between two pieces of slot state.
+
+### 4.10.1 Randomized cross-store testing
+
+`LifecycleStressHarness` runs a deterministic state machine over tags,
+attributes, effects, and abilities. A fixed `SplitMix64` stream drives
+both top-level operations and operations requested from committed
+notifications, so a seed plus an operation limit reproduces the exact
+trace. The matrix runs 128 seeds at 500 operations under both
+destruction-callback orders, for 128,000 top-level operations per full
+run; callback operations are additional.
+
+The harness exercises entity creation and destruction, index reuse,
+multiple generations created from one destruction handler, tag and
+attribute dense membership, direct modifiers, effect application,
+stacking, expiry, removal, inhibition, ability grants and activation,
+cooldown rollback, and stale handles retained across every kind of
+retirement. Callbacks are generated from tag, attribute, effect, and
+ability notifications. A separate probe throws at each of those four
+boundaries and verifies that the exception propagates without leaving a
+stale counter, refresh guard, or unresolvable slot.
+
+An independent model stores only public-contract state: counted tags,
+base and additive values, effect instances and stacks, inhibition,
+grants, and active ability state. After every top-level operation the
+harness compares the model with public queries, dense enumeration,
+stale-handle resolution, global counters, and per-entity effect and
+ability lists. Failures report the seed, operation, store dump, and the
+recent trace with entity, effect, ability, and modifier generations.
+`ReplayFailingPrefix` reruns the shortest faithful prefix through the
+first failing operation.
+
+The model does not inspect store internals. Two ordering allowances are
+deliberate: tag callbacks do not generate operations while an effect or
+ability call is mid-transition, and an effect transition for a handle
+whose `Applied` notification has not yet arrived is ignored until the
+final `Applied` snapshot. The per-entity and global counts still reject
+an orphan or a leaked instance at the end of the operation. These are
+test-oracle boundaries, not relaxed production invariants.
+
 - `DIFF` Unreal's destruction and effect notification model has no
   equivalent of a recycled index becoming observable between the
   destruction commit and a store's callback. VOLT makes the lifetime
   rule explicit because its stores are separate from the world.
 - `UTEST` `CrossStoreLifecycleTests`, `GameplayEffectRecyclingTests`,
-  and `GameplayNotificationExceptionTests` cover the combined order,
-  successive generations, and post-exception invariants.
+  `GameplayNotificationExceptionTests`, and the seeded
+  `LifecycleStressTests` matrix cover the combined order, successive
+  generations, post-exception invariants, and randomized interleavings.
 
 | Cross-store case | Expected | Evidence |
 | --- | --- | --- |
@@ -1505,8 +1562,12 @@ stores do not promise atomic rollback of arbitrary user callbacks.
 | Throwing tag or attribute notification | mutation committed; clear/remove still works | `UTEST` |
 | Throwing expiry notification | effect removed; next `Advance` works | `UTEST` |
 | Throwing refresh notification | refresh flag reset; later tag changes evaluate | `UTEST` |
-| Recycle an untracked entity | 74 ns, 0 B | `BENCH` |
-| Recycle a tag + attribute + four-effect entity | 443 ns, 0 B | `BENCH` |
+| Stack from a modifier notification | magnitude matches the new stack | `UTEST` |
+| Remove from a modifier notification | pending modifier is withdrawn | `UTEST` |
+| Slot recycled during inhibition | replacement tags survive | `UTEST` |
+| 128 seeds, both destruction orders | all model and stale-handle checks pass | `UTEST` |
+| Recycle an untracked entity | 72 ns, 0 B | `BENCH` |
+| Recycle a tag + attribute + four-effect entity | 436 ns, 0 B | `BENCH` |
 
 The churn rows use `GameplayLifecycleBenchmarks` in process. The tracked
 case destroys the entity, creates the replacement, tags it, sets an
