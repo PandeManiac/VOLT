@@ -136,7 +136,7 @@ The demo displays a color-interpolated triangle against a dark background for a 
 
 VOLT uses [BenchmarkDotNet](https://github.com/dotnet/BenchmarkDotNet) to measure performance-sensitive operations.
 
-The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration, plus empty, fixed-step, idle-scheduled, and due-scheduled game-loop frames, time-scaled frames at `1.0x`, `0.5x`, and `2.0x`, the separate costs of capturing transform history, interpolating poses, extracting interpolated render instances, and capturing under entity churn, gameplay tag matching, query evaluation, authoring, name resolution, effect application, stacking, idle stepping, and periodic ticking.
+The benchmark suite includes native memory operations, ECS iteration, entity access, structural changes, chunk availability, fragmentation, and archetype migration, plus empty, fixed-step, idle-scheduled, and due-scheduled game-loop frames, time-scaled frames at `1.0x`, `0.5x`, and `2.0x`, the separate costs of capturing transform history, interpolating poses, extracting interpolated render instances, and capturing under entity churn, gameplay tag matching, query evaluation, authoring, name resolution, effect application, stacking, idle stepping, periodic ticking, ability granting, activation, blocking, input activation, cancellation, and behavior from 1 to 256 grants on one owner.
 
 Benchmark results are intended to inform implementation decisions, not merely to maximize reported throughput. Results should be evaluated alongside correctness, memory consumption, and workload characteristics.
 

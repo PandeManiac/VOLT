@@ -36,6 +36,7 @@ public class GameplayAbilityBenchmarks
 
 	private GameplayAbilityDefinition _free = null!;
 	private GameplayAbilityDefinition _costed = null!;
+	private GameplayAbilityDefinition _costedGain = null!;
 	private GameplayAbilityDefinition _cooling = null!;
 	private GameplayAbilityDefinition _required = null!;
 	private GameplayAbilityDefinition _blocked = null!;
@@ -43,12 +44,17 @@ public class GameplayAbilityBenchmarks
 
 	private GameplayAbilityHandle _freeHandle;
 	private GameplayAbilityHandle _costedHandle;
+	private GameplayAbilityHandle _costedGainHandle;
+	private GameplayAbilityHandle _rejectedCostedHandle;
 	private GameplayAbilityHandle _coolingHandle;
 	private GameplayAbilityHandle _requiredHandle;
 	private GameplayAbilityHandle _blockedHandle;
 
+	private GameplayAttribute _resource;
+
 	private Entity _freeActor;
 	private Entity _costedActor;
+	private Entity _rejectedCostedActor;
 	private Entity _coolingActor;
 	private Entity _requiredActor;
 	private Entity _blockedActor;
@@ -61,7 +67,7 @@ public class GameplayAbilityBenchmarks
 	[GlobalSetup]
 	public void Setup()
 	{
-		GameplayAttribute attribute = GameplayAttributeRegistry.Shared.Register(
+		_resource = GameplayAttributeRegistry.Shared.Register(
 			"VoltBenchmarks.Abilities.Resource");
 
 		GameplayTag assetRoot =
@@ -73,10 +79,20 @@ public class GameplayAbilityBenchmarks
 		GameplayTag requiredTag = GameplayTagRegistry.Shared.Register(
 			"VoltBenchmarks.Abilities.Required");
 
+		// The cost is one unit of the resource's float precision at the
+		// starting value, so every activation observably changes it.
+		// The success workload alternates an equal gain and cost, which
+		// keeps the value in a two-step band while remaining affordable.
 		GameplayEffectDefinition cost = GameplayEffectDefinition
 			.Create("Bench.Ability.Cost")
 			.Instant()
-			.Modifier(attribute, GameplayModifierOperation.AddBase, -0.001f)
+			.Modifier(_resource, GameplayModifierOperation.AddBase, -64f)
+			.Build();
+
+		GameplayEffectDefinition gain = GameplayEffectDefinition
+			.Create("Bench.Ability.CostGain")
+			.Instant()
+			.Modifier(_resource, GameplayModifierOperation.AddBase, 64f)
 			.Build();
 
 		GameplayEffectDefinition cooldown = GameplayEffectDefinition
@@ -95,6 +111,12 @@ public class GameplayAbilityBenchmarks
 			.Create("Bench.Ability.Costed")
 			.AssetTags(assetRoot)
 			.Cost(cost)
+			.Build();
+
+		_costedGain = GameplayAbilityDefinition
+			.Create("Bench.Ability.CostedGain")
+			.AssetTags(assetRoot)
+			.Cost(gain)
 			.Build();
 
 		_cooling = GameplayAbilityDefinition
@@ -150,19 +172,22 @@ public class GameplayAbilityBenchmarks
 
 		_freeActor = _world.CreateEntity();
 		_costedActor = _world.CreateEntity();
+		_rejectedCostedActor = _world.CreateEntity();
 		_coolingActor = _world.CreateEntity();
 		_requiredActor = _world.CreateEntity();
 		_blockedActor = _world.CreateEntity();
 		_inputActor = _world.CreateEntity();
 		_grantActor = _world.CreateEntity();
 
-		// The cost must stay affordable for the whole run. The
-		// attribute is unbounded and starts far above one unit per
-		// million iterations.
-		_attributes.SetBaseValue(_costedActor, attribute, 1_000_000_000f);
+		_attributes.SetBaseValue(_costedActor, _resource, 1_000_000_000f);
+		_attributes.SetBaseValue(_rejectedCostedActor, _resource, 0f);
 
 		_freeHandle = _abilities.GiveAbility(_freeActor, _free);
 		_costedHandle = _abilities.GiveAbility(_costedActor, _costed);
+		_costedGainHandle = _abilities.GiveAbility(_costedActor, _costedGain);
+		_rejectedCostedHandle = _abilities.GiveAbility(
+			_rejectedCostedActor,
+			_costed);
 		_coolingHandle = _abilities.GiveAbility(_coolingActor, _cooling);
 		_requiredHandle = _abilities.GiveAbility(_requiredActor, _required);
 
@@ -203,10 +228,35 @@ public class GameplayAbilityBenchmarks
 		return result.Status;
 	}
 
-	[Benchmark]
+	[Benchmark(OperationsPerInvoke = 64)]
 	public GameplayAbilityActivationStatus Activate_CostedAbility()
 	{
-		return _abilities.TryActivate(_costedHandle).Status;
+		GameplayAbilityActivationResult result = default;
+
+		for (int index = 0; index < 32; index++)
+		{
+			result = _abilities.TryActivate(_costedHandle);
+		}
+
+		for (int index = 0; index < 32; index++)
+		{
+			result = _abilities.TryActivate(_costedGainHandle);
+		}
+
+		return result.Status;
+	}
+
+	[Benchmark(OperationsPerInvoke = 64)]
+	public GameplayAbilityActivationStatus Activate_CostedAbility_RejectedByCost()
+	{
+		GameplayAbilityActivationResult result = default;
+
+		for (int index = 0; index < 64; index++)
+		{
+			result = _abilities.TryActivate(_rejectedCostedHandle);
+		}
+
+		return result.Status;
 	}
 
 	[Benchmark]
