@@ -390,16 +390,66 @@ instead of touching a recycled slot.
 
 A plan is data, and every step runs on the same low-level task runtime
 as application code. `Wait` and `WaitTag` use a deadline heap;
-`WaitEvent` uses the event router; a tag change visits only the
-owner's tag-condition tasks, not its duration or event tasks. Ending an
-ability releases all of its tasks before the ability notification, and
-the `Cancelled` task notifications follow the release. A zero-duration
-task completes on the next positive `Advance`, a zero step is a pause,
-and tasks created during an advance wait for the next advance.
+`WaitEvent` uses the event router. Tag-condition tasks are indexed by
+the watched tag and by exact or hierarchical matching, so a tag change
+visits only the tasks watching that tag or an ancestor, not every task
+on the owner. Ending an ability releases all of its tasks before the
+ability notification, and the `Cancelled` task notifications follow the
+release. A zero-duration task completes on the next positive
+`Advance`, a zero step is a pause, and tasks created during an advance
+wait for the next advance.
+
+Chained waits follow the fixed-step rule: a task created by a
+completion callback starts from the end-of-step clock and is eligible
+on the next advance. That makes the fixed-step loop the deterministic
+path for long chains; a single large manual advance is not equivalent
+to several fixed steps. If a plan step or activation notification
+throws, the activation is cancelled, its tasks and subscriptions are
+released, committed costs and cooldowns remain, and the exception is
+rethrown. A cleanup failure is reported with the original in an
+`AggregateException`; an ability is never left active with no plan
+cursor and no pending task.
+
+## Fixed-step simulation
+
+```csharp
+using Volt.Core.Timing;
+using Volt.Gameplay.Simulation;
+
+GameLoop loop = new();
+GameplaySimulation simulation = new(loop, abilities, effects);
+
+// Once per rendered frame; zero or more fixed steps run inside.
+loop.Advance();
+```
+
+`GameplaySimulation` is the optional bridge from the engine loop to
+gameplay. It registers one post-fixed-update callback, so the order in
+every executed fixed step is:
+
+1. Game fixed-update callbacks and scheduled simulation callbacks.
+2. Effects advance: expiries, periods, and tag changes.
+3. Tasks advance: duration and tag deadlines complete; plans continue.
+4. Remaining post-fixed callbacks.
+
+Event waits complete synchronously when their event is published, as
+they do without the integration. A task started by game fixed-update
+logic can complete in that same step; a task created by a completion
+callback waits for the next step. Pause, single-step, time scaling, and
+catch-up are the loop's semantics: the integration advances once for
+every executed fixed step and never invents a second clock.
+
+While attached, calling `effects.Advance` or `tasks.Advance` directly
+throws `InvalidOperationException`, so the same clock cannot be
+advanced twice in a step. Dispose `GameplaySimulation` to unregister
+the callback and return to manual control. It does not own the world or
+the stores, and it does not create a task runtime until an ability
+uses one.
 
 Run `samples/Volt.GameplayDemo` for the complete charged-dash example,
 including a stun interruption, overlapping abilities, stale handles,
-and owner destruction.
+owner destruction, pause, single-step, time scaling, and clean
+shutdown.
 
 ## Projects
 
@@ -438,6 +488,7 @@ and owner destruction.
 | `GameplayAbilityPlan` | Immutable authored wait and action sequence |
 | `GameplayAbilityPlanBuilder` | Fluent, validating plan authoring path |
 | `GameplayAbilityActivation` | Grant plus activation id, used as task ownership |
+| `GameplaySimulation` | Optional fixed-step driver for effects and tasks |
 
 ## Verification
 
@@ -454,6 +505,12 @@ dotnet run -c Release -- --filter '*GameplayAbilityTaskBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityTaskIdleBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityTaskScalingBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityTaskDestructionBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayTagWaitScalingBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayEventSparseBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationEventBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationTaskBurstBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationEffectBurstBenchmarks*'
 
 dotnet run --project samples/Volt.GameplayDemo -c Release
 ```
