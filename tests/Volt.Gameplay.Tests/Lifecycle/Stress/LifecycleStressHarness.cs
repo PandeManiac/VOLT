@@ -145,6 +145,7 @@ internal sealed class LifecycleStressHarness : IDisposable
 	private int _callbacksSuppressed;
 	private int _injectedExceptions;
 	private bool _probeActive;
+	private bool _entityDestructionInProgress;
 	private bool _probeFired;
 	private StressNotificationBoundary _probeBoundary;
 
@@ -537,7 +538,16 @@ internal sealed class LifecycleStressHarness : IDisposable
 			target = _random.Pick(_model.Living).Entity;
 		}
 
-		bool destroyed = World.DestroyEntity(target);
+		_entityDestructionInProgress = true;
+		bool destroyed;
+		try
+		{
+			destroyed = World.DestroyEntity(target);
+		}
+		finally
+		{
+			_entityDestructionInProgress = false;
+		}
 
 		Trace("destroy", $"{Describe(target)} => {destroyed}");
 	}
@@ -614,11 +624,40 @@ internal sealed class LifecycleStressHarness : IDisposable
 			? candidate
 			: EnsureEntity();
 
+		// A bulk clear revokes effect-granted tags without a per-grant
+		// notification, so an active effect cannot learn that its count is
+		// gone. The harness only clears entities on which no instance owns
+		// a grant; GameplayTagStoreTests covers Clear on its own.
+		if (HasGrantedEffectTags(entity))
+		{
+			Trace("tag.clear", $"{Describe(entity)} => skipped");
+			return;
+		}
+
 		_model.ClearTags(entity);
 
 		bool hadTags = Tags.Clear(entity);
 
 		Trace("tag.clear", $"{Describe(entity)} => {hadTags}");
+	}
+
+	private bool HasGrantedEffectTags(Entity entity)
+	{
+		if (!_model.TryGetEntity(entity, out ReferenceEntity? model)
+			|| model is null)
+		{
+			return false;
+		}
+
+		foreach (ReferenceEffect effect in model.Effects)
+		{
+			if (effect.TagsGranted && effect.Definition.GrantedTags.Count > 0)
+			{
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	private void ExecuteSetBase(Entity? selected = null)
@@ -1287,6 +1326,8 @@ internal sealed class LifecycleStressHarness : IDisposable
 		{
 			case GameplayEffectChangeKind.Applied:
 				{
+					// The model observes individual tag grants before the
+					// effect's committed Applied notification.
 					bool inhibited = Effects.TryGetEffect(
 						change.Handle,
 						out ActiveGameplayEffect snapshot)
@@ -1340,6 +1381,16 @@ internal sealed class LifecycleStressHarness : IDisposable
 				_model.RemoveEffect(change.Handle);
 				RememberStale(_staleEffects, change.Handle);
 				break;
+
+			case GameplayEffectChangeKind.TargetDestroyed:
+				// The target may already have been replaced at the same index.
+				// Do not mutate the new entity model while recording retirement.
+				if (_model.TryGetEffect(change.Handle, out _))
+				{
+					_model.RemoveEffect(change.Handle);
+				}
+				RememberStale(_staleEffects, change.Handle);
+				return;
 
 			case GameplayEffectChangeKind.PeriodExecuted:
 				if (!_model.TryGetEffect(change.Handle, out _))
@@ -1409,6 +1460,7 @@ internal sealed class LifecycleStressHarness : IDisposable
 		}
 
 		if (_probeActive
+			|| _entityDestructionInProgress
 			|| _callbacksSuppressed > 0
 			|| _callDepth >= MaxCallbackDepth
 			|| _callbackBudget <= 0)

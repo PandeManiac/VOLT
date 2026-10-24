@@ -9,6 +9,7 @@ internal static class Program
 			using ChargedDashDemo demo = new();
 
 			demo.Run();
+			GameplayCueDemo.Run();
 
 			return 0;
 		}

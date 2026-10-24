@@ -20,8 +20,13 @@ namespace Volt.Gameplay.Effects;
 /// </remarks>
 public readonly struct GameplayEffectHandle : IEquatable<GameplayEffectHandle>
 {
-	internal GameplayEffectHandle(Entity target, int slot, uint generation)
+	internal GameplayEffectHandle(
+		uint systemId,
+		Entity target,
+		int slot,
+		uint generation)
 	{
+		SystemId = systemId;
 		Target = target;
 		Slot = slot;
 		Generation = generation;
@@ -36,6 +41,11 @@ public readonly struct GameplayEffectHandle : IEquatable<GameplayEffectHandle>
 	/// Gets whether this handle refers to no active effect.
 	/// </summary>
 	public bool IsNone => Generation == 0;
+
+	/// <summary>
+	/// Gets the entity the effect is active on.
+	/// </summary>
+	public uint SystemId { get; }
 
 	/// <summary>
 	/// Gets the entity the effect is active on.
@@ -56,7 +66,8 @@ public readonly struct GameplayEffectHandle : IEquatable<GameplayEffectHandle>
 	/// <inheritdoc />
 	public bool Equals(GameplayEffectHandle other)
 	{
-		return Target == other.Target
+		return SystemId == other.SystemId
+			&& Target == other.Target
 			&& Slot == other.Slot
 			&& Generation == other.Generation;
 	}
@@ -70,7 +81,7 @@ public readonly struct GameplayEffectHandle : IEquatable<GameplayEffectHandle>
 	/// <inheritdoc />
 	public override int GetHashCode()
 	{
-		return HashCode.Combine(Target, Slot, Generation);
+		return HashCode.Combine(SystemId, Target, Slot, Generation);
 	}
 
 	/// <summary>
@@ -98,7 +109,7 @@ public readonly struct GameplayEffectHandle : IEquatable<GameplayEffectHandle>
 	{
 		return IsNone
 			? "GameplayEffectHandle.None"
-			: $"GameplayEffectHandle({Target}, slot {Slot}, " +
+			: $"GameplayEffectHandle(#{SystemId}:{Target}, slot {Slot}, " +
 				$"generation {Generation})";
 	}
 }

@@ -579,6 +579,65 @@ including a stun interruption, overlapping abilities, stale handles,
 owner destruction, pause, single-step, time scaling, and clean
 shutdown.
 
+## Gameplay cues
+
+`GameplayCueSystem` bridges committed gameplay transitions to presentation
+without depending on a graphics API. A registered cue tag is the shared
+identity of a presentation action. `Execute` emits a one-shot transition;
+`Add` creates a persistent instance, and `Update`/`Remove` produce its
+lifecycle notifications. Handles are generational and system-scoped, so
+stale or foreign handles cannot affect a replacement cue. Exact listeners
+receive one tag; hierarchical listeners also receive descendants. Optional
+owner-scoped listeners and cues are retired when their entity is destroyed.
+Callbacks are synchronous and reentrant; dispatch captures listener handles
+and revalidates them before each call, so removed subscriptions do not receive
+a later callback in the same dispatch and subscriptions added during dispatch
+wait until the next dispatch.
+
+```csharp
+using Volt.Gameplay.Cues;
+using Volt.Gameplay.Tags;
+
+GameplayTag hit = GameplayTagRegistry.Shared.Register("Cue.Combat.Hit");
+using GameplayCueSystem cues = new(world);
+GameplayCueSubscription listener = cues.Subscribe(
+    hit,
+    cue => Console.WriteLine($"{cue.Kind}: {cue.Magnitude}"));
+
+cues.Execute(hit, source: attacker, target: victim, magnitude: 12f);
+GameplayCueHandle looping = cues.Add(hit, source: attacker, target: victim);
+cues.Update(looping, magnitude: 3f, stackCount: 2);
+cues.Remove(looping);
+cues.Unsubscribe(listener);
+```
+
+Effects may declare `.GameplayCue(tag)`. Bind a cue system to the same
+world's `GameplayEffectSystem` with `cues.BindEffects(effects)`. Active
+non-periodic effects add a persistent cue, stack changes update it, and
+inhibition, removal, expiration, or target destruction remove it. Periodic
+ticks and instant effects emit execute cues. Ability plans use
+`.ExecuteCue(tag)` for one-shots or `.AddCue(tag)` for activation-owned
+persistent cues, automatically removed when that activation ends or cancels.
+
+For a graphics or audio consumer that drains at its own frame boundary,
+assign a `GameplayCueBuffer` to `cues.PresentationBuffer`. It is a bounded,
+not-thread-safe FIFO: drain into a caller-provided `Span<GameplayCueEvent>`
+with no allocation, or call `Clear`. Capacity grows geometrically to its
+configured maximum; overflow throws before enqueueing rather than silently
+dropping a transition. The buffer is caller-owned and should be drained or
+cleared before disposal.
+
+The deterministic, graphics-free integration demo includes a mock consumer
+and exercises effect stacks, periodic cues, expiration, ability cancellation,
+buffer draining, and entity destruction:
+
+```bash
+dotnet run --project samples/Volt.GameplayDemo -c Release
+```
+
+Benchmark cue dispatch with `dotnet run -c Release --project
+benchmarks/Volt.Benchmarks -- --filter '*GameplayCueBenchmarks*'`.
+
 ## Projects
 
 | Type | Purpose |
@@ -599,6 +658,11 @@ shutdown.
 | `GameplayTagRequirements` | Required and ignored tag pair used for gating |
 | `ActiveGameplayEffect` | Read-only snapshot of one active instance |
 | `GameplayEffectChange` | Notification payload for every effect transition |
+| `GameplayCueSystem` | Routes gameplay cue execution and persistent lifecycle to presentation |
+| `GameplayCueBuffer` | Optional bounded FIFO for presentation-frame handoff |
+| `GameplayCueHandle` | System- and generation-checked persistent cue identity |
+| `GameplayCueSubscription` | System- and generation-checked cue listener |
+| `GameplayCueEvent` | Immutable one-shot or persistent presentation transition |
 | `GameplayAbilityDefinition` | Immutable ability: requirements, cost, cooldown, block and cancel tags |
 | `GameplayAbilityDefinitionBuilder` | Fluent, validating authoring path |
 | `GameplayAbilitySystem` | Grants, activation checks, blocking, and cancellation |

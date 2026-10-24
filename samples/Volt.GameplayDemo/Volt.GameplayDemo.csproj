@@ -8,6 +8,7 @@
     <ProjectReference Include="../../src/Volt.Core/Volt.Core.csproj" />
     <ProjectReference Include="../../src/Volt.Ecs/Volt.Ecs.csproj" />
     <ProjectReference Include="../../src/Volt.Gameplay/Volt.Gameplay.csproj" />
+    <ProjectReference Include="../../tests/Volt.Gameplay.Tests/Volt.Gameplay.Tests.csproj" />
   </ItemGroup>
 
 </Project>

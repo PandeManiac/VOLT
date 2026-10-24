@@ -1,5 +1,6 @@
 using Volt.Ecs;
 using Volt.Gameplay.Attributes;
+using Volt.Gameplay.Cues;
 using Volt.Gameplay.Effects;
 using Volt.Gameplay.Events;
 using Volt.Gameplay.Simulation;
@@ -59,6 +60,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 
 	private GameplayEventSystem? _events;
 	private GameplayAbilityTaskSystem? _tasks;
+	private GameplayCueSystem? _cues;
 	private bool _ownsEvents;
 
 	private AbilitySlot[] _abilities = new AbilitySlot[InitialAbilityCapacity];
@@ -166,6 +168,9 @@ public sealed class GameplayAbilitySystem : IDisposable
 	/// to tag changes, and never appear in the deadline heap.
 	/// </remarks>
 	public GameplayAbilityTaskSystem Tasks => _tasks ??= CreateTaskSystem();
+
+	/// <summary>Gets the optional cue runtime, created only when a cue step or API is used.</summary>
+	public GameplayCueSystem Cues => _cues ??= new GameplayCueSystem(_world);
 
 	/// <summary>
 	/// Registers a custom task that abilities of this system can wait
@@ -827,6 +832,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 		_abilities[slot].Target = target;
 		_abilities[slot].ActivationId = activationId;
 		_abilities[slot].PlanStep = -1;
+		_abilities[slot].PlanCue = GameplayCueHandle.None;
 
 		_activeCount++;
 
@@ -1278,6 +1284,9 @@ public sealed class GameplayAbilitySystem : IDisposable
 			_tasks = null;
 		}
 
+		_cues?.Dispose();
+		_cues = null;
+
 		if (_ownsEvents)
 		{
 			_events?.Dispose();
@@ -1680,11 +1689,29 @@ public sealed class GameplayAbilitySystem : IDisposable
 					}
 				case GameplayAbilityPlanStepKind.PublishEvent:
 					{
-						Events.Publish(new GameplayEvent(
-							step.Tag,
-							owner,
-							target));
-
+						Events.Publish(new GameplayEvent(step.Tag, owner, target));
+						stepIndex++;
+						break;
+					}
+				case GameplayAbilityPlanStepKind.ExecuteCue:
+					{
+						Cues.Execute(step.Tag, owner, target);
+						stepIndex++;
+						break;
+					}
+				case GameplayAbilityPlanStepKind.AddCue:
+					{
+						GameplayCueHandle cue = Cues.Add(step.Tag, owner, owner, activation: activation);
+						if (TryResolveActivation(activation, out int currentSlot, out _, out _)
+							&& _abilities[currentSlot].ActivationId == activation.Id)
+						{
+							_abilities[currentSlot].PlanCue = cue;
+						}
+						else if (!cue.IsNone)
+						{
+							Cues.Remove(cue);
+							return false;
+						}
 						stepIndex++;
 						break;
 					}
@@ -2023,6 +2050,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 		GameplayAbilityActivation activation = new(
 			CreateHandle(slot),
 			_abilities[slot].ActivationId);
+		_abilities[slot].PlanCue = GameplayCueHandle.None;
 
 		// Ending blocks a nested activation from a task cancellation
 		// handler. Without it, a handler could start a new activation
@@ -2046,7 +2074,36 @@ public sealed class GameplayAbilitySystem : IDisposable
 				_abilities[current].Ending = false;
 			}
 
-			Changed?.Invoke(change);
+			Exception? cueFailure = null;
+			try
+			{
+				if (_cues is not null && !_cues.IsDisposed)
+				{
+					_cues.RemoveActivation(activation);
+				}
+			}
+			catch (Exception exception)
+			{
+				cueFailure = exception;
+			}
+
+			try
+			{
+				Changed?.Invoke(change);
+			}
+			catch (Exception exception)
+			{
+				cueFailure = cueFailure is null
+					? exception
+					: new AggregateException(cueFailure, exception);
+			}
+
+			if (cueFailure is not null)
+			{
+				System.Runtime.ExceptionServices.ExceptionDispatchInfo
+					.Capture(cueFailure)
+					.Throw();
+			}
 		}
 
 		return true;
@@ -2683,6 +2740,7 @@ public sealed class GameplayAbilitySystem : IDisposable
 		public uint ActivationId;
 		public int TaskHead;
 		public int PlanStep;
+		public GameplayCueHandle PlanCue;
 		public bool Active;
 		public bool Activating;
 		public bool Revoking;

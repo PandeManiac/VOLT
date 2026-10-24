@@ -26,7 +26,8 @@ public readonly struct GameplayEffectChange
 		GameplayEffectDefinition definition,
 		Entity target,
 		Entity source,
-		int stackCount)
+		int stackCount,
+		bool isInhibited = false)
 	{
 		Kind = kind;
 		Handle = handle;
@@ -34,6 +35,7 @@ public readonly struct GameplayEffectChange
 		Target = target;
 		Source = source;
 		StackCount = stackCount;
+		IsInhibited = isInhibited;
 	}
 
 	/// <summary>
@@ -70,6 +72,9 @@ public readonly struct GameplayEffectChange
 	/// Gets the stack count at the time of the change.
 	/// </summary>
 	public int StackCount { get; }
+
+	/// <summary>Whether an applied or stack transition remains inhibited.</summary>
+	public bool IsInhibited { get; }
 
 	/// <inheritdoc />
 	public override string ToString()

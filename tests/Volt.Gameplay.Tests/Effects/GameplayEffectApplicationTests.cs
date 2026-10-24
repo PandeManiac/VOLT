@@ -351,12 +351,14 @@ public sealed class GameplayEffectApplicationTests
 	{
 		using EffectRuntime runtime = new();
 		EffectRecorder recorder = new(runtime.Effects);
+		GameplayEffectDefinition cueEffect = GameplayEffectDefinition.Create("Lifecycle.Cue").HasDuration(5f).GameplayCue(TagSchema.CueBurning).Build();
 
 		Entity entity = runtime.CreateAffectedEntity();
 
 		runtime.Effects.Apply(entity, EffectSchema.BuffFiveSeconds);
+		runtime.Effects.Apply(entity, cueEffect);
 
-		Assert.Equal(1, runtime.Effects.ActiveEffectCount);
+		Assert.Equal(2, runtime.Effects.ActiveEffectCount);
 
 		int beforeDestruction = recorder.Changes.Count;
 
@@ -367,8 +369,13 @@ public sealed class GameplayEffectApplicationTests
 		Assert.Equal(0, runtime.Tags.TaggedEntityCount);
 		Assert.Equal(0, runtime.Tags.GetTagCount(entity, TagSchema.EffectBuff));
 
-		// Destruction is silent: the state is gone for everyone.
-		Assert.Equal(beforeDestruction, recorder.Changes.Count);
+		// Target destruction emits a terminal transition for presentation cleanup.
+		Assert.Equal(beforeDestruction + 2, recorder.Changes.Count);
+		Assert.All(recorder.Changes.Skip(beforeDestruction), change =>
+		{
+			Assert.Equal(GameplayEffectChangeKind.TargetDestroyed, change.Kind);
+			Assert.Equal(entity, change.Target);
+		});
 	}
 
 	[Fact]

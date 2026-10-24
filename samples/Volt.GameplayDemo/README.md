@@ -1,8 +1,8 @@
 # Volt.GameplayDemo
 
 A deterministic, graphics-free demonstration of event-driven gameplay
-abilities and ability tasks. No graphics device, window, or platform
-package is required.
+abilities, ability tasks, and gameplay-to-presentation cues. No graphics
+device, window, or platform package is required.
 
 ```bash
 dotnet run --project samples/Volt.GameplayDemo -c Release
@@ -41,6 +41,12 @@ time manually and prints every observable transition.
 7. **Pause, single step, and time scaling**: a pending task does not
    advance while the loop is paused, advances once with `StepOnce`, and
    scales with the loop's time scale.
+8. **Gameplay cue presentation**: an effect drives persistent add,
+   stack-update, periodic execute, and expiration transitions; charged
+   and interrupted abilities own cues that clean up on completion or
+   cancellation; target destruction retires a cue. A bounded FIFO is
+   drained into a graphics-free mock consumer, which asserts that every
+   added cue was eventually removed.
 
 Every expectation is an assertion. The process exits with status 1 and
 prints the failing assertion if the behavior changes.
