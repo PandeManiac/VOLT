@@ -532,7 +532,7 @@ public sealed class GameplayTagStoreTests
 	}
 
 	[Fact]
-	public void TagsChanged_IsNotRaisedForClearOrDestruction()
+	public void TagsChanged_IsRaisedOnceForClearButNotForDestruction()
 	{
 		using World world = new();
 		using GameplayTagStore store = new(world);
@@ -544,14 +544,190 @@ public sealed class GameplayTagStoreTests
 
 		store.TagsChanged += _ => changes++;
 
+		// A clear is an observable mutation: dependent systems must
+		// recompute their conditions, exactly as for a single removal.
 		Assert.True(store.Clear(entity));
-		Assert.Equal(0, changes);
+		Assert.Equal(1, changes);
 
 		store.AddTag(entity, TagSchema.Status);
-		Assert.Equal(1, changes);
+		Assert.Equal(2, changes);
 
 		world.DestroyEntity(entity);
-		Assert.Equal(1, changes);
+		Assert.Equal(2, changes);
+	}
+
+	[Fact]
+	public void Clear_DoesNotRemoveGrantsOwnedByGameplayEffects()
+	{
+		using World world = new();
+		using GameplayTagStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+
+		store.AddTag(entity, TagSchema.Status);
+		store.AddOwnedTag(entity, TagSchema.Status);
+		store.AddOwnedTag(entity, TagSchema.EffectDamage);
+
+		Assert.True(store.Clear(entity));
+
+		// Only the unowned grant is cleared. The owned grants stay, so
+		// the effect that recorded them still holds exactly what it
+		// claims and cannot consume somebody else's grant later.
+		Assert.Equal(1, store.GetTagCount(entity, TagSchema.Status));
+		Assert.Equal(0, store.GetUnownedTagCount(entity, TagSchema.Status));
+		Assert.Equal(1, store.GetTagCount(entity, TagSchema.EffectDamage));
+		Assert.True(store.HasTag(entity, TagSchema.EffectDamage));
+		Assert.False(store.Clear(entity));
+	}
+
+	[Fact]
+	public void RemoveTag_NeverReleasesAnEffectOwnedGrant()
+	{
+		using World world = new();
+		using GameplayTagStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+
+		store.AddOwnedTag(entity, TagSchema.Status);
+
+		Assert.False(store.RemoveTag(entity, TagSchema.Status));
+		Assert.Equal(1, store.GetTagCount(entity, TagSchema.Status));
+
+		store.AddTag(entity, TagSchema.Status);
+
+		Assert.True(store.RemoveTag(entity, TagSchema.Status));
+		Assert.Equal(1, store.GetTagCount(entity, TagSchema.Status));
+		Assert.True(store.RemoveOwnedTag(entity, TagSchema.Status));
+		Assert.False(store.HasTag(entity, TagSchema.Status));
+	}
+
+	[Fact]
+	public void OwnedAndUnownedGrants_ShareOneVisibleCount()
+	{
+		using World world = new();
+		using GameplayTagStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+
+		store.AddTag(entity, TagSchema.StatusStunned);
+		store.AddOwnedTag(entity, TagSchema.StatusStunned);
+
+		Assert.Equal(2, store.GetTagCount(entity, TagSchema.StatusStunned));
+		Assert.Equal(1, store.GetUnownedTagCount(entity, TagSchema.StatusStunned));
+		Assert.True(store.HasTag(entity, TagSchema.Status));
+
+		Assert.True(store.RemoveOwnedTag(entity, TagSchema.StatusStunned));
+		Assert.False(store.RemoveOwnedTag(entity, TagSchema.StatusStunned));
+		Assert.Equal(1, store.GetTagCount(entity, TagSchema.StatusStunned));
+		Assert.True(store.HasTag(entity, TagSchema.Status));
+	}
+
+	[Fact]
+	public void Clear_NotifiesEveryRemovedTagBeforeTheEntityNotification()
+	{
+		using World world = new();
+		using GameplayTagStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+		List<string> order = [];
+
+		store.AddTag(entity, TagSchema.Status);
+		store.AddTag(entity, TagSchema.Effect);
+		store.AddTag(entity, TagSchema.OtherLeaf);
+
+		store.TagChanged += (_, _) => order.Add("tag");
+		store.TagsChanged += _ => order.Add("entity");
+
+		Assert.True(store.Clear(entity));
+
+		Assert.Equal(["tag", "tag", "tag", "entity"], order);
+		Assert.False(store.HasTag(entity, TagSchema.Status));
+		Assert.Equal(0, store.TaggedEntityCount);
+	}
+
+	[Fact]
+	public void Clear_HandlerMayTagTheEntityAgain()
+	{
+		using World world = new();
+		using GameplayTagStore store = new(world);
+
+		Entity entity = world.CreateEntity();
+		bool readded = false;
+		int clears = 0;
+
+		store.AddTag(entity, TagSchema.Status);
+
+		store.TagsChanged += changed =>
+		{
+			if (!readded)
+			{
+				readded = true;
+				store.AddTag(changed, TagSchema.Effect);
+
+				// A nested clear observes the guard and reports that it
+				// removed nothing instead of recursing.
+				Assert.False(store.Clear(changed));
+				clears++;
+			}
+		};
+
+		Assert.True(store.Clear(entity));
+		Assert.Equal(1, clears);
+		Assert.True(store.HasTag(entity, TagSchema.Effect));
+		Assert.False(store.HasTag(entity, TagSchema.Status));
+	}
+
+	[Fact]
+	public void Clear_HandlerMayClearAnotherEntityWithoutCorruptingTheOuterDispatch()
+	{
+		using World world = new();
+		using GameplayTagStore store = new(world);
+
+		Entity first = world.CreateEntity();
+		Entity second = world.CreateEntity();
+
+		store.AddTag(first, TagSchema.Status);
+		store.AddTag(first, TagSchema.Effect);
+		store.AddTag(second, TagSchema.OtherLeaf);
+
+		List<(Entity Entity, GameplayTag Tag)> changes = [];
+		int entityNotifications = 0;
+		bool nested = false;
+
+		store.TagChanged += (entity, tag) =>
+		{
+			changes.Add((entity, tag));
+
+			if (nested || entity != first)
+			{
+				return;
+			}
+
+			nested = true;
+
+			// The nested clear has its own snapshot, so the outer
+			// dispatch still reports the tags it removed.
+			Assert.True(store.Clear(second));
+		};
+
+		store.TagsChanged += _ => entityNotifications++;
+
+		Assert.True(store.Clear(first));
+
+		GameplayTag[] firstTags = changes
+			.Where(change => change.Entity == first)
+			.Select(change => change.Tag)
+			.OrderBy(tag => tag.Id)
+			.ToArray();
+
+		Assert.Equal(
+			new[] { TagSchema.Effect.Id, TagSchema.Status.Id }.OrderBy(id => id),
+			firstTags.Select(tag => tag.Id));
+		Assert.Contains((second, TagSchema.OtherLeaf), changes);
+		Assert.Equal(2, entityNotifications);
+		Assert.False(store.HasTag(second, TagSchema.OtherLeaf));
+		Assert.False(store.HasTag(first, TagSchema.Status));
+		Assert.False(store.HasTag(first, TagSchema.Effect));
 	}
 
 	[Fact]
