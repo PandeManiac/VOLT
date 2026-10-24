@@ -41,6 +41,33 @@ internal sealed class LifecycleReferenceModel
 
 	public int ActiveEffectCount => _effects.Count;
 
+	/// <summary>
+	/// Gets the number of active instances that must currently own a
+	/// persistent presentation cue.
+	/// </summary>
+	/// <remarks>
+	/// Cue ownership follows the instance, not the tag: an instant
+	/// effect delivers a one-shot cue without keeping state, and an
+	/// inhibited instance withdraws its cue until it resumes.
+	/// </remarks>
+	public int ExpectedCueCount
+	{
+		get
+		{
+			int count = 0;
+
+			foreach (ReferenceEffect effect in _effects.Values)
+			{
+				if (effect.CueActive)
+				{
+					count++;
+				}
+			}
+
+			return count;
+		}
+	}
+
 	public int GrantedAbilityCount => _abilities.Count;
 
 	public int ActiveAbilityCount
@@ -182,9 +209,9 @@ internal sealed class LifecycleReferenceModel
 		return GetEntity(entity).RemoveTag(tag);
 	}
 
-	public void ClearTags(Entity entity)
+	public bool ClearTags(Entity entity)
 	{
-		GetEntity(entity).ClearTags();
+		return GetEntity(entity).ClearTags();
 	}
 
 	public void SetBaseValue(Entity entity, float value)
@@ -414,6 +441,13 @@ internal sealed class LifecycleReferenceModel
 			: 0;
 	}
 
+	public int UnownedTagCount(Entity entity, GameplayTag tag)
+	{
+		return _entities.TryGetValue(entity, out ReferenceEntity? model)
+			? model.UnownedTagCount(tag)
+			: 0;
+	}
+
 	public bool HasTag(Entity entity, GameplayTag tag)
 	{
 		return TagCount(entity, tag) > 0;
@@ -483,7 +517,7 @@ internal sealed class LifecycleReferenceModel
 	{
 		foreach (GameplayTag tag in tags.Tags)
 		{
-			GetEntity(entity).AddTag(tag);
+			GetEntity(entity).GrantOwnedTag(tag);
 		}
 	}
 
@@ -496,14 +530,15 @@ internal sealed class LifecycleReferenceModel
 
 		foreach (GameplayTag tag in tags.Tags)
 		{
-			model.RemoveTag(tag);
+			model.ReleaseOwnedTag(tag);
 		}
 	}
 }
 
 internal sealed class ReferenceEntity(Entity entity)
 {
-	private readonly Dictionary<GameplayTag, int> _tags = [];
+	private readonly Dictionary<GameplayTag, int> _unowned = [];
+	private readonly Dictionary<GameplayTag, int> _owned = [];
 
 	public Entity Entity { get; } = entity;
 
@@ -518,21 +553,31 @@ internal sealed class ReferenceEntity(Entity entity)
 
 	public List<ReferenceModifier> Modifiers { get; } = [];
 
-	public bool HasAnyTag => _tags.Count > 0;
+	public bool HasAnyTag => _unowned.Count > 0 || _owned.Count > 0;
 
 	public int TagCount(GameplayTag tag)
 	{
-		return _tags.TryGetValue(tag, out int count) ? count : 0;
+		return UnownedTagCount(tag) + OwnedTagCount(tag);
+	}
+
+	public int UnownedTagCount(GameplayTag tag)
+	{
+		return _unowned.TryGetValue(tag, out int count) ? count : 0;
+	}
+
+	public int OwnedTagCount(GameplayTag tag)
+	{
+		return _owned.TryGetValue(tag, out int count) ? count : 0;
 	}
 
 	public void AddTag(GameplayTag tag)
 	{
-		_tags[tag] = TagCount(tag) + 1;
+		_unowned[tag] = UnownedTagCount(tag) + 1;
 	}
 
 	public bool RemoveTag(GameplayTag tag)
 	{
-		int count = TagCount(tag);
+		int count = UnownedTagCount(tag);
 
 		if (count == 0)
 		{
@@ -541,19 +586,42 @@ internal sealed class ReferenceEntity(Entity entity)
 
 		if (count == 1)
 		{
-			_tags.Remove(tag);
+			_unowned.Remove(tag);
 		}
 		else
 		{
-			_tags[tag] = count - 1;
+			_unowned[tag] = count - 1;
 		}
 
 		return true;
 	}
 
-	public void ClearTags()
+	public void GrantOwnedTag(GameplayTag tag)
 	{
-		_tags.Clear();
+		_owned[tag] = OwnedTagCount(tag) + 1;
+	}
+
+	public void ReleaseOwnedTag(GameplayTag tag)
+	{
+		int count = OwnedTagCount(tag);
+
+		if (count <= 1)
+		{
+			_owned.Remove(tag);
+		}
+		else
+		{
+			_owned[tag] = count - 1;
+		}
+	}
+
+	public bool ClearTags()
+	{
+		bool removed = _unowned.Count > 0;
+
+		_unowned.Clear();
+
+		return removed;
 	}
 }
 
@@ -577,6 +645,14 @@ internal sealed class ReferenceEffect(
 	public bool TagsGranted { get; set; }
 
 	public bool ModifiersAttached { get; set; }
+
+	/// <summary>
+	/// Gets whether this instance should own a persistent cue right
+	/// now.
+	/// </summary>
+	public bool CueActive => !Inhibited
+		&& Definition.CueTag.IsValid
+		&& !Definition.IsInstant;
 }
 
 internal sealed class ReferenceAbility(

@@ -2,7 +2,9 @@ using Volt.Ecs;
 using Volt.Gameplay.Abilities;
 using Volt.Gameplay.Attributes;
 using Volt.Gameplay.Effects;
+using Volt.Gameplay.Events;
 using Volt.Gameplay.Tags;
+using Volt.Gameplay.Tasks;
 
 namespace Volt.Gameplay.Tests.Abilities;
 
@@ -18,7 +20,13 @@ internal sealed class AbilityRuntime : IDisposable
 		Attributes = new GameplayAttributeStore(World);
 		Tags = new GameplayTagStore(World);
 		Effects = new GameplayEffectSystem(World, Attributes, Tags);
-		Abilities = new GameplayAbilitySystem(World, Tags, Effects, Attributes);
+		Events = new GameplayEventSystem(World);
+		Abilities = new GameplayAbilitySystem(
+			World,
+			Tags,
+			Effects,
+			Attributes,
+			Events);
 	}
 
 	public World World { get; }
@@ -29,7 +37,11 @@ internal sealed class AbilityRuntime : IDisposable
 
 	public GameplayEffectSystem Effects { get; }
 
+	public GameplayEventSystem Events { get; }
+
 	public GameplayAbilitySystem Abilities { get; }
+
+	public GameplayAbilityTaskSystem Tasks => Abilities.Tasks;
 
 	public Entity CreateActor()
 	{
@@ -40,6 +52,7 @@ internal sealed class AbilityRuntime : IDisposable
 	{
 		Abilities.Dispose();
 		Effects.Dispose();
+		Events.Dispose();
 		Tags.Dispose();
 		Attributes.Dispose();
 		World.Dispose();

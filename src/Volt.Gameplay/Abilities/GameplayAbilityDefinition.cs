@@ -39,7 +39,8 @@ public sealed class GameplayAbilityDefinition
 		GameplayTagSet blockAbilitiesWithTags,
 		GameplayTagSet cancelOnTags,
 		bool canRetrigger,
-		bool endsOnActivate)
+		bool endsOnActivate,
+		GameplayAbilityPlan? plan)
 	{
 		Name = name;
 		AssetTags = assetTags;
@@ -52,6 +53,7 @@ public sealed class GameplayAbilityDefinition
 		CancelOnTags = cancelOnTags;
 		CanRetrigger = canRetrigger;
 		EndsOnActivate = endsOnActivate;
+		Plan = plan;
 	}
 
 	/// <summary>
@@ -164,6 +166,18 @@ public sealed class GameplayAbilityDefinition
 	/// until it is ended or cancelled.
 	/// </remarks>
 	public bool EndsOnActivate { get; }
+
+	/// <summary>
+	/// Gets the authored task sequence that runs while the ability is
+	/// active, or <see langword="null"/> for an ability without a plan.
+	/// </summary>
+	/// <remarks>
+	/// The plan shares the ability task runtime. It is one immutable
+	/// array per definition; each activation stores only its cursor.
+	/// An ability with a plan does not end on activation, because the
+	/// plan is what decides when it ends.
+	/// </remarks>
+	public GameplayAbilityPlan? Plan { get; }
 
 	/// <inheritdoc />
 	public override string ToString()

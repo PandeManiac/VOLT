@@ -3,7 +3,7 @@
 **Reference engine:** Unreal Engine 5.8.4, local source at
 `/home/berds/applications/unreal-engine-5.8.4`.
 **Status:** living document. Sections are added as milestones land.
-**Last updated:** 2026-10-22.
+**Last updated:** 2026-10-23.
 
 This document records the behavior VOLT implements, where that behavior
 comes from, and where VOLT deliberately differs. It is the source of
@@ -53,6 +53,27 @@ whatever the current implementation happens to do.
 - Local reference project: `/home/berds/programming/unreal/VoltUnrealReference`.
   `Config/DefaultGameplayTags.ini` declares `Ability.Dash`,
   `Status.Burning`, and `Status.Stunned`.
+- Epic, *Gameplay Ability Tasks in Unreal Engine* (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/gameplay-ability-tasks-in-unreal-engine>
+  — task lifetime, `ReadyForActivation`, ending with the ability.
+- Epic, `UAbilityTask` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/GameplayAbilities/UAbilityTask>
+  — the owning `Ability` and task helpers.
+- Epic, `UGameplayTask` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Runtime/GameplayTasks/UGameplayTask>
+  — `InitTask`, `ReadyForActivation`, `EndTask`, `TaskOwnerEnded`.
+- Epic, `UAbilityTask_WaitDelay` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/GameplayAbilities/UAbilityTask_WaitDelay>
+  — wait for a duration, `OnFinish`.
+- Epic, `UAbilityTask_WaitGameplayEvent` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/GameplayAbilities/UAbilityTask_WaitGameplayEvent>
+  — one-shot listening, `OnlyMatchExact`, optional external target.
+- Epic, `SendGameplayEventToActor` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/GameplayAbilities/UAbilitySystemBlueprintLibrary/SendGameplayEven->
+  — event tag and payload delivery through an ability system.
+- Epic, `UAbilitySystemComponent::HandleGameplayEvent` API (5.8):
+  <https://dev.epicgames.com/documentation/unreal-engine/API/Plugins/GameplayAbilities/UAbilitySystemComponent/HandleGameplayEvent>
+  — execute an event and count matching activations.
 
 ---
 
@@ -837,6 +858,36 @@ instance is inhibited or removed. Instant effects never grant tags.
 - Consequence: two effects granting the same tag leave it present when
   one of them ends, which the store's reference counting provides.
 
+**Rule.** A grant is owned. `AddTag` records an unowned grant that
+belongs to the caller; an effect records owned grants for its instance.
+Releases are scoped to what the caller can attribute: `RemoveTag` and
+`Clear` release unowned grants only, and an effect's release removes
+owned grants only.
+
+- `DIFF` Unreal keeps granted tags in a container on the effect spec and
+  removes exactly that container, so ownership is implicit in the tag
+  map's reference counting. VOLT's store is also counted, but a count
+  alone cannot attribute a shared tag to one owner; the explicit
+  owned/unowned split is what provides the same guarantee.
+- Consequence 1: an external `RemoveTag` or `Clear` cannot invalidate
+  an effect's claim, so a later expiry cannot consume a grant that
+  appeared after the external mutation.
+- Consequence 2: `Clear(entity)` removes unowned grants and leaves
+  effect-owned grants, and the effects that own them, in place. It is a
+  reset of caller-owned state, not a way to strip an effect's
+  contribution; remove the effect to release that. `RemoveTag` reports
+  `false` for a tag held only by owned grants.
+- Consequence 3: `Clear` is observable. It commits every removal first,
+  then raises the per-tag notification for each removed tag and one
+  entity notification, so tag waits, ability requirements, and ongoing
+  effect requirements observe the same committed state they observe
+  for a single removal. Listener failures are collected and thrown
+  together after every notification has been attempted.
+- Consequence 4: `Clear` is reentrant. A listener may clear a different
+  entity during the dispatch; the nested clear snapshots its own tags
+  instead of reusing the outer buffer, so the outer notifications remain
+  complete. A warmed top-level clear allocates nothing.
+
 ## 3.5 Requirements
 
 **Rule.** An application is refused when the target does not have every
@@ -1229,16 +1280,18 @@ those tags, or infinity for an infinite instance.
 ## 4.6 Lifecycle, ending, and cancellation
 
 **Rule.** An ability ends as soon as its activation is committed unless
-its definition keeps it active. `End` reports `Ended`; `Cancel`
-reports `Cancelled`. Revoking an active grant cancels it first. Ending
-or cancelling an inactive ability does nothing and returns `false`.
+its definition keeps it active or attaches a plan. `End` reports
+`Ended`; `Cancel` reports `Cancelled`. Revoking an active grant cancels
+it first. Ending or cancelling an inactive ability does nothing and
+returns `false`.
 
 - `SRC` `UGameplayAbility::EndAbility`, `CancelAbility`, and
   `UAbilitySystemComponent::ClearAbility`, which cancels the active
   instance before removing the spec.
-- `DIFF` a data definition has no tasks or input of its own, so ending
-  on activation is the default; Unreal abilities stay active until
-  they call `EndAbility`.
+- `DIFF` a data definition has no activation code or input of its
+  own. Without a plan it ends on activation by default; with a plan,
+  its wait steps keep it active until the plan ends. Unreal abilities
+  stay active until their code calls `EndAbility`.
 
 **Rule.** Activation cancels every active ability whose asset tags
 match `CancelAbilitiesWithTags`, except the activating grant, and does
@@ -1575,6 +1628,1326 @@ attribute, and applies four infinite effects before the stores observe
 the destruction. The attribute store retains its modifier arrays across
 the generation boundary, and both cases allocate zero managed bytes.
 
-# Part 5 — Cues, events, and replication preparation
+# Part 5 — Gameplay events and ability tasks
 
-Not yet implemented.
+Implemented in `Volt.Gameplay.Events` and `Volt.Gameplay.Tasks`.
+
+## 5.1 Gameplay events
+
+**Rule.** A gameplay event is a value with a registered tag, an
+optional source entity, an optional target entity, and an optional
+typed payload. Publishing copies the value; a high-frequency event does
+not allocate a managed event object. The tag carries the meaning and
+the hierarchy, exactly as it does for abilities and effects.
+
+- `DOCS` Epic describes sending a gameplay event to an actor as an
+event tag plus an `FGameplayEventData` payload, delivered through the
+actor's ability system (`SendGameplayEventToActor`). The ability system
+can also execute the event directly and reports how many matching
+abilities it activated (`HandleGameplayEvent`).
+- `DIFF` VOLT's event router is independent of the ability system.
+Abilities, tasks, effects, and application code share one
+`GameplayEventSystem` over a world; an event is not tied to an
+activation attempt. This keeps event routing usable outside gameplay
+abilities and avoids a second event path.
+- `DIFF` the payload is a compact discriminated value
+(`GameplayEventPayload`) rather than an open `FGameplayEventData`-style
+object graph. The built-in kinds cover the common numeric and entity
+cases without boxing. An application that needs a new shape extends
+the payload union rather than allocating a context object per event.
+
+**Rule.** Subscriptions are indexed by tag. Dispatch walks the exact
+tag bucket, then its ancestors from nearest to farthest, then the
+wildcard bucket. It never scans unrelated subscriptions. A
+hierarchical subscription in an ancestor bucket matches descendants;
+an exact subscription in an ancestor bucket does not. A `GameplayTag.None`
+subscription receives every event after the tagged subscriptions.
+
+- `DOCS` `UAbilityTask_WaitGameplayEvent` documents `OnlyMatchExact`:
+when it is false, nested tags can trigger the wait.
+- `DIFF` Unreal routes through the actor's ability system. VOLT indexes
+by tag directly, so dispatch scales with matching subscriptions rather
+than with the number of listeners on unrelated tags or with the number
+of abilities. With no subscriptions a publish is one counter check
+(about 3 ns in the measured table).
+- `DIFF` delivery order is specified: exact bucket first, then each
+ancestor nearest to farthest, then wildcard; within a bucket, the
+newest subscription runs first. Unreal does not document an ordering
+contract for its event callback map.
+
+**Rule.** Dispatch captures the matching subscriptions and their
+generations before invoking any handler. Each delivery revalidates the
+subscription and the scoped owner. A handler may subscribe,
+unsubscribe itself or another subscription, publish another event,
+cancel an ability, complete or cancel a task, or destroy an entity.
+A subscription removed during dispatch does not run; a subscription
+added during dispatch does not receive the event already in flight.
+
+- `DIFF` this is the same snapshot-and-revalidate rule the ability
+  system uses for bulk operations (section 4.6). Unreal code generally
+  iterates its callback arrays directly, so mutation during a callback
+  is the caller's responsibility.
+
+**Rule.** Recursive publishing is bounded at 16 nested dispatches. A
+handler that publishes without a terminating condition receives an
+`InvalidOperationException`; the depth counter is released in `finally`
+and subscriptions committed before the exception remain committed.
+
+- `DIFF` Unreal has no equivalent recursion guard in its event
+  delivery; an unbounded handler would recurse until the stack fails.
+
+**Rule.** A subscription may be scoped to an entity. Destroying that
+entity removes all of its scoped subscriptions before the world
+recycles the index. A scoped subscription stores the owner's
+generation, so a recycled index cannot revalidate the old subscription.
+Unscoped subscriptions live until removed or the system is disposed.
+
+- `DIFF` Unreal's ability system owns its event delegates and tears
+  them down with the component. VOLT keys subscriptions by entity and
+  must handle world-wide destruction explicitly, as the other stores
+  do (section 4.10).
+
+**Rule.** Notifications are post-commit. A throwing handler propagates
+to the publisher. Subscriptions added or removed before the throw stay
+committed; later deliveries in that dispatch do not run; the dispatch
+depth is released.
+
+## 5.2 Task identity and ownership
+
+**Rule.** A task is owned by an activation token, not by a grant. The
+token carries the grant handle and the activation serial number. A
+task started for an earlier activation cannot complete, cancel,
+continue, or end a later activation of the same grant.
+
+- `DOCS` an `UAbilityTask` has an `Ability` field described as the
+  gameplay ability that created it, and Epic states that a task is
+  guaranteed to end no later than its owning ability.
+- `DIFF` Unreal tasks are `UObject`s bound to the ability instance.
+  VOLT uses a compact record with an activation token, so a retrigger
+  creates a different owner identity without allocating a new managed
+  task object. The token is also part of the task handle.
+
+**Rule.** A task handle embeds the task system identity, the owner
+entity, the task slot, the slot generation, and the owning activation
+id. A handle from another task system, a completed task, a cancelled
+task, a previous activation, or a recycled slot does not resolve.
+`Cancel`, `Complete`, and `TryGetTask` return `false` for such a
+handle; they do not throw.
+
+- `DIFF` Unreal's task pointers are object references, so a stale
+pointer is only as safe as its UObject lifetime. VOLT's handles are
+value types and are checked against the slot generation and activation
+identity on every use.
+
+**Rule.** Task state is pooled. Each pending task is one record in a
+system-wide slot array, linked into its activation's list and its
+owner's list. There is no managed object per task, no virtual task
+class hierarchy, and no delegate per task. Kinds are discriminated by
+`GameplayAbilityTaskKind`, with kind-specific fields in the same
+record.
+
+- `DIFF` Unreal uses a class per task (`UAbilityTask_WaitDelay`,
+  `UAbilityTask_WaitGameplayEvent`, and so on) with virtual
+  `Activate`/`OnDestroy` behavior. VOLT keeps the kinds as data so a
+  wait does not allocate and does not pay for a virtual dispatch. New
+  kinds add a value to the enum and a branch where their semantics
+  differ; they do not add a class or a per-task object.
+
+**Rule.** The task runtime is created on first use. A definition with
+no plan and no application task never allocates the task system, never
+subscribes to tag changes, and never enters a deadline heap.
+
+- `DIFF` Unreal's ability system has one ability task component whose
+  task array exists as part of the component. VOLT's lazy ownership is
+  stricter: the feature costs nothing until a task exists.
+
+## 5.3 Duration tasks and scheduling
+
+**Rule.** `WaitDuration` completes after a number of simulation
+seconds. Time is whatever the caller passes to
+`GameplayAbilityTaskSystem.Advance`; the runtime has no wall clock and
+no thread. A zero step is a no-op, which is how a paused game behaves.
+Time scaling is the caller's scaled step. A negative, NaN, or infinite
+step throws.
+
+- `DOCS` `UAbilityTask_WaitDelay` waits for a time and exposes an
+  `OnFinish` delegate. Epic's page does not state whether that timer is
+  world time, game time, or affected by pause or dilation.
+- `INFER` Unreal's timer manager is normally driven by world time, so
+  `WaitDelay` is likely affected by pause and time dilation. VOLT does
+  not rely on that inference: it takes the scaled step explicitly, so
+  pause, scaling, and single-stepping are deterministic and testable.
+- `DIFF` VOLT deadlines are not Unreal timer handles. They live in a
+  binary min-heap ordered by `(deadline, creation sequence)`, with a
+  per-task heap index for O(log n) cancellation. No captured delegate
+  is created per task. A large step completes the deadlines pending at
+  the start; tasks created by those completions are deferred to the
+  next advance (section 5.13).
+- `DIFF` `Volt.Core.Timing.SimulationScheduler` schedules registered
+  delegates against the fixed-step clock. Reusing it would require a
+  delegate or capture per task and would not expose the per-entry
+  cancellation and generation checks a task handle needs. The task
+  heap stores values only and supports O(log n) removal; the caller
+  drives it with the same scaled step.
+
+**Rule.** Task creation never completes a task synchronously. A zero
+duration task is scheduled at the current simulation time and completes
+during the next positive `Advance`. A task created during an advance is
+eligible on the next advance, even if its deadline has already passed.
+This bounds work per step and matches the one-frame latency of a
+zero-duration timer.
+
+- `DIFF` Unreal's `ReadyForActivation` runs during the ability's
+  execution and a zero-time timer may fire on a later frame. VOLT makes
+  the deferral explicit and uniform for all task kinds.
+
+**Rule.** A large advance processes every task that was pending and due
+when the call started, in `(deadline, sequence)` order. Equal deadlines
+complete in creation order. A task created by a completion handler is
+deferred to the next advance, so one handler cannot extend the current
+step without bound. Because the deferred task starts from the
+end-of-step clock, chained waits are not independent of how a large
+manual advance is subdivided; the fixed-step loop is the supported
+deterministic path (section 5.13).
+
+- `DIFF` Unreal processes timers per frame through its timer manager.
+  VOLT's due-time ordering is deterministic for a given fixed-step
+  sequence.
+
+## 5.4 Gameplay-event tasks
+
+**Rule.** `WaitEvent` completes when the first matching event is
+delivered. A wait can match exactly or hierarchically and can filter by
+source, target, or both. It is one-shot: the subscription is removed
+before the completion notification. Several tasks may wait for the same
+event; each receives it once, in subscription order.
+
+- `DOCS` `UAbilityTask_WaitGameplayEvent` listens for a tag event and
+  keeps listening while `OnlyTriggerOnce` is false; `OnlyMatchExact`
+  controls nested-tag matching, and `OptionalExternalTarget` redirects
+  the wait. Epic's page documents the one-shot listening behavior but
+  not whether the task ends itself after the first event.
+- `DIFF` VOLT's event task is always one-shot. Repeating waits are
+  expressed by starting another task; there is no boolean that changes
+  the lifetime of the subscription. This keeps cleanup a single rule.
+
+**Rule.** An event task delivers on the simulation step that publishes
+the event, not on the next advance. A completion handler therefore runs
+inside `Publish`. Because the task is removed before the handler, a
+handler that publishes the same event again cannot complete the same
+task twice.
+
+- `DIFF` Unreal event delivery is synchronous inside the ability
+  system call as well, but the task's cleanup detail is not documented.
+  VOLT specifies the order: unlink, unsubscribe, remove any deadline,
+  then notify.
+
+**Rule.** When an event arrives, the task revalidates its activation.
+If the activation has ended but the task was not released (an
+inconsistent state that should not occur through the public API), the
+task is released silently rather than completing work for a dead
+activation.
+
+- `DIFF` defensive release instead of delivering to a dead owner. This
+  mirrors the gameplay stores' generation checks at their boundaries.
+
+## 5.5 Tag-condition tasks
+
+**Rule.** `WaitTag` completes when a tag becomes present or absent. The
+condition is evaluated when the task starts and on each tag change for
+the owner; it is not polled. If the condition already holds at start,
+the task is armed at the current time and completes on the next
+positive advance. If it holds because of a later tag change, the task
+is armed at that change and completes on the next advance. If the
+condition flips back before that advance, the task stays pending and
+waits for the next matching change.
+
+- `DOCS` Epic's ability task documentation lists tasks that wait on
+  gameplay events; it does not document a tag-presence wait helper with
+  these exact semantics. This is a VOLT capability built on the tag
+  store's change notification.
+- `DIFF` Unreal's common pattern is a repeating timer or a custom task
+  that polls or binds to tag delegates. VOLT indexes tag-condition
+  tasks in a per-owner list, so a tag change visits only the tasks that
+  watch tags, not every duration or event task the entity owns.
+- `DIFF` exact versus hierarchical matching is explicit via the `exact`
+  parameter. The default accepts a granted descendant, matching the tag
+  store's hierarchical `HasTag`.
+
+**Rule.** A tag-condition task must have a registered tag; a wait mode
+other than `Present` or `Absent` throws when the task is created. A
+task with an invalid tag is rejected by the ability plan builder as
+well.
+
+## 5.6 Ability integration and plans
+
+**Rule.** An activated ability can start tasks through
+`GameplayAbilitySystem.Tasks`. Tasks are created only while the
+activation is the current activation of its grant; otherwise the start
+returns `GameplayAbilityTaskHandle.None`. Ending, cancelling, revoking,
+or destroying an ability releases every task of its activation before
+the ability notification is raised.
+
+- `DOCS` Epic states a task may end itself with `EndTask` or be
+  terminated when its owning ability ends, and is guaranteed to end no
+  later than the ability. `UGameplayTask::TaskOwnerEnded` kills the task
+  and calls `OnDestroy`.
+- `DIFF` VOLT has no `UObject` task to destroy. Releasing the record
+  unlinks it from both lists, removes its event subscription and
+  deadline, decrements the pending counter, and retires its generation.
+  It then raises one `Cancelled` notification per task.
+- `DIFF` cancellation notifications are raised after all of the
+  activation's tasks are unlinked, not one by one during unlink. A
+  handler therefore never observes a partially torn-down task set, and
+  a handler that queries the activation's pending count sees zero.
+
+**Rule.** A plan is immutable authored data: wait for a duration, wait
+for an event, wait for a tag, apply an effect, publish an event, or end.
+The plan builder validates its steps and the definition builder keeps
+the ability active while a plan exists. A plan step owns exactly one
+task at a time; when that task completes, the runtime advances to the
+next step. The end of the plan ends the ability normally.
+
+- `DIFF` Unreal expresses this sequence in the ability's
+  `ActivateAbility` body with `UAbilityTask` nodes and latent Blueprint
+  execution. VOLT's plan is data, so an ability definition can be
+  authored, shared, and tested without a derived class. A plan has no
+  branching, loops, or per-step conditions; those belong in application
+  code using the low-level task API.
+
+**Rule.** If game code cancels a task that is the current plan step,
+the ability ends normally instead of staying active with no pending
+task. Cancellation caused by the ability's own end is ignored by the
+plan driver because the activation has already been marked inactive.
+
+- `DIFF` Unreal's latent nodes typically resume or abort through their
+  own delegates; there is no single "cancelled step ends the ability"
+  rule. VOLT chooses the rule that cannot leave a plan stalled.
+
+**Rule.** Retriggering ends the old activation and starts a new one.
+The old activation's tasks are cancelled with the old token before the
+new activation is committed. A stale task handle cannot cancel a task
+of the new activation, and a completion from the old activation cannot
+end or mutate the new one.
+
+- `DIFF` Unreal's instanced-per-actor abilities can reuse the same
+  ability object; VOLT's activation token makes the identity boundary
+  explicit and testable.
+
+**Rule.** Ending an ability with pending tasks is not an error. The
+ability's `Ended` or `Cancelled` notification is raised after the task
+cancellation notifications. Revocation raises `Cancelled` for the
+ability after cancelling its tasks, then `Revoked`. Destroying the
+owner releases grants and tasks silently, with no notifications.
+
+- `DIFF` Unreal's `EndAbility` ends tasks as part of the ability's
+  teardown; VOLT fixes the notification order so observers cannot see
+  a live task after the ability is gone.
+
+## 5.7 Developer API
+
+**Rule.** The runtime exposes two layers over one execution system:
+
+- Low-level: `GameplayAbilitySystem.Tasks` with `WaitDuration`,
+  `WaitEvent`, `WaitTag`, `Cancel`, `Complete`, `TryGetTask`,
+  `CopyTasks`, `CancelAll`, and the `Changed` notification.
+- Composition: `GameplayAbilityPlan.Create()` with `Wait`, `WaitEvent`,
+  `WaitTag`, `ApplyEffect`, `PublishEvent`, and `End`, attached with
+  `GameplayAbilityDefinitionBuilder.Plan`.
+
+Both create the same `TaskSlot` records and use the same event router
+and deadline heap. The plan layer does not have a second scheduler.
+
+- `DIFF` Unreal has one task class hierarchy and latent Blueprint
+  nodes; VOLT separates the low-level runtime from the authoring
+  composition so a data definition can stay declarative while game code
+  can still start and cancel arbitrary tasks.
+
+**Rule.** A task handle is not needed to keep a task alive. The task
+runtime owns it until completion, cancellation, or ability end. A
+handle is only needed to cancel, complete, or inspect a specific task.
+
+**Rule.** `GameplayAbilityTaskChange` reports `Started`, `Completed`,
+or `Cancelled`, with the task kind, completion reason, plan step, and
+the event that completed an event task. The payload is a value type and
+the notification allocates nothing.
+
+## 5.8 Integrated demonstration
+
+`samples/Volt.GameplayDemo` is a deterministic, graphics-free console
+application. It runs these scenarios and asserts each result:
+
+1. Charged Dash pays 10 stamina, starts a 0.25 s wind-up, waits for
+   `Event.Dash.Released`, applies a 0.5 s speed buff that grants
+   `Status.Dashing`, then waits for the tag to disappear and ends.
+2. A stun during the wind-up cancels the ability. The paid cost and
+   cooldown remain, the pending task is released, a stale task handle
+   is refused, and a late release event is not delivered.
+3. Charged Dash and Focus run concurrently with one task each.
+   Cancelling the dash leaves the focus activation and its task
+   untouched.
+4. Application tasks use the low-level API with no plan: a duration
+   task is inspected, completed, and shown stale; ending an ability
+   cancels its task; a stale handle cannot cancel a task of the next
+   activation.
+5. Destroying an owner with a pending task releases it, and a later
+   event is not delivered to the destroyed owner.
+
+Run it with:
+
+```bash
+dotnet run --project samples/Volt.GameplayDemo -c Release
+```
+
+The sample prints every transition and exits non-zero if an assertion
+fails, so it can be used as a smoke test in addition to the unit suite.
+
+## 5.9 Determinism and exception policy
+
+**Rule.** On one thread with one sequence of `Advance` calls, task
+completion order is deterministic. Duration and tag tasks are ordered
+by `(deadline, sequence)`; event tasks are ordered by subscription
+order within the event router. Task slots are allocated from a free
+list and retired with a new generation, so slot reuse does not change
+observable order.
+
+**Rule.** Task notifications are post-commit. A `Completed` or
+`Cancelled` handler observes the task already unlinked, unsubscribed,
+and removed from the heap. A `Started` handler observes a pending task.
+A handler may start or cancel tasks, publish events, end the ability,
+revoke the grant, or destroy the owner. Every path revalidates the
+activation and generation instead of trusting a captured slot.
+
+**Rule.** An exception from a task or event handler propagates to the
+caller. State committed before the exception remains committed. If a
+completion handler throws, the remaining tasks due in that advance are
+not processed; the task that threw is already retired, and the advance
+re-entrancy flag is released in `finally`. If one task cancellation
+handler throws during ability teardown, the remaining cancellation
+notifications for that activation are skipped, but every task has
+already been released and the ability end still completes. Exceptions
+are never swallowed. A plan step or activation-commit exception is
+terminal: the activation is cancelled and the exception is rethrown,
+as specified in section 5.12.
+
+- `DIFF` Unreal generally logs or guards delegate failures; VOLT's
+  contract is that the exception reaches the caller and internal state
+  stays consistent. This mirrors the effect and ability systems.
+
+## 5.10 Edge-case matrix
+
+| Case | Expected | Evidence |
+| --- | --- | --- |
+| Publish with no subscriptions | returns 0; no allocation | `DIFF` |
+| Publish an unregistered tag | throws | `DIFF` |
+| Exact subscription on an ancestor | does not receive a descendant event | `DIFF` |
+| Hierarchical subscription on an ancestor | receives a descendant event | `DOCS` |
+| Wildcard subscription | receives every event after tagged subscriptions | `DIFF` |
+| Two tasks wait for one event | each receives it once, in subscription order | `DIFF` |
+| Handler unsubscribes itself | its remaining code runs; later candidates unaffected | `DIFF` |
+| Handler unsubscribes another pending subscription | that subscription does not run | `DIFF` |
+| Handler subscribes during dispatch | new subscription misses the in-flight event | `DIFF` |
+| Handler publishes recursively | nested dispatch uses its own capture buffer | `DIFF` |
+| Recursion beyond 16 levels | throws; depth is released | `DIFF` |
+| Handler throws | exception propagates; committed subscriptions remain | `DIFF` |
+| Subscription scoped to a destroyed entity | removed silently; stale index cannot revalidate | `DIFF` |
+| Handle from another task system | rejected | `DIFF` |
+| Stale task handle | `Cancel`/`Complete`/`TryGetTask` return false | `DIFF` |
+| Task from a previous activation | cannot cancel or end the new activation | `DIFF` |
+| Zero-duration task | completes on the next positive advance | `DIFF` |
+| Negative or non-finite duration | throws | `DIFF` |
+| Negative or non-finite advance | throws | `DIFF` |
+| Zero advance | no work; zero-duration tasks wait | `DIFF` |
+| Large advance | every due task in deadline order | `DIFF` |
+| Equal deadlines | creation order | `DIFF` |
+| Task created during an advance | eligible on the next advance | `DIFF` |
+| Task created during a completion handler | eligible on the next advance | `DIFF` |
+| WaitTag condition already true at start | armed at current time; completes next advance | `DIFF` |
+| WaitTag condition flips back before advance | stays pending; next change re-arms | `DIFF` |
+| Tag change with no tag tasks | does not walk the owner's task list | `DIFF` |
+| End with pending tasks | all released; cancellation notifications precede ability notification | `DIFF` |
+| Cancel during a task completion | activation ends; remaining tasks released | `DIFF` |
+| Revoke with pending tasks | tasks cancelled, then `Cancelled`, then `Revoked` | `DIFF` |
+| Owner destroyed with pending tasks | released silently; counters reach zero | `DIFF` |
+| Entity index recycled during destruction | old tasks released before the new generation adopts the slot | `DIFF` |
+| Retrigger with pending tasks | old tasks retire with the old token | `DIFF` |
+| System disposed with pending tasks | subscriptions removed and records cleared | `DIFF` |
+| Cancelled plan step | ability ends normally | `DIFF` |
+| Completion handler ends the ability | remaining tasks released; no stale completion | `DIFF` |
+| Completion handler reactivates the ability | old activation cannot affect the new one | `DIFF` |
+| Completion handler throws | task retired; advance flag released | `DIFF` |
+| Event task after ability end | no delivery; subscription removed | `DIFF` |
+| Event task after owner destruction | no delivery; subscription removed | `DIFF` |
+| Task cancellation handler throws | all tasks already released; ability end completes | `DIFF` |
+| Plan step handler throws | activation cancelled; tasks released; cost kept; exception rethrown | `DIFF` |
+| Plan failure cleanup also throws | `AggregateException` with both failures; activation inactive | `DIFF` |
+| Cost or cooldown notification throws during commit | activation cancelled; committed effect kept | `DIFF` |
+| Task created by a completion | deferred to next advance; zero duration included | `DIFF` |
+| Zero task created during a completion | does not starve equal deadlines already due | `DIFF` |
+| Tag change with 10,000 unrelated tag waits | visits only the changed tag's buckets | `DIFF` |
+| High tag id with one event listener | one segment allocated, not a dense tag array | `DIFF` |
+| Manual `Advance` while integrated | `InvalidOperationException`; no double advance | `DIFF` |
+| Integration disposed | callback unregistered; manual advancement restored | `DIFF` |
+| Paused loop | no gameplay advancement; `StepOnce` advances one delta | `DIFF` |
+
+## 5.11 Performance
+
+**Rule.** Event dispatch scales with matching subscriptions, not with
+the number of listeners on unrelated tags. With no subscriptions the
+cost is a counter check. Task maintenance is driven by an indexed
+subscription or a due deadline; an idle task is not visited per frame.
+
+The event table measures the number of listeners configured on the
+same tag (relevant), on a different tag (irrelevant), or on an ancestor
+(hierarchical). The no-listener case uses a separate system.
+
+| Workload | 1,000 listeners | 10,000 listeners | Allocated |
+| --- | ---: | ---: | ---: |
+| Publish, no listeners | 3.2 ns | 3.4 ns | 0 B |
+| Publish, one listener | 40.1 ns | 43.3 ns | 0 B |
+| Publish, many relevant | 18.4 µs | 201.6 µs | 0 B |
+| Publish, many irrelevant | 21.6 ns | 18.2 ns | 0 B |
+| Publish, hierarchical | 42.3 ns | 39.5 ns | 0 B |
+| Subscribe and unsubscribe | 22.9 ns | 16.5 ns | 0 B |
+
+Many relevant deliveries cost about 18 to 20 ns per listener.
+Many irrelevant listeners cost the same as an empty bucket: the 10,000
+subscriptions on another tag are not visited. Hierarchical delivery
+costs about the same as one exact listener plus an ancestor bucket
+walk.
+
+| Warmed task operation | Mean | Allocated |
+| --- | ---: | ---: |
+| Start and cancel a duration task | 92.5 ns | 0 B |
+| Start and complete a duration task | 77.8 ns | 0 B |
+| Start and cancel an event task | 93.1 ns | 0 B |
+| Start and complete an event task | 143.3 ns | 0 B |
+| Start and cancel a tag task | 113.2 ns | 0 B |
+| Start, satisfy, and release a tag task | 254.3 ns | 0 B |
+| Advance with no tasks | 4.9 ns | 0 B |
+
+| Idle population | Advance cost | Allocated |
+| ---: | ---: | ---: |
+| 1,000 tasks | 4.9 ns | 0 B |
+| 10,000 tasks | 5.8 ns | 0 B |
+| 100,000 tasks | 5.3 ns | 0 B |
+
+The idle advance is constant within measurement noise: 100,000 idle
+tasks do not cost 100,000 checks. The runtime reads the heap root,
+sees it is not due, and returns. This is the critical performance rule
+for this milestone.
+
+| Batch operation | 1,000 tasks | 10,000 tasks |
+| --- | ---: | ---: |
+| Expire all due tasks | 1,165 µs | 4,005 µs |
+| Cancel all tasks | 321 µs | 893 µs |
+| End an ability with tasks | 236 µs | 648 µs |
+| Destroy an owner with tasks | 98 µs | 437 µs |
+
+Batch expiry is about 0.4 µs per task at 10,000 and includes one
+completion notification and one release per task. Batch cancellation
+is about 0.09 µs per task; ending an ability is about 0.065 µs per
+task; destroying the owner is about 0.044 µs per task. The batch
+numbers have wide error bars at this sample size and are indicative of
+linear scaling, not precise constants.
+
+The task benchmarks were run on the cloud verification VM (2 logical
+cores, .NET 10.0.13) with `--warmupCount 1 --iterationCount 3`; the
+earlier parts' tables were measured on the workstation. Absolute
+values are therefore not directly comparable. The scaling shape and
+the zero-allocation results are.
+
+**Allocation evidence.** The single-task and idle rows report zero
+managed allocation from `MemoryDiagnoser`. The batch benchmark classes
+use one measured invocation per iteration to pair cleanup with the
+operation, so the in-process harness's per-invocation overhead would
+swamp a memory column; their allocation claim is instead guarded by
+`GameplayAbilityTaskAllocationTests`, including a 10,000-task bulk
+expiry, 256-task ability ending, event completion, tag completion, and
+the idle population. Those guards measure
+`GC.GetAllocatedBytesForCurrentThread` around the warmed operations and
+assert exactly zero.
+
+**Workload sources.** `GameplayEventBenchmarks`,
+`GameplayAbilityTaskBenchmarks`,
+`GameplayAbilityTaskIdleBenchmarks`,
+`GameplayAbilityTaskScalingBenchmarks`, and
+`GameplayAbilityTaskDestructionBenchmarks` in
+`benchmarks/Volt.Benchmarks`.
+
+## 5.12 Plan failure and activation exception policy
+
+**Rule.** A plan step that throws cancels its activation, releases
+every task and subscription, clears the plan cursor, and rethrows the
+original exception. The ability is inactive when the caller receives
+the exception; it is never left active with no pending task and no
+step that could resume it. Costs and cooldowns already committed are
+deliberately not rolled back, exactly as in any other cancellation.
+
+- The cursor is cleared before cancellation notifications run, so a
+  task cancellation handler cannot try to resume the broken plan.
+- The activation raises its normal `Cancelled` notification. A
+  failure during the initial commit may occur before `Activated` was
+  observed; the committed mutation still remains, and the activation
+  is cancelled rather than silently stranded.
+- If a cleanup notification also throws, the original failure and the
+  cleanup failure are reported in an `AggregateException`; neither is
+  swallowed or allowed to replace the other silently.
+- A failed plan does not revoke the grant. Once the throwing listener
+  is removed and any cooldown has expired, the ability can be
+  activated again from its first step.
+- An effect step whose target is no longer alive is skipped, matching
+  an application that cannot reach its target; it is not an
+  exception and does not fault the plan.
+
+Exceptions from the effect, event, task, and ability notification
+loops remain post-commit and propagate to the caller. The plan policy
+adds a terminal state for a failure that would otherwise strand an
+active activation; it does not change the existing rule that state
+committed before a notification failure remains committed.
+
+- `DIFF` Unreal's ability tasks generally log or guard delegate
+  failures. VOLT's contract is explicit: plan failure is a
+  cancellation plus propagation, not a silent log.
+- Tests: `GameplayAbilityPlanFailureTests` covers throwing publish,
+  effect, cooldown, duration-resume, event-resume, tag-resume,
+  cancellation-cleanup, and a successful retry after the cause is
+  removed.
+
+## 5.13 Temporal semantics of chained tasks
+
+**Rule.** A completion runs at the end-of-step clock. A task created
+by that completion is eligible on the next advance, even when its
+duration is zero. Chained waits are therefore intentionally not
+independent of how a large step is subdivided:
+
+```text
+A waits 1 s; completing A starts B, which waits 1 s.
+Advance(10)             -> A completes at 10, B is pending until 11
+Advance(1); Advance(9)  -> A completes at 1, B completes at 10
+```
+
+This matches the fixed-step loop and `SimulationScheduler`: work
+registered during a step cannot run in that same step. The alternative
+logical-time replay would require completing every nested link inside
+one call and needs a termination policy for endlessly chained
+callbacks; VOLT deliberately chooses the fixed-step rule instead.
+
+The zero-duration case is moved just past the step boundary
+(`Math.BitIncrement(stepTime)`) when it is created during an advance.
+Without that, an ineligible zero-time task could sit at the heap root
+with the current deadline and starve an equal-deadline task that was
+already pending. A task created before the advance keeps its exact
+deadline and all due tasks from that population complete in order.
+
+- `DIFF` This is a VOLT-specific fixed-step rule, not a claim about
+  Unreal timer behavior.
+- Tests: `GameplayAbilityTaskChainTests` covers one large advance,
+  subdivided advances, zero-duration deferral, equal-deadline
+  starvation, long zero-task chains, and deadline ordering.
+
+## 5.14 Tag-wait index
+
+**Rule.** A tag-condition task is indexed by its watched tag and by
+whether matching is exact or hierarchical. A committed tag mutation
+visits the exact bucket for that tag and, for hierarchical waits, the
+buckets for the tag and each of its ancestors. It does not walk every
+task on the entity.
+
+The tag store exposes an internal `TagChanged(Entity, GameplayTag)`
+notification immediately after the mutation commits and before the
+general `TagsChanged` notification. The task runtime subscribes to the
+detailed event; effects and abilities continue to use the general
+event. The task handler only schedules a deadline and never invokes
+user code.
+
+| Watched tag waits | Relevant add+remove | Irrelevant add+remove |
+| ---: | ---: | ---: |
+| 1 | 161.0 ns | 168.2 ns |
+| 64 | 160.5 ns | 154.4 ns |
+| 1,024 | 166.9 ns | 171.9 ns |
+| 10,000 | 165.4 ns | 173.0 ns |
+
+The pair includes one add and one remove, so each mutation is roughly
+80 ns including the tag store, ability notification, and effect
+notification work. The cost is flat in the number of unrelated waits.
+
+**Tradeoff.** Each entity that has used a tag-condition wait keeps two
+small dictionaries (exact and hierarchical watched tags). They are
+retained when empty and released when the entity is destroyed or its
+slot is recycled. Removing them eagerly would make every later wait on
+that entity allocate a new dictionary, breaking the warmed
+zero-allocation guard. The first tag wait on an entity therefore has a
+one-time dictionary allocation; subsequent start/cancel/completion is
+zero-allocation.
+
+## 5.15 Sparse event-bucket storage
+
+**Rule.** Event bucket heads are stored in 1,024-entry segments
+allocated on demand. A tag id of 100,000 allocates one 4 KiB segment
+and the segment pointer table, not a dense `int[100,001]` array.
+Bucket lookup is one segment load plus one index, and the hot publish
+path remains two loads instead of one.
+
+Measured on the cloud verification VM:
+
+| Registered tags | Publish one listener | Subscribe + unsubscribe | Router + one listener allocated |
+| ---: | ---: | ---: | ---: |
+| 1,000 | 23.1 ns | 17.4 ns | 5,960 B |
+| 100,000 | 24.7 ns | 17.9 ns | 6,712 B |
+
+The extra 752 bytes at 100,000 tags is the wider pointer table plus one
+additional 4 KiB segment for the used bucket. A dense array would need
+about 400 KiB for the same id range. Existing exact, hierarchical,
+irrelevant, and wildcard routing benchmarks are unchanged in shape.
+
+- `DIFF` Unreal's generic event callback map is a tag-keyed map; the
+  segmented table is a VOLT storage choice for predictable lookup and
+  sparse memory.
+- Tests: `GameplayEventSystemTests` and
+  `GameplayEventReentrancyTests` continue to cover exact, hierarchical,
+  wildcard, source/target, recycling, and recursion behavior.
+  `GameplayEventSparseBenchmarks` covers the long-id case.
+
+## 5.16 Automatic fixed-step integration
+
+**Rule.** `GameplaySimulation` is an optional composition object in
+`Volt.Gameplay` that registers one post-fixed-update callback on an
+existing `GameLoop`. It does not create a clock, timer, thread, or
+second scheduler. `Volt.Core` still knows nothing about gameplay.
+
+```csharp
+using Volt.Core.Timing;
+using Volt.Gameplay.Simulation;
+
+GameLoop loop = new();
+GameplaySimulation simulation = new(loop, abilities, effects);
+
+// The application advances the loop once per rendered frame.
+loop.Advance();
+```
+
+The order inside one executed fixed step is:
+
+1. Game fixed-update callbacks, in registration order.
+2. Scheduled simulation callbacks due on that step.
+3. The gameplay integration:
+   a. `GameplayEffectSystem` advances by the loop's fixed delta. Expiry
+      and period work runs, tag grants/removals commit, and tag-driven
+      ability cancellation or tag-task arming happens here.
+   b. `GameplayAbilityTaskSystem` advances by the same fixed delta.
+      Duration and tag deadlines that were already pending complete in
+      deadline order. Event tasks were completed synchronously when
+      their event was published.
+   c. Plan continuations run from task completion notifications, and
+      may apply effects or publish events. Those effects and events are
+      immediate, just as they are without the integration.
+4. Remaining post-fixed-update callbacks, in registration order after
+   the integration.
+
+Consequences follow these rules:
+
+- A task started by game fixed-update logic is advanced in the same
+  step's gameplay phase, so a wait whose deadline equals the fixed
+  delta completes in that step.
+- An effect applied by game fixed-update logic advances in the same
+  step, so a one-step effect can expire and remove its tag in that
+  step.
+- A task created during a completion callback is deferred to the next
+  step (section 5.13). There is no unbounded same-step chain.
+- A tag-condition task armed by an effect expiry is completed in the
+  same step's task phase, not the next one. A composite wait that
+  watches that tag completes in the same phase.
+- A custom task completed from a fixed-update callback continues its
+  plan before the gameplay phase, so an effect the plan applies advances
+  in that same step. A custom task completed during the task phase is
+  continued before the step ends. The application owns custom signal
+  subscriptions and releases them on the task's terminal `Changed`
+  notification.
+- Events published during fixed updates are delivered before the
+  effects phase. Events published from effects or task completions are
+  delivered during the gameplay phase, before later post-fixed
+  callbacks.
+- With no gameplay state, the integration costs one callback and two
+  clock comparisons. It does not create the task runtime unless an
+  ability uses a task.
+- Pausing the loop skips the integration entirely; `StepOnce` runs it
+  exactly once. Time scaling changes how many fixed steps the loop
+  executes, never the fixed delta.
+- Catch-up executes the integration once per executed step, so effects
+  and tasks cannot drift from the loop's integer step count.
+
+**Double-advance rule.** While attached, the public
+`GameplayEffectSystem.Advance` and
+`GameplayAbilityTaskSystem.Advance` throw
+`InvalidOperationException`. The integration calls internal
+`AdvanceFromSimulation` methods. This is a check per advance call, not
+per entity. Disposing the integration releases both claims and restores
+manual advancement.
+
+**Ownership.** The integration does not own the world or stores.
+Dispose it before the ability and effect systems. It holds no static
+state, so independent worlds and loops are independent.
+
+A clock claim carries the identity of the integration that took it. The
+effect, task, and ability systems release a claim only when the
+releasing integration is the one holding it, so construction that fails
+part way through releases just the claims it acquired and cannot detach
+another integration. A rejected second integration therefore leaves the
+first one running with its double-advance protection intact.
+
+Construction also requires the supplied effect system to be the exact
+instance the ability system applies costs, cooldowns, and plan effects
+through. Sharing a world is not sufficient: advancing a different
+effect system would leave the ability clocks unmoved even though costs
+and cooldowns are read from this one. The claim is checked when it is
+released and when an advance starts, never per entity or per task, so
+the guarantee costs nothing on the hot path.
+
+A task runtime created after registration inherits the claim, so an
+ability that first uses a task later in the session is still advanced
+by the loop instead of by hand. Disposing the integration does not
+cancel pending tasks or remove subscriptions; it only stops automatic
+advancement.
+
+- `DIFF` Unreal has no directly equivalent fixed-step gameplay driver
+  in the referenced documentation; this ordering is a VOLT design for a
+  deterministic fixed simulation, not a claim about Unreal runtime
+  behavior. No Unreal project was executed in this environment.
+- Tests: `GameplaySimulationTests` covers one advance per step, effect
+  expiry plus tag completion in one step, tasks started from fixed
+  updates, pause, single step, render-only frames, time scale, zero
+  time scale, catch-up, double-advance rejection, teardown, a second
+  integration, and destruction during a fixed step.
+  `GameplaySimulationOwnershipTests` covers foreign-claim release,
+  rejection of an effect system the abilities do not use, failed
+  callback registration, and independent worlds.
+
+## 5.17 Performance additions
+
+All numbers below are from the cloud verification VM (2 logical cores,
+.NET 10.0.13) with `--warmupCount 1 --iterationCount 3`. They are
+indicative and not directly comparable to the earlier workstation
+tables.
+
+| Fixed step | 1,000 population | 10,000 population | 100,000 population | Allocated |
+| --- | ---: | ---: | ---: | ---: |
+| No gameplay | 73.3 ns | 79.3 ns | 83.5 ns | 0 B |
+| Empty integration | 80.0 ns | 89.8 ns | 86.7 ns | 0 B |
+| Idle effects and tasks | 97.9 ns | 98.6 ns | 94.9 ns | 0 B |
+
+The idle gameplay population is constant: 100,000 idle effects and
+100,000 idle tasks add about 11 ns to an empty fixed step. Nothing is
+scanned per frame.
+
+| Event-heavy fixed step | Listeners | Mean | Allocated |
+| --- | ---: | ---: | ---: |
+| Publish one event from a fixed callback | 0 | 90.2 ns | 0 B |
+| | 1 | 125.5 ns | 0 B |
+| | 1,000 | 14.7 µs | 0 B |
+| | 10,000 | 148.4 µs | 0 B |
+
+| Cold batch workload (registration included) | 1,000 | 10,000 | 100,000 |
+| --- | ---: | ---: | ---: |
+| Create and complete duration tasks | 1.21 ms | 2.89 ms | 47.2 ms |
+| Apply and expire effects | 0.86 ms | 3.64 ms | 16.9 ms |
+
+The batch rows include the setup work in the measured method, because
+the in-process harness has no measured-per-invocation reset hook in
+this version. They are cold-path numbers and should not be compared
+with the warmed single-task table. The idle and event rows use warmed
+state and report zero managed allocation.
+
+**Allocation evidence.** `GameplaySimulationTests` and the task/event
+allocation guards measure `GC.GetAllocatedBytesForCurrentThread` around
+warmed integration steps and event/task operations; the benchmark
+`MemoryDiagnoser` columns are consistent with those guards.
+
+**Workload sources.**
+`GameplaySimulationBenchmarks`,
+`GameplaySimulationEventBenchmarks`,
+`GameplaySimulationTaskBurstBenchmarks`,
+`GameplaySimulationEffectBurstBenchmarks`,
+`GameplayTagWaitScalingBenchmarks`, and
+`GameplayEventSparseBenchmarks`.
+
+## 5.18 Conditions and conditional plans
+
+`GameplayCondition` is an immutable expression over live gameplay
+state. It is authored once and shared by every activation of a plan; the
+runtime stores no per-activation copy and evaluates the same object
+against that activation's owner and target.
+
+```csharp
+GameplayCondition woundedAndStunned = GameplayCondition.All(
+    GameplayCondition.OwnerAttribute(
+        Health,
+        GameplayAttributeComparison.LessThan,
+        30f),
+    GameplayCondition.TargetHasTag(Status.Stunned));
+
+GameplayAbilityPlan plan = GameplayAbilityPlan
+    .Create()
+    .If(woundedAndStunned)
+    .ApplyEffect(EnhancedStrike)
+    .Else()
+    .ApplyEffect(StandardStrike)
+    .EndIf()
+    .End()
+    .Build();
+```
+
+| Condition | Holds when |
+| --- | --- |
+| `OwnerHasTag(tag, exact)` | The owner has the tag, or a descendant when not exact |
+| `OwnerMissingTag` | The opposite of `OwnerHasTag` |
+| `TargetHasTag` / `TargetMissingTag` | The same test on the activation target |
+| `TargetAlive` | The target still exists in the world |
+| `OwnerAttribute` / `TargetAttribute` | The cached current value compares as requested |
+| `All` / `Any` / `Not` | Boolean composition of at most 31 children |
+
+Semantics:
+
+- Evaluation reads live stores: tag grants, cached attribute values,
+  and target aliveness at the moment the step runs. A callback that
+  changes state between two steps is observed by the next branch.
+- A destroyed target fails every target condition, including
+  `TargetMissingTag`: a missing entity is neither present nor absent.
+  `TargetAlive` is the explicit test for that case.
+- A condition tree has at most 32 nodes and 8 levels of nesting.
+  Invalid tags, invalid attributes, non-finite constants, empty
+  `All`/`Any`, and null children are rejected during authoring.
+- Evaluating a condition allocates nothing and reads at most 32 nodes.
+
+**Compilation.** `If(condition)` appends a `Branch` step that jumps when
+the condition is false. `Else()` appends an unconditional `Goto` that
+skips the true branch, and `EndIf()` patches the target of both jumps.
+The running plan stays a flat array with one cursor; there is no nested
+interpreter and no per-activation control-flow object.
+
+- `Build()` rejects an unclosed `If`, a second `Else` in one block,
+  `Else`/`EndIf` without an open block, and any jump that does not move
+  forward inside `0..Count`. Plans therefore cannot loop or run forever
+  inside one activation; `MaximumStepCount` (32) still bounds the
+  whole plan, including branch and jump steps.
+- Conditions are evaluated when the branch step executes, not when the
+  plan is built, so a plan can branch on the result of its own earlier
+  steps.
+- A branch whose target is past the last step ends the ability normally,
+  the same as falling off the end of a plan.
+- `DIFF` Unreal expresses this with blueprint branches or latent ability
+  tasks. VOLT keeps control flow as resolved jumps in a shared plan and
+  deliberately supports no loops; iteration is application code or
+  repeated activations.
+
+Tests: `GameplayConditionTests` covers every kind, live state, a
+destroyed target, and the authoring limits.
+`GameplayAbilityPlanBranchTests` covers true/false selection, no-Else
+fallthrough, nested blocks, state changed after a wait, destroyed
+targets, malformed blocks, and a zero-allocation activation loop.
+
+## 5.19 Custom tasks
+
+A custom task is a registered name, not a callback object. Application
+code owns the signal; the runtime owns the ownership, cancellation, and
+generation checks.
+
+```csharp
+GameplayAbilityTaskDefinition swing =
+    abilities.RegisterTaskDefinition("Swing");
+
+GameplayAbilityDefinition attack = GameplayAbilityDefinition
+    .Create("Demo.Attack")
+    .Plan(
+        GameplayAbilityPlan
+            .Create()
+            .WaitCustom(swing)
+            .ApplyEffect(Hit)
+            .End()
+            .Build())
+    .Build();
+```
+
+Low-level use is the same task runtime:
+
+```csharp
+GameplayAbilityTaskHandle task = abilities.Tasks.WaitCustom(activation, swing);
+
+// Later, when the application's interaction finishes:
+abilities.Tasks.Complete(task);
+```
+
+Lifetime:
+
+1. **Registration.** `RegisterTaskDefinition(name)` creates one
+   definition per ability system. Names are unique; empty names and
+   duplicates throw. Registration belongs to initialization.
+2. **Creation.** A plan step or `WaitCustom` starts one task slot with
+   the activation token, owner, plan step, and definition.
+3. **Initialization.** The slot is linked into the activation and owner
+   lists before the `Started` notification runs.
+4. **Waiting.** The task is not in the deadline heap and has no event
+   subscription. It costs one slot and two list links, and nothing per
+   simulation step.
+5. **Completion.** `Complete(handle)` commits the end, unlinks the slot,
+   and raises `Completed`. A completion handler may start another task,
+   cancel the ability, or destroy the owner; all of those are resolved
+   through the normal generation-checked paths.
+6. **Cancellation.** `Cancel`, ability end, `CancelOnTags`, revocation,
+   and owner destruction release the slot and raise `Cancelled` (owner
+   destruction releases silently, like every other gameplay store).
+7. **Reuse.** The slot is recycled with a new generation, so a stale
+   handle cannot complete, cancel, or inspect the next activation's task.
+
+Guarantees and policies:
+
+- A definition is scoped to the ability system that registered it.
+  Passing another system's definition to `WaitCustom` throws
+  `ArgumentException`; the task is not created.
+- Completion is event-driven. The runtime never polls a custom task and
+  never scans the pending set; an application that waits for an
+  attribute threshold subscribes to `GameplayAttributeStore.Changed`
+  and completes the handle from its handler.
+- The terminal notification is raised after the task state is released.
+  If a completion handler throws, the task and the plan continuation
+  are already committed, and the exception propagates from `Complete`;
+  no half-released task remains. Applications must release their own
+  signal subscriptions on terminal task notifications.
+- One definition serves any number of activations and worlds of the
+  same system. Independent activations have independent slots and
+  handles.
+- `GameplayAbilityTaskInfo.CustomDefinition` identifies the definition
+  of a pending custom task, and `GameplayAbilityTaskInfo.PlanStep`
+  reports the step that started it.
+- `DIFF` Unreal requires a `UAbilityTask` subclass with a static factory
+  and delegates. VOLT deliberately has no managed object per task and no
+  virtual task class: the definition is data and the application decides
+  when the wait ends.
+
+Limitations: there is no per-definition initialization callback and no
+built-in attribute-threshold wait; both are application code on top of
+`Complete`. A custom task cannot carry a typed payload in the slot; use
+the handle as a key in the application's own state, or complete it with
+the gameplay event that carries the data.
+
+Tests: `GameplayAbilityCustomTaskTests` covers completion, dormant
+tasks, start-notification completion and cancellation, ability
+cancellation, owner destruction, exception cleanup, retriggering,
+shared definitions, slot recycling, foreign definitions, and
+registration rules.
+
+## 5.20 Composite Any waits
+
+A composite wait completes when the first of several sources fires. All
+sources live in one task record, so there are no child tasks and no
+group bookkeeping.
+
+```csharp
+GameplayWaitAny guard = GameplayWaitAny
+    .Create()
+    .WithTimeout(0.4f)
+    .OnEvent(GameEvent.IncomingHit)
+    .OnTag(Status.Stunned, GameplayTagWaitMode.Present);
+
+GameplayAbilityPlan plan = GameplayAbilityPlan
+    .Create()
+    .WaitAny(guard)
+    .ApplyEffect(CounterAttack)
+    .End()
+    .Build();
+```
+
+| Source | Stored as | Completion reason |
+| --- | --- | --- |
+| Timeout | One deadline | `Elapsed` |
+| Event tags | One event subscription plus a filter | `ConditionMet`, with the event |
+| Tag condition | One tag-condition link, armed by tag changes | `ConditionMet` |
+
+Semantics:
+
+- At least one source is required; an empty wait throws when it is
+  validated. A wait may combine all three.
+- The first source to fire wins. Completing or cancelling the task
+  releases the losing deadline, subscription, and tag link together, so
+  a race never leaves a losing listener behind.
+- Up to eight event tags can be watched. All of them share one match
+  mode; adding a hierarchical source widens the whole set to
+  hierarchical, because a hierarchical match accepts everything an
+  exact match does. One subscription is used: the nearest common
+  ancestor of the watched tags, or the wildcard subscription when they
+  have none. Delivered events are filtered against the watched set, so
+  unrelated events under the ancestor do not complete the wait.
+- A tag source that holds when the wait starts is armed immediately and
+  completes on the next advance. A tag change that makes the condition
+  hold re-arms the wait; if it flips back before the step, the original
+  timeout is restored rather than lost.
+- A wait whose tag source is armed by an effect expiry completes in the
+  same step's task phase (section 5.16).
+- Event waits complete synchronously when the event is published, as
+  ordinary event tasks do.
+- The task kind is `Any`, so application code can distinguish a race
+  from a single-source wait in `GameplayAbilityTaskChange.TaskKind`.
+- `All` is not implemented as a composite. Waiting sequentially for
+  several level-triggered tag conditions is the documented `All` idiom
+  and has the same result while the conditions persist. Event `All` and
+  nested races require a custom task or application bookkeeping.
+- The reason for not having `All`: it needs parent/child records in the
+  task core (activation lists, deadline heap, tag buckets, cancellation
+  cascades, and nested generation checks). That would add corruption
+  surface to the most delicate part of the runtime for a feature that
+  composes from existing waits. `Any` fits in one record, so it is the
+  supported composite.
+
+Tests: `GameplayAbilityCompositeWaitTests` covers timeout-only,
+zero-timeout, single and multiple events, hierarchical matching,
+event-vs-timeout races, tag sources, an armed-then-disarmed tag with a
+timeout, cancellation cleanup, empty and invalid waits, and a
+zero-allocation event race. `GameplaySimulationAuthoringTests` covers
+composite waits and custom tasks under the fixed-step integration.
+
+## 5.21 Authoring performance
+
+Measured on the cloud verification VM (2 logical cores, .NET 10.0.13)
+with `--warmupCount 1 --iterationCount 3`, so the numbers are
+indicative. Every operation starts and ends an activation, so it
+includes the activation token, plan execution, task bookkeeping, and
+the terminal notification. Single-activation rows allocated 0 bytes.
+Batch start/cancel allocated 0 B, 5 B, and 73 B.
+
+| Operation | Mean |
+| --- | ---: |
+| Activate a 3-step linear plan | 180.6 ns |
+| Activate a conditional plan (false branch) | 180.7 ns |
+| Activate a nested conditional plan | 182.1 ns |
+| Custom task start and complete | 254.8 ns |
+| Custom task start and cancel | 258.7 ns |
+| Any wait completed by an event | 385.3 ns |
+| Any wait completed by a timeout | 279.2 ns |
+| Any wait completed by a tag condition | 529.6 ns |
+
+A branch adds one jump and a condition walk, not a second execution
+engine. A custom task adds the slot link and the same notification path
+as a built-in wait.
+
+| Fixed step | 1,000 | 10,000 | 100,000 |
+| --- | ---: | ---: | ---: |
+| Empty integration | 75.9 ns | 75.5 ns | 74.3 ns |
+| Dormant custom tasks on one activation | 82.0 ns | 80.6 ns | 81.3 ns |
+
+Dormant custom tasks stay about 5–7 ns over an empty integration,
+flat from 1,000 to 100,000 pending tasks. They are absent from the
+deadline heap and from the event index, so no step walks the
+pending set. Batch cost scales with the tasks being created and
+released, not with the fixed step. The batch rows report a few bytes of
+allocated growth from the task slot list; the individual activation
+rows above are zero-allocation. On owner destruction, tasks release
+silently; applications must observe entity destruction to clean up
+external resources.
+
+| Start and cancel N custom tasks | Mean |
+| --- | ---: |
+| 1,000 | 77.9 µs |
+| 10,000 | 769.3 µs |
+| 100,000 | 8.8 ms |
+
+## 5.22 Known limitations
+
+- The gameplay runtime is single-threaded. Events and tasks are not a
+  cross-thread queue, and `Advance` must be called from the simulation
+  thread.
+- Event payloads are a closed discriminated union. Application-specific
+  payloads require extending `GameplayEventPayload`; there is no
+  arbitrary managed context object or boxing path.
+- Event matching is tag-based. There is no separate event channel or
+  string-keyed event name, and source/target filters are entity equality
+  only.
+- An event is delivered synchronously. There is no deferred queue,
+  priority, or cross-frame coalescing. Recursive dispatch is bounded at
+  16 levels.
+- Tag-condition completion waits for the next `Advance` after the tag
+  change, so it has up to one simulation step of latency. This is
+  intentional to keep tag changes free of user callbacks.
+- Plans branch but do not loop. Conditions are the closed set in
+  section 5.18; there is no arbitrary callback condition, no variable
+  storage, and no expression over event payloads. Plans also only apply
+  effects to the owner or the activation target.
+- Composite waits support one timeout, up to eight event tags, and one
+  tag condition. There is no `All`, no nesting, and no composite of
+  custom tasks. Dormant composite waits cost nothing, but each watched
+  event wake-up filters the delivered event against the watched set.
+- Custom tasks are completed by application code. The runtime provides
+  no attribute-threshold wait, tick task, or animation notify; those
+  are application tasks that call `Complete`, or new milestone work.
+- Tasks are not individually paused. Pausing the simulation with a zero
+  step pauses all of them; time scaling applies to all deadlines.
+- Animation notifies and replication prediction remain outside this
+  milestone.
+- The fixed-step integration is a post-fixed phase. An application that
+  needs gameplay to run between specific fixed-update callbacks can use
+  the manual APIs instead; there is no per-callback ordering editor.
+- Manual and automatic advancement cannot be mixed for one set of
+  services in the same frame. Detach the integration to regain manual
+  control.
+- A large manual `Advance` call is not equivalent to several fixed
+  steps for chained task callbacks; the fixed step loop is the
+  supported deterministic path.
+
+# Part 6 — Gameplay cues
+
+Gameplay cues are the presentation edge of the gameplay runtime. They
+carry committed gameplay intent - "this instant hit happened", "this
+burn started and is now at three stacks", "it stopped" - to any
+renderer, audio engine, camera, or UI that wants to consume it. VOLT
+implements the routing and lifetime layer only. There is no renderer,
+audio backend, animation graph, or replication in this milestone.
+
+## 6.1 Cue tags and transitions
+
+**Rule.** A cue is identified by a registered gameplay tag, interpreted
+as a shared presentation action. `Execute` emits one immutable
+`Execute` transition. `Add` creates a persistent instance and emits
+`Added`; `Update` replaces its magnitude, stack count, and payload and
+emits `Updated`; `Remove` retires it and emits `Removed`. Handles are
+system-scoped and generational, so a stale or foreign handle cannot
+update or remove a replacement instance.
+
+- `INFER` Unreal's `FGameplayCueManager` routes by cue tag to
+  `UGameplayCueNotify` assets. VOLT keeps the tag-routed shape and the
+  `Execute`/`Add`/`Update`/`Remove` lifecycle, and leaves the notifier
+  to the application.
+- `DIFF` There is no cue notify asset, no cue parameters tag container,
+  and no automatic reset/loop policy. The payload is a
+  `GameplayEventPayload` plus a magnitude and stack count.
+
+## 6.2 Matching and delivery
+
+**Rule.** Exact listeners receive only the subscribed tag;
+hierarchical listeners also receive every descendant. An optional owner
+scopes a subscription or cue to one entity, and both are retired when
+that entity is destroyed. Dispatch is synchronous and reentrant:
+listeners are captured, then revalidated before each call, so a listener
+removed during dispatch receives no later callback from it, and a
+listener added during dispatch waits for the next one. A listener may
+mutate cue state; state is committed before callbacks run and is never
+rolled back.
+
+## 6.3 Effect-owned cues
+
+**Rule.** A definition may declare a cue tag. An active, uninhibited,
+non-instant instance owns one persistent cue: applying it emits `Added`,
+a stack change emits `Updated`, and inhibition, removal, expiration, or
+target destruction emits `Removed`. Periodic ticks and instant
+applications emit `Execute` transitions instead of persistent ones.
+
+- `SRC` Unreal's `GameplayCueInterface` receives `Execute` and
+  `Add`/`Remove` from `UGameplayCueManager`, driven by active effect
+  events. VOLT drives the same shape from its effect change stream.
+- Cue lifetime follows the instance, not the granted tags. Clearing
+  unowned tags therefore cannot remove an effect's cue.
+
+## 6.4 Binding and late synchronization
+
+**Rule.** A cue system is bound to exactly one effect system in the same
+world, and binding is allowed before or after effects exist. The first
+bind synchronizes the instances that already exist: every uninhibited,
+non-instant instance with a cue tag gets its persistent cue with the
+current source, target, magnitude, and stack count. Inhibited instances
+receive theirs when they resume, and instant instances are not replayed
+because their one-shot was delivered when they applied. Re-binding the
+same system re-runs the synchronization, adopting instances that still
+have no cue and never duplicating one; binding a different system in the
+same world is rejected.
+
+- `INFER` A transition stream alone cannot describe events that happened
+  before the subscription. Explicit synchronization is the deterministic
+  answer; requiring binding first would make the failure a runtime
+  assertion for an otherwise valid setup order.
+
+## 6.5 Presentation handoff
+
+**Rule.** An optional `GameplayCueBuffer` receives every transition in
+addition to synchronous listeners. It is a bounded FIFO: `Drain(Span)`
+copies in order without allocating, the buffer grows geometrically to
+its configured maximum, and overflow throws before enqueueing so no
+transition is silently lost. It is caller-owned and not thread-safe.
+Disposing the buffer before the cue system stops the handoff without
+throwing; synchronous listeners still receive every transition, and
+gameplay cleanup is never interrupted by a dead presentation consumer.
+
+## 6.6 State resolution and exception policy
+
+**Rule.** Cue ownership is resolved against the live instance whenever
+one exists, not against the point-in-time flag in the notification
+payload, because an earlier subscriber may have inhibited, stacked, or
+removed the instance since the change was raised. A cue therefore
+cannot outlive the state that justified it.
+
+**Rule.** Listener exceptions propagate to the caller after the
+transition is committed. A failed `Added` notification rolls the new
+persistent cue back and reports `Removed` for it, so a throwing listener
+cannot leave a half-visible instance. During effect binding
+synchronization, every instance is still visited and the failures are
+reported as one aggregate exception.
+
+## 6.7 Performance
+
+Measured on the cloud verification VM (2 logical cores, .NET 10.0.13)
+with `--warmupCount 1 --iterationCount 3` under `[InProcess]`, so the
+numbers are indicative rather than a tuned baseline. Every warmed
+dispatch row allocated 0 managed bytes.
+
+| Operation | Mean | Allocated |
+| --- | ---: | ---: |
+| Execute with no listeners | 8.1 ns | 0 B |
+| Execute with one exact listener | 48.6 ns | 0 B |
+| Execute with a hierarchical listener on the parent tag | 55.5 ns | 0 B |
+| Execute with 1,000 listeners on an unrelated tag | 17–19 ns | 0 B |
+| Execute with 1,000 relevant listeners | 23.5 µs | 0 B |
+| Add and remove a persistent cue | 89–92 ns | 0 B |
+| Update a persistent cue | 26 ns | 0 B |
+| Subscribe and unsubscribe | 27–28 ns | 0 B |
+| Buffered enqueue and drain of one transition | 18.5 ns | 0 B |
+
+Dispatch is proportional to the listeners that the tag index selects, not
+to the registered population: a thousand unrelated subscriptions do not
+add measurable cost, while a thousand relevant listeners cost about
+23 ns each. Hierarchical matching resolves through the cached ancestry,
+so a descendant dispatch does not walk the registry.
+
+| Persistent cues | 1,000 | 10,000 | 100,000 |
+| --- | ---: | ---: | ---: |
+| Add N cues | 74.1 µs | 570.6 µs | 5.58 ms |
+| Remove N cues | 59.2 µs | 402.8 µs | 5.35 ms |
+| Destroy N entities with a cue-tagged effect | 1.68 ms | 4.20 ms | 55.3 ms |
+
+| Apply and expire N cue-tagged effects, then destroy the entities | 1,000 | 10,000 | 100,000 |
+| --- | ---: | ---: | ---: |
+| Mean | 2.96 ms | 13.9 ms | 87.8 ms |
+
+The batch rows include entity creation and effect bookkeeping, so they
+are a lifecycle envelope rather than a pure cue cost; the per-cue add,
+remove, and update rows above are the isolated operations. The reported
+allocations for a batch (about 7 KB for the cue store plus 88 B per
+effect-and-cue pair at 100,000) are first-use growth of the cue, effect,
+and entity stores, not per-transition allocation. Warm dispatch,
+persistent add/remove/update, buffered handoff, and subscription
+maintenance are zero-allocation. A large idle cue population costs no
+fixed-step work at all: cues are driven by explicit calls and effect
+transitions, and the system has no per-frame scan.
+
+Run the measurement with:
+
+```bash
+dotnet run -c Release --project benchmarks/Volt.Benchmarks -- \
+    --filter '*GameplayCue*' --warmupCount 1 --iterationCount 3
+```
+
+## 6.8 Scope
+
+- Cue tags, magnitudes, stack counts, and payloads are delivered as
+  values; there is no per-cue parameter container, no cue notify graph,
+  and no built-in sound or particle binding.
+- Cue dispatch is synchronous on the gameplay thread. A presentation
+  layer that needs frame-boundary delivery drains the buffer itself.
+- Replication, prediction, and rollback of cue state are not
+  implemented. Nothing in this part makes the runtime networked.

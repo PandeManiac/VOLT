@@ -43,5 +43,11 @@ public enum GameplayEffectChangeKind : byte
 	/// <summary>
 	/// A periodic effect executed its modifiers.
 	/// </summary>
-	PeriodExecuted = 6
+	PeriodExecuted = 6,
+
+	/// <summary>
+	/// An active effect was retired because its target entity was
+	/// destroyed.
+	/// </summary>
+	TargetDestroyed = 7
 }

@@ -45,7 +45,8 @@ public sealed class GameplayEffectDefinition
 		GameplayEffectStackingExpirationPolicy stackExpirationPolicy,
 		GameplayEffectPeriodInhibitionPolicy periodicInhibitionPolicy,
 		bool factorInStackCount,
-		bool executePeriodicOnApplication)
+		bool executePeriodicOnApplication,
+		GameplayTag cueTag)
 	{
 		Name = name;
 		DurationType = durationType;
@@ -64,6 +65,7 @@ public sealed class GameplayEffectDefinition
 		PeriodicInhibitionPolicy = periodicInhibitionPolicy;
 		FactorInStackCount = factorInStackCount;
 		ExecutePeriodicOnApplication = executePeriodicOnApplication;
+		CueTag = cueTag;
 	}
 
 	/// <summary>
@@ -177,6 +179,9 @@ public sealed class GameplayEffectDefinition
 	/// instead of waiting for its first period.
 	/// </summary>
 	public bool ExecutePeriodicOnApplication { get; }
+
+	/// <summary>Gets the optional presentation cue associated with this effect.</summary>
+	public GameplayTag CueTag { get; }
 
 	/// <summary>
 	/// Gets whether the effect executes once and is not tracked.

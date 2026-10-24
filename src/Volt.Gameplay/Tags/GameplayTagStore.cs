@@ -25,6 +25,20 @@ namespace Volt.Gameplay.Tags;
 /// leaves the tag present.
 /// </para>
 /// <para>
+/// Grants are owned. A grant recorded through <see cref="AddTag"/> is
+/// unowned and belongs to the caller; a grant recorded through
+/// <see cref="AddOwnedTag"/> belongs to the gameplay effect instance
+/// that made it. Every release is scoped to the pool it can attribute:
+/// <see cref="RemoveTag"/> and <see cref="Clear"/> release unowned
+/// grants only, and <see cref="RemoveOwnedTag"/> releases owned grants
+/// only. Counting alone cannot tell two owners apart, so scoping the
+/// release is what keeps one owner from decrementing another's grant
+/// after a bulk clear or a direct removal. An effect therefore never
+/// has to reconstruct whether its grant survived: while it holds the
+/// claim, the counts name it, and when it releases the claim it can
+/// only remove a grant it still owns.
+/// </para>
+/// <para>
 /// Handles are validated by generation, so a destroyed entity's index
 /// cannot be read through a stale handle even after the index is
 /// reused. Destruction is also delivered through
@@ -55,7 +69,9 @@ public sealed class GameplayTagStore : IDisposable
 
 	private GameplayTag[] _explicitScratch = new GameplayTag[InitialEntryCapacity];
 	private GameplayTag[] _presentScratch = new GameplayTag[InitialEntryCapacity];
+	private GameplayTag[] _clearScratch = new GameplayTag[InitialEntryCapacity];
 
+	private int _clearDepth;
 	private bool _disposed;
 
 	/// <summary>
@@ -107,6 +123,21 @@ public sealed class GameplayTagStore : IDisposable
 	public event Action<Entity>? TagsChanged;
 
 	/// <summary>
+	/// Reports the exact tag whose grant was just added or removed.
+	/// </summary>
+	/// <remarks>
+	/// This is an internal, allocation-free companion to
+	/// <see cref="TagsChanged"/>. The general event reports only the
+	/// entity, which forces a listener that watches many tags to
+	/// re-evaluate every condition. The task runtime uses this event to
+	/// visit only the tasks indexed by the changed tag and its
+	/// ancestors. It is raised after the mutation is committed and
+	/// before <see cref="TagsChanged"/>, so dependent bookkeeping is
+	/// current before user notifications can mutate the entity again.
+	/// </remarks>
+	internal event Action<Entity, GameplayTag>? TagChanged;
+
+	/// <summary>
 	/// Gets the number of entities that currently have at least one
 	/// tag.
 	/// </summary>
@@ -130,9 +161,118 @@ public sealed class GameplayTagStore : IDisposable
 	/// <remarks>
 	/// Grants are counted, not set. Adding the same tag twice requires
 	/// two removals. Tagging an entity that had none allocates its
-	/// entry array; adding a tag the entity already has does not.
+	/// entry array; adding a tag the entity already has does not. The
+	/// grant is unowned, so only <see cref="RemoveTag"/> and
+	/// <see cref="Clear"/> can release it.
 	/// </remarks>
 	public bool AddTag(Entity entity, GameplayTag tag)
+	{
+		return Grant(entity, tag, owned: false);
+	}
+
+	/// <summary>
+	/// Records one grant owned by a gameplay effect instance.
+	/// </summary>
+	/// <param name="entity">The living entity.</param>
+	/// <param name="tag">The tag to grant.</param>
+	/// <returns>
+	/// <see langword="true"/> when the grant was recorded;
+	/// <see langword="false"/> for the invalid tag.
+	/// </returns>
+	/// <exception cref="ArgumentException">
+	/// The entity is not alive in this store's world.
+	/// </exception>
+	/// <exception cref="ObjectDisposedException">
+	/// The store is disposed.
+	/// </exception>
+	/// <remarks>
+	/// An owned grant stays in the store until the same owner calls
+	/// <see cref="RemoveOwnedTag"/>. Neither a direct
+	/// <see cref="RemoveTag"/> nor a bulk <see cref="Clear"/> releases
+	/// it, which is what keeps an external mutation from invalidating
+	/// the owner's bookkeeping.
+	/// </remarks>
+	internal bool AddOwnedTag(Entity entity, GameplayTag tag)
+	{
+		return Grant(entity, tag, owned: true);
+	}
+
+	/// <summary>
+	/// Removes one unowned grant of a tag from an entity.
+	/// </summary>
+	/// <param name="entity">The entity.</param>
+	/// <param name="tag">The tag to remove.</param>
+	/// <returns>
+	/// <see langword="true"/> when an unowned grant was removed;
+	/// <see langword="false"/> when the entity has no unowned grant of
+	/// the tag or is not alive.
+	/// </returns>
+	/// <remarks>
+	/// <para>
+	/// Ancestor entries are decremented as well and dropped when they
+	/// reach zero, so a parent stops matching exactly when the last
+	/// descendant grant is removed.
+	/// </para>
+	/// <para>
+	/// A tag whose only grants are owned by gameplay effects is not
+	/// removable from outside those effects. Removing it would leave
+	/// the owner holding a claim to a grant that no longer exists, and
+	/// a later release could then decrement an unrelated grant. The
+	/// call therefore reports <see langword="false"/> and changes
+	/// nothing.
+	/// </para>
+	/// </remarks>
+	public bool RemoveTag(Entity entity, GameplayTag tag)
+	{
+		return Release(entity, tag, owned: false);
+	}
+
+	/// <summary>
+	/// Removes one grant owned by a gameplay effect instance.
+	/// </summary>
+	/// <param name="entity">The entity.</param>
+	/// <param name="tag">The tag to remove.</param>
+	/// <returns>
+	/// <see langword="true"/> when an owned grant was removed;
+	/// <see langword="false"/> when the entity holds no owned grant of
+	/// the tag.
+	/// </returns>
+	/// <remarks>
+	/// Unowned grants are never touched, so an owner's late release
+	/// cannot consume a grant another caller made.
+	/// </remarks>
+	internal bool RemoveOwnedTag(Entity entity, GameplayTag tag)
+	{
+		return Release(entity, tag, owned: true);
+	}
+
+	/// <summary>
+	/// Gets the number of grants of a tag that no gameplay effect owns.
+	/// </summary>
+	/// <param name="entity">The entity.</param>
+	/// <param name="tag">The tag.</param>
+	/// <returns>
+	/// The unowned count, or zero when no unowned grant is present.
+	/// </returns>
+	internal int GetUnownedTagCount(Entity entity, GameplayTag tag)
+	{
+		ThrowIfDisposed();
+
+		if (!tag.IsValid || !TryGetSlotLocation(entity, out int segmentIndex, out int offset))
+		{
+			return 0;
+		}
+
+		ref Slot slot = ref _segments[segmentIndex]![offset];
+
+		int entryIndex = FindEntry(slot.Entries, slot.Count, tag);
+
+		return entryIndex >= 0
+			? slot.Entries[entryIndex].ExplicitCount - slot.Entries[entryIndex].OwnedCount
+			: 0;
+	}
+
+	private bool Grant(Entity entity, GameplayTag tag, bool owned)
 	{
 		ThrowIfDisposed();
 
@@ -156,6 +296,12 @@ public sealed class GameplayTagStore : IDisposable
 		ref TagEntry entry = ref slot.Entries[entryIndex];
 
 		entry.ExplicitCount++;
+
+		if (owned)
+		{
+			entry.OwnedCount++;
+		}
+
 		entry.TotalCount++;
 
 		foreach (GameplayTag ancestor in GameplayTagRegistry.Shared.GetAncestors(tag))
@@ -175,27 +321,13 @@ public sealed class GameplayTagStore : IDisposable
 			AppendTaggedIndex((int)entity.Index);
 		}
 
+		TagChanged?.Invoke(entity, tag);
 		TagsChanged?.Invoke(entity);
 
 		return true;
 	}
 
-	/// <summary>
-	/// Removes one grant of a tag from an entity.
-	/// </summary>
-	/// <param name="entity">The entity.</param>
-	/// <param name="tag">The tag to remove.</param>
-	/// <returns>
-	/// <see langword="true"/> when a grant was removed;
-	/// <see langword="false"/> when the entity has no explicit grant
-	/// of the tag or is not alive.
-	/// </returns>
-	/// <remarks>
-	/// Ancestor entries are decremented as well and dropped when they
-	/// reach zero, so a parent stops matching exactly when the last
-	/// descendant grant is removed.
-	/// </remarks>
-	public bool RemoveTag(Entity entity, GameplayTag tag)
+	private bool Release(Entity entity, GameplayTag tag, bool owned)
 	{
 		ThrowIfDisposed();
 
@@ -208,13 +340,32 @@ public sealed class GameplayTagStore : IDisposable
 
 		int entryIndex = FindEntry(slot.Entries, slot.Count, tag);
 
-		if (entryIndex < 0 || slot.Entries[entryIndex].ExplicitCount == 0)
+		if (entryIndex < 0)
 		{
 			return false;
 		}
 
-		slot.Entries[entryIndex].ExplicitCount--;
-		slot.Entries[entryIndex].TotalCount--;
+		ref TagEntry entry = ref slot.Entries[entryIndex];
+
+		if (owned)
+		{
+			if (entry.OwnedCount == 0)
+			{
+				return false;
+			}
+
+			entry.OwnedCount--;
+		}
+		else
+		{
+			if (entry.ExplicitCount == entry.OwnedCount)
+			{
+				return false;
+			}
+		}
+
+		entry.ExplicitCount--;
+		entry.TotalCount--;
 
 		foreach (GameplayTag ancestor in GameplayTagRegistry.Shared.GetAncestors(tag))
 		{
@@ -237,6 +388,7 @@ public sealed class GameplayTagStore : IDisposable
 			ReleaseDenseIndex(ref slot);
 		}
 
+		TagChanged?.Invoke(entity, tag);
 		TagsChanged?.Invoke(entity);
 
 		return true;
@@ -505,15 +657,40 @@ public sealed class GameplayTagStore : IDisposable
 	}
 
 	/// <summary>
-	/// Removes every tag and grant from an entity.
+	/// Removes every unowned tag grant from an entity.
 	/// </summary>
 	/// <param name="entity">The entity.</param>
 	/// <returns>
-	/// <see langword="true"/> when the entity had at least one tag.
+	/// <see langword="true"/> when at least one unowned grant was
+	/// removed.
 	/// </returns>
 	/// <remarks>
+	/// <para>
+	/// Grants owned by gameplay effects are not affected: an effect
+	/// keeps the grant it recorded until it releases it or the effect
+	/// is removed. That is a deliberate contract, not an omission.
+	/// Counts cannot attribute a shared tag to one owner, so a clear
+	/// that also dropped owned grants would leave the effect holding a
+	/// claim to a grant it no longer has, and its later release would
+	/// decrement another caller's grant. Remove the effect, or let it
+	/// expire, to release its contribution.
+	/// </para>
+	/// <para>
+	/// Each removed tag raises <see cref="TagChanged"/> and then the
+	/// entity raises <see cref="TagsChanged"/>, so effects, abilities,
+	/// and tasks observe the committed state exactly as they do for a
+	/// single removal. Notifications run after the counts are
+	/// committed; a listener may tag the entity again, and a nested
+	/// clear of the same entity reports <see langword="false"/>.
+	/// </para>
+	/// <para>
 	/// The entry array is kept for reuse, so tagging the same entity
-	/// again does not allocate unless it needs more capacity.
+	/// again does not allocate unless it needs more capacity. The tag
+	/// scratch buffer is reused as well, so a warmed top-level clear
+	/// allocates nothing. A nested clear raised by a listener snapshots
+	/// its own tags instead, so it cannot disturb the dispatch that is
+	/// still reading the outer snapshot.
+	/// </para>
 	/// </remarks>
 	public bool Clear(Entity entity)
 	{
@@ -526,11 +703,150 @@ public sealed class GameplayTagStore : IDisposable
 
 		ref Slot slot = ref _segments[segmentIndex]![offset];
 
-		bool hadTags = slot.Count > 0;
+		if (slot.Clearing)
+		{
+			return false;
+		}
 
-		ClearSlot(ref slot);
+		int removed = 0;
 
-		return hadTags;
+		for (int index = 0; index < slot.Count; index++)
+		{
+			ref TagEntry entry = ref slot.Entries[index];
+
+			if (entry.ExplicitCount > entry.OwnedCount)
+			{
+				removed++;
+			}
+		}
+
+		if (removed == 0)
+		{
+			return false;
+		}
+
+		// A nested clear raised by a listener of an outer clear cannot
+		// reuse the shared scratch buffer, because the outer dispatch is
+		// still reading it. That rare path snapshots its own tags, so a
+		// warmed top-level clear stays allocation-free.
+		GameplayTag[] tags;
+
+		if (_clearDepth == 0)
+		{
+			EnsureClearScratchCapacity(removed);
+			tags = _clearScratch;
+		}
+		else
+		{
+			tags = new GameplayTag[removed];
+		}
+
+		int written = 0;
+
+		for (int index = 0; index < slot.Count; index++)
+		{
+			ref TagEntry entry = ref slot.Entries[index];
+
+			if (entry.ExplicitCount > entry.OwnedCount)
+			{
+				tags[written++] = entry.Tag;
+			}
+		}
+
+		slot.Clearing = true;
+		_clearDepth++;
+
+		try
+		{
+			for (int index = 0; index < slot.Count; index++)
+			{
+				ref TagEntry entry = ref slot.Entries[index];
+				int unowned = entry.ExplicitCount - entry.OwnedCount;
+
+				if (unowned <= 0)
+				{
+					continue;
+				}
+
+				entry.ExplicitCount = entry.OwnedCount;
+				entry.TotalCount -= unowned;
+
+				foreach (GameplayTag ancestor in GameplayTagRegistry.Shared.GetAncestors(entry.Tag))
+				{
+					int ancestorIndex = FindEntry(slot.Entries, slot.Count, ancestor);
+
+					if (ancestorIndex >= 0 && slot.Entries[ancestorIndex].TotalCount > 0)
+					{
+						int total = slot.Entries[ancestorIndex].TotalCount;
+
+						slot.Entries[ancestorIndex].TotalCount = unowned < total
+							? total - unowned
+							: 0;
+					}
+				}
+			}
+
+			Compact(ref slot);
+
+			if (slot.Count == 0)
+			{
+				ReleaseDenseIndex(ref slot);
+			}
+
+			// The counts are committed before any listener runs, so a
+			// handler that removes, adds, or re-applies an effect observes
+			// a consistent store. Every notification is attempted so one
+			// throwing listener cannot leave another dependent system
+			// unaware of the reset; the failures are collected and thrown
+			// together afterwards. The list is created only on failure, so
+			// a clear with well-behaved listeners allocates nothing.
+			List<Exception>? failures = null;
+
+			for (int index = 0; index < removed; index++)
+			{
+				GameplayTag tag = tags[index];
+
+				tags[index] = default;
+
+				try
+				{
+					TagChanged?.Invoke(entity, tag);
+				}
+				catch (Exception exception)
+				{
+					(failures ??= []).Add(exception);
+				}
+			}
+
+			try
+			{
+				TagsChanged?.Invoke(entity);
+			}
+			catch (Exception exception)
+			{
+				(failures ??= []).Add(exception);
+			}
+
+			if (failures is not null)
+			{
+				throw new AggregateException(failures);
+			}
+		}
+		finally
+		{
+			_clearDepth--;
+
+			// A listener may have destroyed the entity or replaced its
+			// slot, so the guard is cleared through a fresh lookup rather
+			// than the reference captured before the notifications. This
+			// also runs when a notification throws unexpectedly.
+			if (TryGetSlotLocation(entity, out segmentIndex, out offset))
+			{
+				_segments[segmentIndex]![offset].Clearing = false;
+			}
+		}
+
+		return true;
 	}
 
 	/// <summary>
@@ -579,6 +895,7 @@ public sealed class GameplayTagStore : IDisposable
 		_world.EntityDestroyed -= HandleEntityDestroyed;
 
 		TagsChanged = null;
+		TagChanged = null;
 		_segments = [];
 		_taggedCount = 0;
 		_disposed = true;
@@ -642,6 +959,7 @@ public sealed class GameplayTagStore : IDisposable
 
 			slot.Generation = entity.Generation;
 			slot.DenseIndex = -1;
+			slot.Clearing = false;
 			slot.Entries ??= new TagEntry[InitialEntryCapacity];
 		}
 
@@ -729,6 +1047,18 @@ public sealed class GameplayTagStore : IDisposable
 		}
 
 		_taggedIndices[_taggedCount++] = entityIndex;
+	}
+
+	private void EnsureClearScratchCapacity(int required)
+	{
+		if (required <= _clearScratch.Length)
+		{
+			return;
+		}
+
+		Array.Resize(
+			ref _clearScratch,
+			Math.Max(required, _clearScratch.Length * 2));
 	}
 
 	private void EnsureScratchCapacity(int required)
@@ -845,12 +1175,14 @@ public sealed class GameplayTagStore : IDisposable
 		public int DenseIndex;
 		public TagEntry[] Entries;
 		public int Count;
+		public bool Clearing;
 	}
 
 	private struct TagEntry
 	{
 		public GameplayTag Tag;
 		public int ExplicitCount;
+		public int OwnedCount;
 		public int TotalCount;
 	}
 }

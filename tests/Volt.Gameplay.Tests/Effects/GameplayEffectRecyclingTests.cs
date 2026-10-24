@@ -14,6 +14,33 @@ namespace Volt.Gameplay.Tests.Effects;
 public sealed class GameplayEffectRecyclingTests
 {
 	[Fact]
+	public void EffectHandle_FromAnotherSystemCannotResolveOrRemoveLocalInstance()
+	{
+		using World world = new();
+		using GameplayAttributeStore attributes = new(world);
+		using GameplayTagStore tags = new(world);
+		using GameplayEffectSystem first = new(world, attributes, tags);
+		using GameplayEffectSystem second = new(world, attributes, tags);
+		Entity target = world.CreateEntity();
+
+		GameplayEffectHandle firstHandle = first.Apply(
+			target,
+			EffectSchema.BuffFiveSeconds).Handle;
+		GameplayEffectHandle secondHandle = second.Apply(
+			target,
+			EffectSchema.BuffFiveSeconds).Handle;
+
+		Assert.Equal(firstHandle.Slot, secondHandle.Slot);
+		Assert.Equal(firstHandle.Generation, secondHandle.Generation);
+		Assert.NotEqual(firstHandle, secondHandle);
+		Assert.False(second.TryGetEffect(firstHandle, out _));
+		Assert.False(second.Remove(firstHandle));
+		Assert.True(second.TryGetEffect(secondHandle, out _));
+		Assert.Equal(1, first.ActiveEffectCount);
+		Assert.Equal(1, second.ActiveEffectCount);
+	}
+
+	[Fact]
 	public void ReplacementAffectedBeforeDestructionCallback_RetiresOldInstances()
 	{
 		using World world = new();

@@ -108,6 +108,28 @@ two removals; destroying an entity clears all of them, and entity
 generations prevent a recycled index from exposing its predecessor's
 state.
 
+Grants are owned. `AddTag` records an unowned grant that belongs to the
+caller; the effect system records owned grants for the instances it
+manages. Both contribute to the same visible count, but each release is
+scoped to the pool it can attribute: `RemoveTag` and `Clear` release
+unowned grants only, and an effect's own release removes owned grants
+only. That contract is what makes an external mutation unable to
+invalidate an effect's bookkeeping - the older counted model let a
+bulk clear leave an effect claiming a grant it no longer had, so its
+later expiry could take a newly added grant from somebody else.
+`Clear(entity)` therefore removes every unowned grant, reports whether
+it removed anything, and leaves effect-owned grants (and the effects
+themselves) intact; remove the effect, or let it expire, to release its
+contribution. A tag held only by active effects is not removable from
+outside those effects, and `RemoveTag` reports `false` for it. `Clear`
+raises the per-tag and per-entity notifications after committing, so
+effects, abilities, and tasks observe the reset exactly as they observe
+a single removal, and it aggregates listener failures after attempting
+every notification. A listener may clear another entity during that
+dispatch: the nested clear snapshots its own tags, so the outer
+notifications stay complete, and a warmed top-level clear allocates
+nothing.
+
 ## Attributes
 
 ```csharp
@@ -299,6 +321,375 @@ while active. Grants are validated when built: a non-instant cost, an
 instant cooldown, a cooldown without granted tags, and a cooldown that
 grants the ability's own cancel tag all throw before reaching gameplay.
 
+## Gameplay events
+
+```csharp
+using Volt.Gameplay.Events;
+
+GameplayTag damageReceived = tags.Register("Event.Damage.Received");
+
+using GameplayEventSystem events = new(world);
+
+GameplayEventSubscription subscription = events.Subscribe(
+    damageReceived,
+    gameplayEvent =>
+    {
+        if (gameplayEvent.Payload.TryGetNumber(out double amount))
+        {
+            Console.WriteLine($"{amount} damage to {gameplayEvent.Target}");
+        }
+    },
+    owner: player);
+
+events.Publish(new GameplayEvent(
+    damageReceived,
+    source: attacker,
+    target: player,
+    payload: GameplayEventPayload.FromNumber(12.5)));
+
+events.Unsubscribe(subscription);
+```
+
+Subscriptions are indexed by tag, so publishing touches only the
+buckets that can match: the exact tag, its ancestors for hierarchical
+listeners, and the wildcard bucket. Listeners on unrelated tags are
+never scanned. Exact matching is the default; pass
+`GameplayEventMatch.Hierarchical` to receive descendants. Dispatch
+captures the matching subscriptions before invoking any handler and
+revalidates each delivery, so a handler may unsubscribe itself,
+subscribe another listener, publish another event, cancel an ability,
+or destroy an entity without invalidating the iteration. A subscription
+scoped to an entity is removed when that entity is destroyed, and the
+stored generation stops a recycled index from reviving it. Recursive
+publishing is bounded at 16 levels.
+
+## Ability tasks
+
+```csharp
+using Volt.Gameplay.Abilities;
+using Volt.Gameplay.Tasks;
+
+GameplayAbilityDefinition chargedDash = GameplayAbilityDefinition
+    .Create("Ability.ChargedDash")
+    .AssetTags(tags.Register("Ability.Dash"))
+    .Cost(staminaCost)
+    .Cooldown(dashCooldown)
+    .CancelOnTags(tags.Register("Status.Stunned"))
+    .Plan(
+        GameplayAbilityPlan
+            .Create()
+            .Wait(0.25f)
+            .WaitEvent(tags.Register("Event.Dash.Released"))
+            .ApplyEffect(dashBuff)
+            .WaitTag(
+                tags.Register("Status.Dashing"),
+                GameplayTagWaitMode.Absent)
+            .End()
+            .Build())
+    .Build();
+
+GameplayAbilityHandle handle = abilities.GiveAbility(player, chargedDash);
+
+GameplayAbilityActivationResult result = abilities.TryActivate(handle);
+
+// Keep the token to start application tasks on this activation.
+GameplayAbilityActivation activation = result.Activation;
+
+GameplayAbilityTaskHandle task = abilities.Tasks.WaitDuration(
+    activation,
+    0.5f);
+
+abilities.Tasks.Changed += change =>
+    Console.WriteLine($"{change.Kind}: {change.TaskKind}");
+```
+
+Tasks are owned by an activation token, not just a grant, so a retrigger
+cannot reuse an earlier activation's context. A task handle carries the
+task system, owner, slot generation, and activation id; completing,
+cancelling, retriggering, revoking, or destroying the owner retires it.
+`Cancel`, `Complete`, and `TryGetTask` return `false` for a stale handle
+instead of touching a recycled slot.
+
+A plan is data, and every step runs on the same low-level task runtime
+as application code. `Wait` and `WaitTag` use a deadline heap;
+`WaitEvent` uses the event router. Tag-condition tasks are indexed by
+the watched tag and by exact or hierarchical matching, so a tag change
+visits only the tasks watching that tag or an ancestor, not every task
+on the owner. Ending an ability releases all of its tasks before the
+ability notification, and the `Cancelled` task notifications follow the
+release. A zero-duration task completes on the next positive
+`Advance`, a zero step is a pause, and tasks created during an advance
+wait for the next advance.
+
+Chained waits follow the fixed-step rule: a task created by a
+completion callback starts from the end-of-step clock and is eligible
+on the next advance. That makes the fixed-step loop the deterministic
+path for long chains; a single large manual advance is not equivalent
+to several fixed steps. If a plan step or activation notification
+throws, the activation is cancelled, its tasks and subscriptions are
+released, committed costs and cooldowns remain, and the exception is
+rethrown. A cleanup failure is reported with the original in an
+`AggregateException`; an ability is never left active with no plan
+cursor and no pending task.
+
+## Conditional plans
+
+```csharp
+GameplayCondition wounded = GameplayCondition.OwnerAttribute(
+    health,
+    GameplayAttributeComparison.LessThan,
+    30f);
+
+GameplayCondition vulnerable = GameplayCondition.All(
+    wounded,
+    GameplayCondition.TargetHasTag(stunned));
+
+GameplayAbilityDefinition finisher = GameplayAbilityDefinition
+    .Create("Ability.Finisher")
+    .Plan(
+        GameplayAbilityPlan
+            .Create()
+            .If(vulnerable)
+            .ApplyEffect(executeEffect)
+            .Else()
+            .ApplyEffect(standardEffect)
+            .EndIf()
+            .End()
+            .Build())
+    .Build();
+```
+
+`GameplayCondition` is an immutable tree evaluated against the live
+owner, target, tags, and cached attributes when the branch step runs, so
+a plan can branch on state a previous step produced. Conditions cover
+owner and target tags (exact or hierarchical), missing tags, target
+aliveness, owner and target attribute comparisons, and nested
+`All`/`Any`/`Not`. A destroyed target fails every target condition; use
+`TargetAlive` to test it explicitly.
+
+`If`/`Else`/`EndIf` compile to forward jumps inside the flat plan array,
+so there is no per-activation control-flow object and no second
+interpreter. `Build` rejects unclosed blocks, misplaced `Else`/`EndIf`,
+and jumps that do not move forward, so a plan cannot loop. Conditions,
+tags, and attributes are validated at authoring time; a null child,
+empty `All`/`Any`, non-finite constant, or unknown attribute throws.
+
+## Custom tasks
+
+```csharp
+GameplayAbilityTaskDefinition swing = abilities.RegisterTaskDefinition("Swing");
+
+GameplayAbilityDefinition attack = GameplayAbilityDefinition
+    .Create("Ability.Attack")
+    .Plan(
+        GameplayAbilityPlan
+            .Create()
+            .WaitCustom(swing)
+            .ApplyEffect(hitEffect)
+            .End()
+            .Build())
+    .Build();
+
+GameplayAbilityHandle handle = abilities.GiveAbility(owner, attack);
+abilities.TryActivate(handle, target);
+
+// A plan owns the task it started; application code signals completion
+// through that handle instead of starting a second one.
+Span<GameplayAbilityTaskHandle> pending =
+    stackalloc GameplayAbilityTaskHandle[1];
+abilities.Tasks.CopyTasks(owner, pending);
+abilities.Tasks.Complete(pending[0]);   // or abilities.Tasks.Cancel(pending[0])
+```
+
+A wait started outside a plan uses the same runtime and returns its own
+handle:
+
+```csharp
+GameplayAbilityTaskHandle task = abilities.Tasks.WaitCustom(activation, swing);
+abilities.Tasks.Complete(task);
+```
+
+A plan's `WaitCustom` step starts exactly one task, and completing it
+resumes the plan; creating a second task for the same definition would
+park a different slot. `CopyTasks` returns up to the destination length
+of the owner's pending tasks.
+
+A custom task is a registered definition plus one ordinary task slot.
+It is not in the deadline heap and has no subscription, so dormant
+custom tasks are never scanned or polled per step. The
+definition is scoped to the ability system that registered it; passing
+another system's definition throws instead of creating a task. Handles
+are generation- and activation-checked, so a stale handle cannot
+complete a task started by a newer activation, and ability end,
+`CancelOnTags`, revocation, and owner destruction all release the slot.
+Completion notifies after the state is released, and a throwing handler
+leaves no half-released task behind. Applications own external signal
+subscriptions; they must release them on terminal task notifications
+and owner destruction.
+
+See `GameplaySpec.md` section 5.19 for the full lifetime and exception
+policy.
+
+## Composite waits
+
+```csharp
+GameplayWaitAny guard = GameplayWaitAny
+    .Create()
+    .WithTimeout(0.4f)
+    .OnEvent(incomingHit)
+    .OnTag(stunned, GameplayTagWaitMode.Present);
+
+GameplayAbilityPlan plan = GameplayAbilityPlan
+    .Create()
+    .WaitAny(guard)
+    .ApplyEffect(counterEffect)
+    .End()
+    .Build();
+```
+
+A composite `Any` wait stores one timeout, one event subscription for up
+to eight event tags, and one tag condition in a single task record, so
+the first source to fire wins and the losers are released with it. No
+child tasks and no group bookkeeping are involved.
+
+- The timeout reports `Elapsed`; an event or tag source reports
+  `ConditionMet`, carrying the event for event waits.
+- Watched events share one subscription at the nearest common ancestor
+  of their tags (or the wildcard when they have none) and are filtered
+  against the watched set, so unrelated events do not complete the wait.
+- A tag source that already holds completes on the next advance, and a
+  tag change that makes it hold re-arms the wait; if it flips back first,
+  the original timeout is restored.
+- A tag flipped by an effect expiry completes the wait in the same
+  fixed step's task phase.
+- An empty wait, more than eight event tags, or an invalid tag throws at
+  authoring time.
+
+There is no composite `All`. Sequential level-triggered tag waits are
+the supported `All` idiom; see section 5.20 for why a general `All`
+group is deferred.
+
+## Fixed-step simulation
+
+```csharp
+using Volt.Core.Timing;
+using Volt.Gameplay.Simulation;
+
+GameLoop loop = new();
+GameplaySimulation simulation = new(loop, abilities, effects);
+
+// Once per rendered frame; zero or more fixed steps run inside.
+loop.Advance();
+```
+
+`GameplaySimulation` is the optional bridge from the engine loop to
+gameplay. It registers one post-fixed-update callback, so the order in
+every executed fixed step is:
+
+1. Game fixed-update callbacks and scheduled simulation callbacks.
+2. Effects advance: expiries, periods, and tag changes.
+3. Tasks advance: duration and tag deadlines complete; plans continue.
+4. Remaining post-fixed callbacks.
+
+Event waits complete synchronously when their event is published, as
+they do without the integration. A task started by game fixed-update
+logic can complete in that same step; a task created by a completion
+callback waits for the next step. Pause, single-step, time scaling, and
+catch-up are the loop's semantics: the integration advances once for
+every executed fixed step and never invents a second clock.
+
+While attached, calling `effects.Advance` or `tasks.Advance` directly
+throws `InvalidOperationException`, so the same clock cannot be
+advanced twice in a step. Dispose `GameplaySimulation` to unregister
+the callback and return to manual control. It does not own the world or
+the stores, and it does not create a task runtime until an ability
+uses one.
+
+Construction requires the exact effect system the abilities apply
+costs, cooldowns, and plan effects through; a different instance in the
+same world is rejected, because advancing it would leave the ability
+clocks unmoved. A clock claim also carries the identity of its
+integration, so construction that fails part way through releases only
+the claims it took and never detaches an integration that already owns
+the clock.
+
+Run `samples/Volt.GameplayDemo` for the complete charged-dash example,
+including a stun interruption, overlapping abilities, stale handles,
+owner destruction, pause, single-step, time scaling, and clean
+shutdown.
+
+## Gameplay cues
+
+`GameplayCueSystem` bridges committed gameplay transitions to presentation
+without depending on a graphics API. A registered cue tag is the shared
+identity of a presentation action. `Execute` emits a one-shot transition;
+`Add` creates a persistent instance, and `Update`/`Remove` produce its
+lifecycle notifications. Handles are generational and system-scoped, so
+stale or foreign handles cannot affect a replacement cue. Exact listeners
+receive one tag; hierarchical listeners also receive descendants. Optional
+owner-scoped listeners and cues are retired when their entity is destroyed.
+Callbacks are synchronous and reentrant; dispatch captures listener handles
+and revalidates them before each call, so removed subscriptions do not receive
+a later callback in the same dispatch and subscriptions added during dispatch
+wait until the next dispatch.
+
+```csharp
+using Volt.Gameplay.Cues;
+using Volt.Gameplay.Tags;
+
+GameplayTag hit = GameplayTagRegistry.Shared.Register("Cue.Combat.Hit");
+using GameplayCueSystem cues = new(world);
+GameplayCueSubscription listener = cues.Subscribe(
+    hit,
+    cue => Console.WriteLine($"{cue.Kind}: {cue.Magnitude}"));
+
+cues.Execute(hit, source: attacker, target: victim, magnitude: 12f);
+GameplayCueHandle looping = cues.Add(hit, source: attacker, target: victim);
+cues.Update(looping, magnitude: 3f, stackCount: 2);
+cues.Remove(looping);
+cues.Unsubscribe(listener);
+```
+
+Effects may declare `.GameplayCue(tag)`. Bind a cue system to the same
+world's `GameplayEffectSystem` with `cues.BindEffects(effects)`. Active
+non-periodic effects add a persistent cue, stack changes update it, and
+inhibition, removal, expiration, or target destruction remove it. Periodic
+ticks and instant effects emit execute cues.
+
+Binding may happen before or after effects exist. On the first bind,
+every instance that is already active is synchronized: an uninhibited
+instance with a cue tag gets its persistent cue with the current source,
+target, magnitude, and stack count, while inhibited instances wait for
+their resumption and instant effects are not replayed. Repeating the
+bind is self-healing and idempotent - it adopts any instance that still
+has no cue and never creates a duplicate. A second effect system in the
+same world is rejected, and one from another world is rejected by the
+world check. Cue ownership follows the live instance: a transition that
+was raised before an earlier listener changed the instance is resolved
+against the current snapshot, so a cue cannot outlive the state that
+justified it. Ability plans use
+`.ExecuteCue(tag)` for one-shots or `.AddCue(tag)` for activation-owned
+persistent cues, automatically removed when that activation ends or cancels.
+
+For a graphics or audio consumer that drains at its own frame boundary,
+assign a `GameplayCueBuffer` to `cues.PresentationBuffer`. It is a bounded,
+not-thread-safe FIFO: drain into a caller-provided `Span<GameplayCueEvent>`
+with no allocation, or call `Clear`. Capacity grows geometrically to its
+configured maximum; overflow throws before enqueueing rather than silently
+dropping a transition. The buffer is caller-owned and should be drained or
+cleared before disposal.
+
+The deterministic, graphics-free integration demo includes a mock consumer
+and exercises effect stacks, periodic cues, expiration, ability cancellation,
+buffer draining, and entity destruction:
+
+```bash
+dotnet run --project samples/Volt.GameplayDemo -c Release
+```
+
+Benchmark cue dispatch with `dotnet run -c Release --project
+benchmarks/Volt.Benchmarks -- --filter '*GameplayCueBenchmarks*'`.
+
 ## Projects
 
 | Type | Purpose |
@@ -319,23 +710,62 @@ grants the ability's own cancel tag all throw before reaching gameplay.
 | `GameplayTagRequirements` | Required and ignored tag pair used for gating |
 | `ActiveGameplayEffect` | Read-only snapshot of one active instance |
 | `GameplayEffectChange` | Notification payload for every effect transition |
+| `GameplayCueSystem` | Routes gameplay cue execution and persistent lifecycle to presentation |
+| `GameplayCueBuffer` | Optional bounded FIFO for presentation-frame handoff |
+| `GameplayCueHandle` | System- and generation-checked persistent cue identity |
+| `GameplayCueSubscription` | System- and generation-checked cue listener |
+| `GameplayCueEvent` | Immutable one-shot or persistent presentation transition |
 | `GameplayAbilityDefinition` | Immutable ability: requirements, cost, cooldown, block and cancel tags |
 | `GameplayAbilityDefinitionBuilder` | Fluent, validating authoring path |
 | `GameplayAbilitySystem` | Grants, activation checks, blocking, and cancellation |
 | `GameplayAbilityHandle` | System- and generation-checked handle to a grant |
 | `GameplayAbilityChange` | Notification payload for every ability transition |
 | `GrantedGameplayAbility` | Read-only snapshot of one grant |
+| `GameplayEventSystem` | Tag-indexed gameplay event routing and scoped subscriptions |
+| `GameplayEventSubscription` | System- and generation-checked subscription handle |
+| `GameplayEvent` | Value-type event with tag, source, target, and payload |
+| `GameplayEventPayload` | Discriminated numeric, entity, or tag payload |
+| `GameplayAbilityTaskSystem` | Pooled task storage, deadlines, and event or tag waits |
+| `GameplayAbilityTaskHandle` | System-, owner-, generation-, and activation-checked task handle |
+| `GameplayAbilityTaskChange` | Notification payload for started, completed, or cancelled tasks |
+| `GameplayAbilityTaskInfo` | Read-only snapshot of one pending task |
+| `GameplayAbilityPlan` | Immutable authored wait and action sequence |
+| `GameplayAbilityPlanBuilder` | Fluent, validating plan authoring path |
+| `GameplayCondition` | Immutable tag and attribute condition tree |
+| `GameplayAttributeComparison` | Comparison operator for attribute conditions |
+| `GameplayAbilityTaskDefinition` | Registered name for an application-owned task |
+| `GameplayWaitAny` | Immutable composite wait over a timeout, events, and a tag |
+| `GameplayAbilityActivation` | Grant plus activation id, used as task ownership |
+| `GameplaySimulation` | Optional fixed-step driver for effects and tasks |
 
 ## Verification
 
 ```bash
 dotnet test tests/Volt.Gameplay.Tests -c Release
+dotnet test tests/Volt.Gameplay.Examples -c Release
 
 cd benchmarks/Volt.Benchmarks
 dotnet run -c Release -- --filter '*GameplayTagBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAbilityScalingBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayLifecycleBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayEventBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAbilityTaskBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAbilityTaskIdleBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAbilityTaskScalingBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAbilityTaskDestructionBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayTagWaitScalingBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayEventSparseBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationEventBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAuthoringBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayAuthoringPopulationBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationTaskBurstBenchmarks*'
+dotnet run -c Release -- --filter '*GameplaySimulationEffectBurstBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayCueBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayCueLifecycleBenchmarks*'
+
+dotnet run --project samples/Volt.GameplayDemo -c Release
 ```
 
 The test suite includes differential tests that reproduce Unreal's own
@@ -344,13 +774,27 @@ the 5.8.4 source, lifecycle and invalid-input cases, adversarial
 destruction ordering, cross-store recycling, re-entrancy and notification
 exception cases, a concurrent-registration test, and allocation guards
 asserting that warmed-up matching, container mutation, effect
-application, effect ticking, ability granting, ability activation, and
-entity recycling with live gameplay state allocate zero managed bytes.
+application, effect ticking, ability granting, ability activation,
+event dispatch and subscription, task start, event and tag waits, bulk
+task expiry, ability ending with tasks, and entity recycling with live
+gameplay state allocate zero managed bytes. The gameplay demo is a
+separate executable smoke test whose assertions cover the combined
+charged-dash lifecycle, and the cue presentation tests model a consumer
+that rebuilds live state across frames, including a cue added and
+removed between two frames.
+
+`Volt.Gameplay.Examples` compiles and runs the public snippets from
+this README and from `GameplaySpec.md` - service creation, effect
+application, ability definitions, conditional plans, custom tasks,
+composite waits, fixed-step integration, cue subscriptions,
+effect-backed and activation-owned cues, and buffer draining - so a
+signature change breaks the build instead of leaving stale prose.
 
 `LifecycleStressHarness` adds a seed-replayable state machine over all
-four stores. It generates operations at the top level and from
-notifications, recycles entity and effect slots, retains stale handles,
-and checks an independent tag/attribute/effect/ability model after every
-operation. The permanent matrix is 128 seeds at 500 operations under
+four stores plus a bound cue system and presentation buffer. It
+generates operations at the top level and from notifications, recycles
+entity and effect slots, retains stale handles, and checks an independent
+tag/attribute/effect/ability/cue model after every operation, including
+that every live uninhibited cue-tagged instance owns exactly one cue. The permanent matrix is 128 seeds at 500 operations under
 both destruction callback orders; failures report the seed, operation,
 trace, and store dump, and a failing prefix can be replayed exactly.

@@ -1,5 +1,6 @@
 using Volt.Ecs;
 using Volt.Gameplay.Attributes;
+using Volt.Gameplay.Simulation;
 using Volt.Gameplay.Tags;
 
 namespace Volt.Gameplay.Effects;
@@ -41,6 +42,8 @@ namespace Volt.Gameplay.Effects;
 /// </remarks>
 public sealed class GameplayEffectSystem : IDisposable
 {
+	private static int s_nextSystemId;
+
 	private const int SegmentShift = 10;
 	private const int SegmentSize = 1 << SegmentShift;
 	private const int SegmentMask = SegmentSize - 1;
@@ -52,6 +55,7 @@ public sealed class GameplayEffectSystem : IDisposable
 	private readonly GameplayAttributeStore _attributes;
 	private readonly GameplayTagStore _tags;
 	private readonly uint _allocatorId;
+	private readonly uint _systemId;
 
 	private ActiveEffect[] _effects = new ActiveEffect[InitialEffectCapacity];
 	private int _effectSlotCount;
@@ -66,6 +70,7 @@ public sealed class GameplayEffectSystem : IDisposable
 	private double _time;
 	private long _nextOrder = 1;
 	private bool _advancing;
+	private SimulationClockClaim? _clockClaim;
 	private bool _disposed;
 
 	/// <summary>
@@ -95,6 +100,7 @@ public sealed class GameplayEffectSystem : IDisposable
 		_attributes = attributes;
 		_tags = tags;
 		_allocatorId = world.AllocatorId;
+		_systemId = AllocateSystemId();
 
 		_world.EntityDestroyed += HandleEntityDestroyed;
 		_tags.TagsChanged += HandleTagsChanged;
@@ -110,6 +116,8 @@ public sealed class GameplayEffectSystem : IDisposable
 	/// With no subscribers the cost is one null check per change.
 	/// </remarks>
 	public event Action<GameplayEffectChange>? Changed;
+
+	internal event Action<GameplayEffectChange>? CueChanged;
 
 	/// <summary>
 	/// Gets the simulation time the system has advanced through, in
@@ -127,6 +135,14 @@ public sealed class GameplayEffectSystem : IDisposable
 	/// Gets the number of active, tracked effect instances.
 	/// </summary>
 	public int ActiveEffectCount => _activeEffectCount;
+
+	/// <summary>
+	/// Gets whether the clock is owned by a
+	/// <see cref="Simulation.GameplaySimulation"/>.
+	/// </summary>
+	internal bool IsSimulationDriven => _clockClaim is not null;
+
+	internal World World => _world;
 
 	/// <summary>
 	/// Applies an effect definition to an entity.
@@ -200,6 +216,16 @@ public sealed class GameplayEffectSystem : IDisposable
 		if (definition.IsInstant)
 		{
 			ExecuteModifiers(target, definition, 1);
+			if (_world.IsAlive(target))
+			{
+				NotifyCueChange(new GameplayEffectChange(
+					GameplayEffectChangeKind.Applied,
+					GameplayEffectHandle.None,
+					definition,
+					target,
+					source,
+					1));
+			}
 
 			return new GameplayEffectApplyResult(
 				GameplayEffectApplyStatus.InstantExecuted,
@@ -407,6 +433,36 @@ public sealed class GameplayEffectSystem : IDisposable
 	}
 
 	/// <summary>
+	/// Copies the handles of every active instance in the system.
+	/// </summary>
+	/// <param name="destination">The destination span.</param>
+	/// <returns>
+	/// The number of handles written, which is less than
+	/// <see cref="ActiveEffectCount"/> when the span is too small.
+	/// </returns>
+	/// <remarks>
+	/// This is the enumeration an integration uses to adopt state that
+	/// was created before it was connected, such as the cue system
+	/// synchronizing the instances that already exist when it binds.
+	/// </remarks>
+	internal int CopyActiveEffects(Span<GameplayEffectHandle> destination)
+	{
+		ThrowIfDisposed();
+
+		int written = 0;
+
+		for (int slot = 0; slot < _effectSlotCount && written < destination.Length; slot++)
+		{
+			if (_effects[slot].Active)
+			{
+				destination[written++] = CreateHandle(slot);
+			}
+		}
+
+		return written;
+	}
+
+	/// <summary>
 	/// Gets the longest remaining duration among an entity's active
 	/// instances that grant any of the given tags.
 	/// </summary>
@@ -488,6 +544,70 @@ public sealed class GameplayEffectSystem : IDisposable
 	{
 		ThrowIfDisposed();
 
+		if (_clockClaim is not null)
+		{
+			throw new InvalidOperationException(
+				"This effect system is advanced by a " +
+				"GameplaySimulation attached to the fixed-step loop. " +
+				"Calling Advance manually would advance the same clock " +
+				"twice in one step. Detach the integration or use its " +
+				"loop to advance simulation time.");
+		}
+
+		AdvanceCore(deltaTime);
+	}
+
+	/// <summary>
+	/// Advances the clock from the attached simulation integration.
+	/// </summary>
+	internal void AdvanceFromSimulation(float deltaTime)
+	{
+		ThrowIfDisposed();
+
+		AdvanceCore(deltaTime);
+	}
+
+	/// <summary>
+	/// Claims the clock for one fixed-step integration.
+	/// </summary>
+	/// <param name="claim">The claiming integration's identity.</param>
+	/// <exception cref="InvalidOperationException">
+	/// Another integration already owns the clock.
+	/// </exception>
+	internal void BeginSimulation(SimulationClockClaim claim)
+	{
+		ArgumentNullException.ThrowIfNull(claim);
+
+		if (_clockClaim is not null)
+		{
+			throw new InvalidOperationException(
+				"This effect system is already advanced by another " +
+				"GameplaySimulation. A clock has one owner.");
+		}
+
+		_clockClaim = claim;
+	}
+
+	/// <summary>
+	/// Releases the clock when its integration is disposed.
+	/// </summary>
+	/// <param name="claim">The releasing integration's identity.</param>
+	/// <remarks>
+	/// A claim this system does not hold is left alone, so an
+	/// integration that failed to acquire it cannot detach the owner.
+	/// </remarks>
+	internal void EndSimulation(SimulationClockClaim claim)
+	{
+		if (!ReferenceEquals(_clockClaim, claim))
+		{
+			return;
+		}
+
+		_clockClaim = null;
+	}
+
+	private void AdvanceCore(float deltaTime)
+	{
 		if (!float.IsFinite(deltaTime) || deltaTime < 0f)
 		{
 			throw new ArgumentOutOfRangeException(
@@ -542,6 +662,7 @@ public sealed class GameplayEffectSystem : IDisposable
 		_tags.TagsChanged -= HandleTagsChanged;
 
 		Changed = null;
+		CueChanged = null;
 		_effects = [];
 		_entitySegments = [];
 		_dueEntries = [];
@@ -549,6 +670,7 @@ public sealed class GameplayEffectSystem : IDisposable
 		_effectSlotCount = 0;
 		_freeEffectSlot = -1;
 		_activeEffectCount = 0;
+		_clockClaim = null;
 		_disposed = true;
 
 		GC.SuppressFinalize(this);
@@ -1113,7 +1235,7 @@ public sealed class GameplayEffectSystem : IDisposable
 				return;
 			}
 
-			_tags.AddTag(target, tag);
+			_tags.AddOwnedTag(target, tag);
 		}
 	}
 
@@ -1134,13 +1256,19 @@ public sealed class GameplayEffectSystem : IDisposable
 		{
 			// Cleanup runs after the instance has been marked dead, so
 			// the guard checks slot identity rather than liveness: the
-			// slot must not have been recycled underneath us.
+			// slot must not have been recycled underneath us. A destroyed
+			// target's tag store may already have retired its generation.
 			if (!IsSameSlot(slot, generation))
 			{
 				return;
 			}
 
-			_tags.RemoveTag(target, tag);
+			if (!_world.IsAlive(target))
+			{
+				return;
+			}
+
+			_tags.RemoveOwnedTag(target, tag);
 		}
 	}
 
@@ -1258,8 +1386,10 @@ public sealed class GameplayEffectSystem : IDisposable
 
 		Entity target = _effects[slot].Target;
 		GameplayEffectDefinition definition = _effects[slot].Definition;
-		Entity source = _effects[slot].Source; int stackCount = _effects[slot].StackCount;
+		Entity source = _effects[slot].Source;
+		int stackCount = _effects[slot].StackCount;
 		GameplayEffectHandle handle = CreateHandle(slot);
+		bool isInhibited = _effects[slot].Inhibited;
 
 		// Mark the instance dead before any cleanup notification can
 		// reach user code, so a handler that queries it sees it gone.
@@ -1269,19 +1399,46 @@ public sealed class GameplayEffectSystem : IDisposable
 
 		_activeEffectCount--;
 
-		RemoveModifiers(slot);
-		RemoveGrantedTags(slot);
+		Exception? failure = null;
+		try
+		{
+			RemoveModifiers(slot);
+		}
+		catch (Exception exception)
+		{
+			failure = exception;
+		}
 
-		ReleaseSlot(slot);
+		try
+		{
+			RemoveGrantedTags(slot);
+		}
+		catch (Exception exception)
+		{
+			failure = CombineFailures(failure, exception);
+		}
+		finally
+		{
+			ReleaseSlot(slot);
+		}
 
-		Changed?.Invoke(new GameplayEffectChange(
-			kind,
-			handle,
-			definition,
-			target,
-			source,
-			stackCount));
+		try
+		{
+			NotifyChange(new GameplayEffectChange(
+				kind,
+				handle,
+				definition,
+				target,
+				source,
+				stackCount,
+				isInhibited));
+		}
+		catch (Exception exception)
+		{
+			failure = CombineFailures(failure, exception);
+		}
 
+		ThrowFailure(failure);
 		return true;
 	}
 
@@ -1292,12 +1449,26 @@ public sealed class GameplayEffectSystem : IDisposable
 			return;
 		}
 
-		if (!TryGetEntitySlot(entity, out int segmentIndex, out int offset))
+		int entityIndex = (int)entity.Index;
+		int segmentIndex = entityIndex >> SegmentShift;
+		if ((uint)segmentIndex >= (uint)_entitySegments.Length
+			|| _entitySegments[segmentIndex] is not { } segment)
 		{
 			return;
 		}
 
-		int slot = _entitySegments[segmentIndex]![offset].Head;
+		int offset = entityIndex & SegmentMask;
+		if (segment[offset].Generation != entity.Generation)
+		{
+			return;
+		}
+
+		int head = segment[offset].Head;
+		int capacity = Math.Max(1, _entitySegments[segmentIndex]![offset].Count);
+		GameplayEffectChange[] changes = new GameplayEffectChange[capacity];
+		int changeCount = 0;
+		Exception? failure = null;
+		int slot = head;
 
 		while (slot >= 0)
 		{
@@ -1308,11 +1479,28 @@ public sealed class GameplayEffectSystem : IDisposable
 
 			if (_effects[slot].Active)
 			{
-				// The stores clear their own per-entity state, so
-				// this only releases the instances. No notification
-				// is raised: the values no longer exist for anyone to
-				// observe.
-				RemoveEffectSilently(slot);
+				GameplayEffectChange change = new(
+					GameplayEffectChangeKind.TargetDestroyed,
+					CreateHandle(slot),
+					_effects[slot].Definition,
+					_effects[slot].Target,
+					_effects[slot].Source,
+					_effects[slot].StackCount,
+					_effects[slot].Inhibited);
+				if (changeCount == changes.Length)
+				{
+					Array.Resize(ref changes, changes.Length * 2);
+				}
+				changes[changeCount++] = change;
+
+				try
+				{
+					RemoveEffectSilently(slot);
+				}
+				catch (Exception exception)
+				{
+					failure = CombineFailures(failure, exception);
+				}
 			}
 
 			slot = next;
@@ -1325,12 +1513,43 @@ public sealed class GameplayEffectSystem : IDisposable
 		}
 
 		// Cleanup handlers may have recycled the index and linked
-		// new effects to the replacement. Do not clear that state.
+		// new effects to the replacement. Never clear that new chain.
 		if (TryGetEntitySlot(entity, out segmentIndex, out offset))
 		{
 			_entitySegments[segmentIndex]![offset].Head = -1;
 			_entitySegments[segmentIndex]![offset].Count = 0;
 		}
+		else
+		{
+			// If a replacement already took the index, retire the old
+			// generation's container without touching its new state.
+			int retiredEntityIndex = (int)entity.Index;
+			segmentIndex = retiredEntityIndex >> SegmentShift;
+			if ((uint)segmentIndex < (uint)_entitySegments.Length
+				&& _entitySegments[segmentIndex] is { } retiredSegment)
+			{
+				ref EntityEffects oldState = ref retiredSegment[retiredEntityIndex & SegmentMask];
+				if (oldState.Generation == entity.Generation)
+				{
+					oldState.Head = -1;
+					oldState.Count = 0;
+				}
+			}
+		}
+
+		for (int index = 0; index < changeCount; index++)
+		{
+			try
+			{
+				NotifyChange(changes[index]);
+			}
+			catch (Exception exception)
+			{
+				failure = CombineFailures(failure, exception);
+			}
+		}
+
+		ThrowFailure(failure);
 	}
 
 	private void RemoveEffectSilently(int slot)
@@ -1346,45 +1565,93 @@ public sealed class GameplayEffectSystem : IDisposable
 
 		_activeEffectCount--;
 
-		RemoveModifiers(slot);
-		RemoveGrantedTags(slot);
+		Exception? failure = null;
+		try
+		{
+			RemoveModifiers(slot);
+		}
+		catch (Exception exception)
+		{
+			failure = exception;
+		}
 
-		ReleaseSlot(slot);
+		try
+		{
+			RemoveGrantedTags(slot);
+		}
+		catch (Exception exception)
+		{
+			failure = CombineFailures(failure, exception);
+		}
+		finally
+		{
+			ReleaseSlot(slot);
+		}
+
+		ThrowFailure(failure);
 	}
 
-	private void RetireStaleEntityEffects(ref EntityEffects slotState)
+	private void RetireStaleEntityEffects(
+		ref EntityEffects slotState,
+		uint replacementGeneration)
 	{
 		int slot = slotState.Head;
-
-		// Detach the old chain before releasing any instance. The
-		// attribute and tag stores retire their own per-entity state,
-		// and a replacement that has already written new state has
-		// reset it, so this path only releases effect storage and never
-		// invokes user notifications.
-		slotState.Head = -1;
-		slotState.Count = 0;
-		slotState.Refreshing = false;
-		slotState.RefreshAgain = false;
-
-		while (slot >= 0)
+		slotState = new EntityEffects
 		{
+			Generation = replacementGeneration,
+			Head = -1,
+			Refreshing = false,
+			RefreshAgain = false
+		};
+
+		Exception? failure = null;
+		while (slot >= 0 && (uint)slot < (uint)_effectSlotCount)
+		{
+			uint generation = _effects[slot].Generation;
 			int next = _effects[slot].NextOnEntity;
+			uint nextGeneration = next >= 0
+				? _effects[next].Generation
+				: 0;
 
-			if ((uint)slot < (uint)_effectSlotCount
-				&& _effects[slot].Active)
+			if (_effects[slot].Active)
 			{
-				_effects[slot].Active = false;
+				GameplayEffectChange change = new(
+					GameplayEffectChangeKind.TargetDestroyed,
+					CreateHandle(slot),
+					_effects[slot].Definition,
+					_effects[slot].Target,
+					_effects[slot].Source,
+					_effects[slot].StackCount,
+					_effects[slot].Inhibited);
 
-				if (_activeEffectCount > 0)
+				try
 				{
-					_activeEffectCount--;
+					RemoveEffectSilently(slot);
+				}
+				catch (Exception exception)
+				{
+					failure = CombineFailures(failure, exception);
 				}
 
-				ReleaseSlot(slot);
+				try
+				{
+					NotifyChange(change);
+				}
+				catch (Exception exception)
+				{
+					failure = CombineFailures(failure, exception);
+				}
 			}
 
 			slot = next;
+			if (slot >= 0 && _effects[slot].Generation != nextGeneration)
+			{
+				// A cleanup or change callback recycled the next slot.
+				break;
+			}
 		}
+
+		ThrowFailure(failure);
 	}
 
 	private void ReleaseSlot(int slot)
@@ -1686,6 +1953,7 @@ public sealed class GameplayEffectSystem : IDisposable
 		ref ActiveEffect effect = ref _effects[slot];
 
 		return new GameplayEffectHandle(
+			_systemId,
 			effect.Target,
 			slot,
 			effect.Generation);
@@ -1696,6 +1964,7 @@ public sealed class GameplayEffectSystem : IDisposable
 		slot = handle.Slot;
 
 		if (handle.IsNone
+			|| handle.SystemId != _systemId
 			|| (uint)handle.Slot >= (uint)_effectSlotCount)
 		{
 			return false;
@@ -1860,21 +2129,18 @@ public sealed class GameplayEffectSystem : IDisposable
 
 		if (slot.Generation != entity.Generation)
 		{
-			// The replacement can be affected before the effect system
-			// receives the old generation's destruction notification.
-			// Detach and retire the old chain first; resetting the
-			// fields alone would orphan every instance, keep its count
-			// alive, and leave its deadlines able to execute.
 			if (slot.Generation != 0)
 			{
-				RetireStaleEntityEffects(ref slot);
+				RetireStaleEntityEffects(ref slot, entity.Generation);
 			}
-
-			slot.Generation = entity.Generation;
-			slot.Head = -1;
-			slot.Count = 0;
-			slot.Refreshing = false;
-			slot.RefreshAgain = false;
+			else
+			{
+				slot.Generation = entity.Generation;
+				slot.Head = -1;
+				slot.Count = 0;
+				slot.Refreshing = false;
+				slot.RefreshAgain = false;
+			}
 		}
 
 		return ref slot;
@@ -1913,11 +2179,14 @@ public sealed class GameplayEffectSystem : IDisposable
 		return segment[offset].Generation == entity.Generation;
 	}
 
+	private void NotifyCueChange(in GameplayEffectChange change)
+	{
+		CueChanged?.Invoke(change);
+	}
+
 	private void RaiseChange(GameplayEffectChangeKind kind, int slot)
 	{
-		Action<GameplayEffectChange>? handler = Changed;
-
-		if (handler is null)
+		if (Changed is null && CueChanged is null)
 		{
 			return;
 		}
@@ -1929,13 +2198,63 @@ public sealed class GameplayEffectSystem : IDisposable
 			return;
 		}
 
-		handler(new GameplayEffectChange(
+		NotifyChange(new GameplayEffectChange(
 			kind,
 			CreateHandle(slot),
 			effect.Definition,
 			effect.Target,
 			effect.Source,
-			effect.StackCount));
+			effect.StackCount,
+			effect.Inhibited));
+	}
+
+	private void NotifyChange(in GameplayEffectChange change)
+	{
+		Exception? failure = null;
+		try
+		{
+			Changed?.Invoke(change);
+		}
+		catch (Exception exception)
+		{
+			failure = exception;
+		}
+
+		try
+		{
+			CueChanged?.Invoke(change);
+		}
+		catch (Exception exception)
+		{
+			failure = CombineFailures(failure, exception);
+		}
+
+		ThrowFailure(failure);
+	}
+
+	private static Exception? CombineFailures(Exception? existing, Exception next)
+	{
+		return existing is null
+			? next
+			: new AggregateException(existing, next);
+	}
+
+	private static void ThrowFailure(Exception? failure)
+	{
+		if (failure is not null)
+		{
+			System.Runtime.ExceptionServices.ExceptionDispatchInfo
+				.Capture(failure)
+				.Throw();
+		}
+	}
+
+	private static uint AllocateSystemId()
+	{
+		uint id = unchecked((uint)Interlocked.Increment(ref s_nextSystemId));
+		return id == 0
+			? unchecked((uint)Interlocked.Increment(ref s_nextSystemId))
+			: id;
 	}
 
 	private static uint NextGeneration(uint generation)

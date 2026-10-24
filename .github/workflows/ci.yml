@@ -1,0 +1,66 @@
+name: CI
+
+# Feature work enters through pull requests. The integration branches are
+# long-lived targets, so a pull request into one of them is verified too.
+# Pushes are verified on master and on those integration branches, where a
+# direct push has no pull-request run behind it. The concurrency group is
+# keyed by the branch, so a superseded run on the same branch is cancelled
+# instead of doubling the work.
+on:
+  push:
+    branches:
+      - master
+      - feat/gameplay-events-ability-tasks
+  pull_request:
+    branches:
+      - master
+      - feat/gameplay-events-ability-tasks
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build-test:
+    name: Build, test, format, and demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install the .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore Volt.slnx
+
+      - name: Build
+        run: dotnet build Volt.slnx -c Release --no-restore
+
+      # Native Vulkan integration tests are opt-in through
+      # VOLT_VULKAN_INTEGRATION=1 and require a Vulkan device. Hosted
+      # runners have the loader but no device, so those tests report as
+      # skipped here; everything else, including the device-independent
+      # Vulkan unit tests, runs. See tools/README.md for the GPU-backed
+      # headless harness used for the opt-in path.
+      - name: Test
+        run: dotnet test Volt.slnx -c Release --no-restore
+
+      - name: Verify formatting
+        run: dotnet format Volt.slnx --verify-no-changes --severity warn
+
+      - name: Run the gameplay demo
+        run: dotnet run --project samples/Volt.GameplayDemo -c Release --no-restore
