@@ -72,13 +72,18 @@ public sealed class LifecycleStressCooldownTests
 				owner,
 				LifecycleStressSchema.Score));
 
-		// The cooldown effect stays active but no longer grants its tag.
-		// That is the inhibited/tag-stripped shape that exposes rollback
-		// bugs: activation passes the cooldown precheck, stacks the
-		// existing instance, and then fails the cost re-check.
-		Assert.True(runtime.Tags.RemoveTag(
+		// The cooldown grant belongs to the effect instance. A direct
+		// removal reports false and changes nothing, because consuming
+		// it here would leave the instance claiming a grant it no
+		// longer owns and its later release would take somebody else's.
+		Assert.False(runtime.Tags.RemoveTag(
 			owner,
 			LifecycleStressSchema.Cooldown));
+		Assert.Equal(
+			1,
+			runtime.Tags.GetTagCount(
+				owner,
+				LifecycleStressSchema.Cooldown));
 
 		GameplayAbilityHandle dash = runtime.Abilities.GiveAbility(
 			owner,
@@ -88,7 +93,7 @@ public sealed class LifecycleStressCooldownTests
 			runtime.Abilities.TryActivate(dash);
 
 		Assert.Equal(
-			GameplayAbilityActivationStatus.RejectedByCost,
+			GameplayAbilityActivationStatus.RejectedByCooldown,
 			result.Status);
 		Assert.Equal(1, runtime.Effects.ActiveEffectCount);
 		Assert.True(runtime.Effects.TryFindEffect(
@@ -102,9 +107,59 @@ public sealed class LifecycleStressCooldownTests
 				owner,
 				LifecycleStressSchema.Score));
 		Assert.Equal(
-			0,
-			runtime.Tags.GetTagCount(
+			25f,
+			runtime.Attributes.GetCurrentValue(
 				owner,
-				LifecycleStressSchema.Cooldown));
+				LifecycleStressSchema.Score));
+	}
+
+	[Fact]
+	public void RevertingAStackedCooldown_RestoresThePreviousStackAndMagnitude()
+	{
+		using AbilityRuntime runtime = new();
+		Entity owner = runtime.CreateActor();
+
+		runtime.Attributes.SetBaseValue(
+			owner,
+			LifecycleStressSchema.Score,
+			45f);
+
+		GameplayEffectApplyResult first = runtime.Effects.Apply(
+			owner,
+			LifecycleStressSchema.CooldownTwo);
+
+		Assert.Equal(GameplayEffectApplyStatus.Applied, first.Status);
+		Assert.Equal(25f, runtime.Attributes.GetCurrentValue(
+			owner,
+			LifecycleStressSchema.Score));
+
+		GameplayEffectApplyResult second = runtime.Effects.Apply(
+			owner,
+			LifecycleStressSchema.CooldownTwo,
+			owner,
+			out GameplayEffectApplicationRollback rollback);
+
+		Assert.Equal(GameplayEffectApplyStatus.Stacked, second.Status);
+		Assert.Equal(2, second.StackCount);
+		Assert.Equal(5f, runtime.Attributes.GetCurrentValue(
+			owner,
+			LifecycleStressSchema.Score));
+
+		// A rejected activation reverts exactly the application it
+		// made, leaving the instance the ability found untouched.
+		Assert.True(runtime.Effects.RevertApplication(second.Handle, rollback));
+
+		Assert.Equal(1, runtime.Effects.ActiveEffectCount);
+		Assert.True(runtime.Effects.TryFindEffect(
+			owner,
+			LifecycleStressSchema.CooldownTwo,
+			out ActiveGameplayEffect cooldown));
+		Assert.Equal(1, cooldown.StackCount);
+		Assert.Equal(25f, runtime.Attributes.GetCurrentValue(
+			owner,
+			LifecycleStressSchema.Score));
+		Assert.Equal(1, runtime.Tags.GetTagCount(
+			owner,
+			LifecycleStressSchema.Cooldown));
 	}
 }

@@ -24,6 +24,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/Volt.Core.Tests/Volt.Core.Tests.csproj" />
     <Project Path="tests/Volt.Ecs.Tests/Volt.Ecs.Tests.csproj" />
+    <Project Path="tests/Volt.Gameplay.Examples/Volt.Gameplay.Examples.csproj" />
     <Project Path="tests/Volt.Gameplay.Tests/Volt.Gameplay.Tests.csproj" />
     <Project Path="tests/Volt.Graphics.Vulkan.Tests/Volt.Graphics.Vulkan.Tests.csproj" />
     <Project Path="tests/Volt.Jobs.Tests/Volt.Jobs.Tests.csproj" />

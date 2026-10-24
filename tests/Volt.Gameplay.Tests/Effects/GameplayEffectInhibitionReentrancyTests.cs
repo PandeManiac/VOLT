@@ -1,6 +1,7 @@
 using Volt.Ecs;
 using Volt.Gameplay.Attributes;
 using Volt.Gameplay.Effects;
+using Volt.Gameplay.Tags;
 using Volt.Gameplay.Tests.Attributes;
 using Volt.Gameplay.Tests.Tags;
 
@@ -61,5 +62,59 @@ public sealed class GameplayEffectInhibitionReentrancyTests
 			1,
 			runtime.Tags.GetTagCount(entity, TagSchema.StatusStunned));
 		Assert.Equal(1, runtime.Effects.ActiveEffectCount);
+	}
+
+	[Fact]
+	public void Apply_ThatLosesItsRequirementDuringTheCall_ReportsTheFinalInhibition()
+	{
+		GameplayEffectDefinition guarded = GameplayEffectDefinition
+			.Create("Test.InhibitionReentrancy.Guarded")
+			.Infinite()
+			.Modifier(AttributeSchema.Unbounded, GameplayModifierOperation.AddBase, 1f)
+			.GameplayCue(TagSchema.CueBurning)
+			.RequireWhileActive(
+				GameplayTagRequirements.Require(
+					GameplayTagSet.Create(TagSchema.StatusBurning)))
+			.Build();
+
+		using EffectRuntime runtime = new();
+		Entity entity = runtime.CreateAffectedEntity();
+		GameplayEffectHandle provider = runtime.Effects.Apply(
+			entity,
+			EffectSchema.BurnTenSeconds).Handle;
+		List<GameplayEffectChange> changes = [];
+		bool removed = false;
+
+		runtime.Effects.Changed += changes.Add;
+		runtime.Attributes.AttributeChanged += change =>
+		{
+			if (removed
+				|| change.Entity != entity
+				|| change.Attribute != AttributeSchema.Unbounded)
+			{
+				return;
+			}
+
+			removed = true;
+
+			// The guarded effect gains its modifier before it reports
+			// Applied. Removing the provider from this notification
+			// withdraws the tag the guarded effect is waiting on, so
+			// the instance must end the call inhibited.
+			runtime.Effects.Remove(provider);
+		};
+
+		runtime.Effects.Apply(entity, guarded);
+
+		GameplayEffectChange applied = Assert.Single(
+			changes,
+			change => change.Kind == GameplayEffectChangeKind.Applied);
+
+		Assert.True(applied.IsInhibited);
+		Assert.True(runtime.Effects.TryFindEffect(
+			entity,
+			guarded,
+			out ActiveGameplayEffect active));
+		Assert.True(active.IsInhibited);
 	}
 }

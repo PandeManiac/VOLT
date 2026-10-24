@@ -433,6 +433,36 @@ public sealed class GameplayEffectSystem : IDisposable
 	}
 
 	/// <summary>
+	/// Copies the handles of every active instance in the system.
+	/// </summary>
+	/// <param name="destination">The destination span.</param>
+	/// <returns>
+	/// The number of handles written, which is less than
+	/// <see cref="ActiveEffectCount"/> when the span is too small.
+	/// </returns>
+	/// <remarks>
+	/// This is the enumeration an integration uses to adopt state that
+	/// was created before it was connected, such as the cue system
+	/// synchronizing the instances that already exist when it binds.
+	/// </remarks>
+	internal int CopyActiveEffects(Span<GameplayEffectHandle> destination)
+	{
+		ThrowIfDisposed();
+
+		int written = 0;
+
+		for (int slot = 0; slot < _effectSlotCount && written < destination.Length; slot++)
+		{
+			if (_effects[slot].Active)
+			{
+				destination[written++] = CreateHandle(slot);
+			}
+		}
+
+		return written;
+	}
+
+	/// <summary>
 	/// Gets the longest remaining duration among an entity's active
 	/// instances that grant any of the given tags.
 	/// </summary>
@@ -1205,7 +1235,7 @@ public sealed class GameplayEffectSystem : IDisposable
 				return;
 			}
 
-			_tags.AddTag(target, tag);
+			_tags.AddOwnedTag(target, tag);
 		}
 	}
 
@@ -1238,7 +1268,7 @@ public sealed class GameplayEffectSystem : IDisposable
 				return;
 			}
 
-			_tags.RemoveTag(target, tag);
+			_tags.RemoveOwnedTag(target, tag);
 		}
 	}
 

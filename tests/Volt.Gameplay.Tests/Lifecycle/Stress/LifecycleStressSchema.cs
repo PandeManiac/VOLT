@@ -41,6 +41,9 @@ internal static class LifecycleStressSchema
 	internal static readonly GameplayTag Ability =
 		GameplayTagRegistry.Shared.Register($"{TagRoot}.Ability");
 
+	internal static readonly GameplayTag Cue =
+		GameplayTagRegistry.Shared.Register($"{TagRoot}.Cue");
+
 	internal static readonly GameplayTag[] Tags =
 	[
 		Alpha,
@@ -71,6 +74,7 @@ internal static class LifecycleStressSchema
 			.Infinite()
 			.Modifier(Score, GameplayModifierOperation.AddBase, 5f)
 			.GrantTags(Alpha)
+			.GameplayCue(Cue)
 			.Build();
 
 	internal static readonly GameplayEffectDefinition DurationTen =
@@ -79,6 +83,7 @@ internal static class LifecycleStressSchema
 			.HasDuration(3f)
 			.Modifier(Score, GameplayModifierOperation.AddBase, 10f)
 			.GrantTags(Beta)
+			.GameplayCue(Cue)
 			.Build();
 
 	internal static readonly GameplayEffectDefinition StackThree =
@@ -104,6 +109,7 @@ internal static class LifecycleStressSchema
 			.RequireWhileActive(
 				GameplayTagRequirements.Require(
 					GameplayTagSet.Create(Alpha)))
+			.GameplayCue(Cue)
 			.Build();
 
 	internal static readonly GameplayEffectDefinition CooldownTwo =
@@ -113,6 +119,7 @@ internal static class LifecycleStressSchema
 			.Modifier(Score, GameplayModifierOperation.AddBase, -20f)
 			.GrantTags(Cooldown)
 			.Stacking(GameplayEffectStackingType.AggregateByTarget, 3)
+			.GameplayCue(Cue)
 			.Build();
 
 	internal static readonly GameplayEffectDefinition CostTen =

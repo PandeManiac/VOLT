@@ -108,6 +108,28 @@ two removals; destroying an entity clears all of them, and entity
 generations prevent a recycled index from exposing its predecessor's
 state.
 
+Grants are owned. `AddTag` records an unowned grant that belongs to the
+caller; the effect system records owned grants for the instances it
+manages. Both contribute to the same visible count, but each release is
+scoped to the pool it can attribute: `RemoveTag` and `Clear` release
+unowned grants only, and an effect's own release removes owned grants
+only. That contract is what makes an external mutation unable to
+invalidate an effect's bookkeeping - the older counted model let a
+bulk clear leave an effect claiming a grant it no longer had, so its
+later expiry could take a newly added grant from somebody else.
+`Clear(entity)` therefore removes every unowned grant, reports whether
+it removed anything, and leaves effect-owned grants (and the effects
+themselves) intact; remove the effect, or let it expire, to release its
+contribution. A tag held only by active effects is not removable from
+outside those effects, and `RemoveTag` reports `false` for it. `Clear`
+raises the per-tag and per-entity notifications after committing, so
+effects, abilities, and tasks observe the reset exactly as they observe
+a single removal, and it aggregates listener failures after attempting
+every notification. A listener may clear another entity during that
+dispatch: the nested clear snapshots its own tags, so the outer
+notifications stay complete, and a warmed top-level clear allocates
+nothing.
+
 ## Attributes
 
 ```csharp
@@ -468,12 +490,29 @@ GameplayAbilityDefinition attack = GameplayAbilityDefinition
             .Build())
     .Build();
 
-// The application owns the signal; the runtime owns the ownership
-// checks, cancellation, and slot reuse.
-GameplayAbilityTaskHandle task = abilities.Tasks.WaitCustom(activation, swing);
+GameplayAbilityHandle handle = abilities.GiveAbility(owner, attack);
+abilities.TryActivate(handle, target);
 
-abilities.Tasks.Complete(task);   // or abilities.Tasks.Cancel(task)
+// A plan owns the task it started; application code signals completion
+// through that handle instead of starting a second one.
+Span<GameplayAbilityTaskHandle> pending =
+    stackalloc GameplayAbilityTaskHandle[1];
+abilities.Tasks.CopyTasks(owner, pending);
+abilities.Tasks.Complete(pending[0]);   // or abilities.Tasks.Cancel(pending[0])
 ```
+
+A wait started outside a plan uses the same runtime and returns its own
+handle:
+
+```csharp
+GameplayAbilityTaskHandle task = abilities.Tasks.WaitCustom(activation, swing);
+abilities.Tasks.Complete(task);
+```
+
+A plan's `WaitCustom` step starts exactly one task, and completing it
+resumes the plan; creating a second task for the same definition would
+park a different slot. `CopyTasks` returns up to the destination length
+of the owner's pending tasks.
 
 A custom task is a registered definition plus one ordinary task slot.
 It is not in the deadline heap and has no subscription, so dormant
@@ -615,7 +654,20 @@ Effects may declare `.GameplayCue(tag)`. Bind a cue system to the same
 world's `GameplayEffectSystem` with `cues.BindEffects(effects)`. Active
 non-periodic effects add a persistent cue, stack changes update it, and
 inhibition, removal, expiration, or target destruction remove it. Periodic
-ticks and instant effects emit execute cues. Ability plans use
+ticks and instant effects emit execute cues.
+
+Binding may happen before or after effects exist. On the first bind,
+every instance that is already active is synchronized: an uninhibited
+instance with a cue tag gets its persistent cue with the current source,
+target, magnitude, and stack count, while inhibited instances wait for
+their resumption and instant effects are not replayed. Repeating the
+bind is self-healing and idempotent - it adopts any instance that still
+has no cue and never creates a duplicate. A second effect system in the
+same world is rejected, and one from another world is rejected by the
+world check. Cue ownership follows the live instance: a transition that
+was raised before an earlier listener changed the instance is resolved
+against the current snapshot, so a cue cannot outlive the state that
+justified it. Ability plans use
 `.ExecuteCue(tag)` for one-shots or `.AddCue(tag)` for activation-owned
 persistent cues, automatically removed when that activation ends or cancels.
 
@@ -690,6 +742,7 @@ benchmarks/Volt.Benchmarks -- --filter '*GameplayCueBenchmarks*'`.
 
 ```bash
 dotnet test tests/Volt.Gameplay.Tests -c Release
+dotnet test tests/Volt.Gameplay.Examples -c Release
 
 cd benchmarks/Volt.Benchmarks
 dotnet run -c Release -- --filter '*GameplayTagBenchmarks*'
@@ -709,6 +762,8 @@ dotnet run -c Release -- --filter '*GameplayAuthoringBenchmarks*'
 dotnet run -c Release -- --filter '*GameplayAuthoringPopulationBenchmarks*'
 dotnet run -c Release -- --filter '*GameplaySimulationTaskBurstBenchmarks*'
 dotnet run -c Release -- --filter '*GameplaySimulationEffectBurstBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayCueBenchmarks*'
+dotnet run -c Release -- --filter '*GameplayCueLifecycleBenchmarks*'
 
 dotnet run --project samples/Volt.GameplayDemo -c Release
 ```
@@ -724,12 +779,22 @@ event dispatch and subscription, task start, event and tag waits, bulk
 task expiry, ability ending with tasks, and entity recycling with live
 gameplay state allocate zero managed bytes. The gameplay demo is a
 separate executable smoke test whose assertions cover the combined
-charged-dash lifecycle.
+charged-dash lifecycle, and the cue presentation tests model a consumer
+that rebuilds live state across frames, including a cue added and
+removed between two frames.
+
+`Volt.Gameplay.Examples` compiles and runs the public snippets from
+this README and from `GameplaySpec.md` - service creation, effect
+application, ability definitions, conditional plans, custom tasks,
+composite waits, fixed-step integration, cue subscriptions,
+effect-backed and activation-owned cues, and buffer draining - so a
+signature change breaks the build instead of leaving stale prose.
 
 `LifecycleStressHarness` adds a seed-replayable state machine over all
-four stores. It generates operations at the top level and from
-notifications, recycles entity and effect slots, retains stale handles,
-and checks an independent tag/attribute/effect/ability model after every
-operation. The permanent matrix is 128 seeds at 500 operations under
+four stores plus a bound cue system and presentation buffer. It
+generates operations at the top level and from notifications, recycles
+entity and effect slots, retains stale handles, and checks an independent
+tag/attribute/effect/ability/cue model after every operation, including
+that every live uninhibited cue-tagged instance owns exactly one cue. The permanent matrix is 128 seeds at 500 operations under
 both destruction callback orders; failures report the seed, operation,
 trace, and store dump, and a failing prefix can be replayed exactly.
