@@ -65,12 +65,41 @@ public sealed class GameplayCueSystem : IDisposable
 	/// <summary>Number of listener subscriptions.</summary>
 	public int SubscriptionCount => _liveSubscriptions;
 	/// <summary>Connects effect lifecycle changes to effect-associated cue transitions.</summary>
+	/// <remarks>
+	/// <para>
+	/// Binding may happen before or after effects exist. On the first
+	/// bind, every instance that is already active is synchronized:
+	/// an uninhibited, non-instant instance with a cue tag gets its
+	/// persistent cue, with the same source, target, magnitude, and
+	/// stack count the runtime would have reported. Inhibited
+	/// instances get none until they resume, and instant instances are
+	/// not restored because their one-shot cue was delivered when they
+	/// applied and cannot be replayed without duplicating it.
+	/// </para>
+	/// <para>
+	/// Binding the same system again re-runs the synchronization. It
+	/// adopts any instance that still has no cue, which makes a retry
+	/// after a listener failure self-healing, and it skips instances
+	/// that already have one, so it can never create a duplicate. A
+	/// different system in the same world is rejected. If a listener
+	/// throws while the existing instances are synchronized, every
+	/// instance is still visited, the binding stays in place, and the
+	/// failures surface as one aggregate exception; the transitions
+	/// that were already delivered stand.
+	/// </para>
+	/// </remarks>
 	public void BindEffects(GameplayEffectSystem effects)
 	{
 		ThrowIfDisposed(); ArgumentNullException.ThrowIfNull(effects);
 		if (!ReferenceEquals(effects.World, _world))
 		{
 			throw new ArgumentException("Effects must belong to the same world.", nameof(effects));
+		}
+
+		if (ReferenceEquals(_effects, effects))
+		{
+			SynchronizeEffectCues();
+			return;
 		}
 
 		if (_effects is not null)
@@ -80,6 +109,79 @@ public sealed class GameplayCueSystem : IDisposable
 
 		_effects = effects;
 		_effects.CueChanged += HandleEffectChange;
+		SynchronizeEffectCues();
+	}
+
+	/// <summary>
+	/// Creates the persistent cue for each instance that was already
+	/// active when the effect system was bound.
+	/// </summary>
+	/// <remarks>
+	/// The subscription is installed before this runs, so a listener
+	/// that removes an instance while the cue is being added sees the
+	/// removal transition and the retired handle cannot be reused by
+	/// mistake. Instant and inhibited instances are skipped, matching
+	/// what the live transition stream would have produced.
+	/// </remarks>
+	private void SynchronizeEffectCues()
+	{
+		GameplayEffectSystem effects = _effects!;
+		int count = effects.ActiveEffectCount;
+
+		if (count == 0)
+		{
+			return;
+		}
+
+		// Binding is a setup-time operation, so one buffer for the
+		// existing instances is cheaper than a per-instance query and
+		// cannot leak into the steady-state allocation profile.
+		GameplayEffectHandle[] handles = new GameplayEffectHandle[count];
+		int copied = effects.CopyActiveEffects(handles);
+		List<Exception>? failures = null;
+
+		for (int index = 0; index < copied; index++)
+		{
+			GameplayEffectHandle handle = handles[index];
+
+			if (TryFindEffectCue(handle, out _)
+				|| !effects.TryGetEffect(handle, out ActiveGameplayEffect active))
+			{
+				continue;
+			}
+
+			GameplayEffectDefinition definition = active.Definition;
+
+			if (!definition.CueTag.IsValid
+				|| definition.IsInstant
+				|| active.IsInhibited)
+			{
+				continue;
+			}
+
+			try
+			{
+				Add(
+					definition.CueTag,
+					active.Source,
+					active.Target,
+					active.StackCount,
+					active.StackCount,
+					effect: handle);
+			}
+			catch (Exception exception)
+			{
+				(failures ??= []).Add(exception);
+			}
+		}
+
+		if (failures is not null)
+		{
+			throw new AggregateException(
+				"Gameplay cue synchronization failed for one or more " +
+				"active effects.",
+				failures);
+		}
 	}
 	/// <summary>Raised synchronously after cue state commits.</summary>
 	public event Action<GameplayCueEvent>? Changed;
@@ -316,9 +418,13 @@ public sealed class GameplayCueSystem : IDisposable
 	private int Dispatch(in GameplayCueEvent cueEvent, bool bufferAlreadyQueued = false)
 	{
 		Exception? failure = null;
-		if (!bufferAlreadyQueued)
+		if (!bufferAlreadyQueued && _buffer is { IsDisposed: false } handoff)
 		{
-			try { _buffer?.Enqueue(cueEvent); }
+			// A presentation buffer disposed before this system simply
+			// stops receiving transitions; synchronous listeners still
+			// see every one, and gameplay cleanup is never interrupted
+			// by an exception from a dead handoff.
+			try { handoff.Enqueue(cueEvent); }
 			catch (Exception exception) { failure = exception; }
 		}
 
@@ -492,6 +598,17 @@ public sealed class GameplayCueSystem : IDisposable
 			return;
 		}
 
+		// The payload records the state when the change was raised, and
+		// an earlier subscriber may have inhibited, stacked, or removed
+		// the instance since. Cue ownership follows the instance, so a
+		// live snapshot decides; the payload is the fallback for a
+		// handle that has already ended.
+		ActiveGameplayEffect active = default;
+		bool live = _effects is not null
+			&& _effects.TryGetEffect(change.Handle, out active);
+		bool inhibited = live ? active.IsInhibited : change.IsInhibited;
+		int stackCount = live ? active.StackCount : change.StackCount;
+
 		switch (change.Kind)
 		{
 			case GameplayEffectChangeKind.Applied:
@@ -504,10 +621,9 @@ public sealed class GameplayCueSystem : IDisposable
 					}
 					break;
 				}
-				if (!change.IsInhibited && !TryFindEffectCue(change.Handle, out _)
-					&& _effects is not null && _effects.TryGetEffect(change.Handle, out _))
+				if (!inhibited && live && !TryFindEffectCue(change.Handle, out _))
 				{
-					Add(change.Definition.CueTag, change.Source, change.Target, change.StackCount, change.StackCount, effect: change.Handle);
+					Add(change.Definition.CueTag, change.Source, change.Target, stackCount, stackCount, effect: change.Handle);
 				}
 				break;
 			case GameplayEffectChangeKind.StackChanged:
@@ -515,17 +631,17 @@ public sealed class GameplayCueSystem : IDisposable
 				{
 					break;
 				}
-				if (change.IsInhibited)
+				if (inhibited)
 				{
 					RemoveEffect(change.Handle);
 				}
 				else if (TryFindEffectCue(change.Handle, out GameplayCueHandle cue))
 				{
-					Update(cue, change.StackCount, change.StackCount);
+					Update(cue, stackCount, stackCount);
 				}
-				else if (_effects is not null && _effects.TryGetEffect(change.Handle, out _))
+				else if (live)
 				{
-					Add(change.Definition.CueTag, change.Source, change.Target, change.StackCount, change.StackCount, effect: change.Handle);
+					Add(change.Definition.CueTag, change.Source, change.Target, stackCount, stackCount, effect: change.Handle);
 				}
 				break;
 			case GameplayEffectChangeKind.Inhibited:

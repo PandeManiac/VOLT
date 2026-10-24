@@ -30,6 +30,16 @@ public sealed class GameplayCueBuffer : IDisposable
 	public int MaximumCapacity { get; }
 	/// <summary>Number of queued transitions.</summary>
 	public int Count => _count;
+
+	/// <summary>
+	/// Gets whether the buffer has been disposed.
+	/// </summary>
+	/// <remarks>
+	/// A cue system checks this before writing, so disposing the buffer
+	/// before the system that hands it events stops the presentation
+	/// handoff instead of throwing during gameplay cleanup.
+	/// </remarks>
+	public bool IsDisposed => _disposed;
 	/// <summary>Current event array capacity.</summary>
 	public int Capacity => _events.Length;
 
