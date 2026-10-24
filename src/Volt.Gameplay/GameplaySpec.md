@@ -858,6 +858,36 @@ instance is inhibited or removed. Instant effects never grant tags.
 - Consequence: two effects granting the same tag leave it present when
   one of them ends, which the store's reference counting provides.
 
+**Rule.** A grant is owned. `AddTag` records an unowned grant that
+belongs to the caller; an effect records owned grants for its instance.
+Releases are scoped to what the caller can attribute: `RemoveTag` and
+`Clear` release unowned grants only, and an effect's release removes
+owned grants only.
+
+- `DIFF` Unreal keeps granted tags in a container on the effect spec and
+  removes exactly that container, so ownership is implicit in the tag
+  map's reference counting. VOLT's store is also counted, but a count
+  alone cannot attribute a shared tag to one owner; the explicit
+  owned/unowned split is what provides the same guarantee.
+- Consequence 1: an external `RemoveTag` or `Clear` cannot invalidate
+  an effect's claim, so a later expiry cannot consume a grant that
+  appeared after the external mutation.
+- Consequence 2: `Clear(entity)` removes unowned grants and leaves
+  effect-owned grants, and the effects that own them, in place. It is a
+  reset of caller-owned state, not a way to strip an effect's
+  contribution; remove the effect to release that. `RemoveTag` reports
+  `false` for a tag held only by owned grants.
+- Consequence 3: `Clear` is observable. It commits every removal first,
+  then raises the per-tag notification for each removed tag and one
+  entity notification, so tag waits, ability requirements, and ongoing
+  effect requirements observe the same committed state they observe
+  for a single removal. Listener failures are collected and thrown
+  together after every notification has been attempted.
+- Consequence 4: `Clear` is reentrant. A listener may clear a different
+  entity during the dispatch; the nested clear snapshots its own tags
+  instead of reusing the outer buffer, so the outer notifications remain
+  complete. A warmed top-level clear allocates nothing.
+
 ## 3.5 Requirements
 
 **Rule.** An application is refused when the target does not have every
@@ -2750,8 +2780,8 @@ external resources.
   are application tasks that call `Complete`, or new milestone work.
 - Tasks are not individually paused. Pausing the simulation with a zero
   step pauses all of them; time scaling applies to all deadlines.
-- Cues, animation notifies, and replication prediction remain outside
-  this milestone.
+- Animation notifies and replication prediction remain outside this
+  milestone.
 - The fixed-step integration is a post-fixed phase. An application that
   needs gameplay to run between specific fixed-update callbacks can use
   the manual APIs instead; there is no per-callback ordering editor.
@@ -2762,6 +2792,162 @@ external resources.
   steps for chained task callbacks; the fixed step loop is the
   supported deterministic path.
 
-# Part 6 — Cues and replication preparation
+# Part 6 — Gameplay cues
 
-Not yet implemented.
+Gameplay cues are the presentation edge of the gameplay runtime. They
+carry committed gameplay intent - "this instant hit happened", "this
+burn started and is now at three stacks", "it stopped" - to any
+renderer, audio engine, camera, or UI that wants to consume it. VOLT
+implements the routing and lifetime layer only. There is no renderer,
+audio backend, animation graph, or replication in this milestone.
+
+## 6.1 Cue tags and transitions
+
+**Rule.** A cue is identified by a registered gameplay tag, interpreted
+as a shared presentation action. `Execute` emits one immutable
+`Execute` transition. `Add` creates a persistent instance and emits
+`Added`; `Update` replaces its magnitude, stack count, and payload and
+emits `Updated`; `Remove` retires it and emits `Removed`. Handles are
+system-scoped and generational, so a stale or foreign handle cannot
+update or remove a replacement instance.
+
+- `INFER` Unreal's `FGameplayCueManager` routes by cue tag to
+  `UGameplayCueNotify` assets. VOLT keeps the tag-routed shape and the
+  `Execute`/`Add`/`Update`/`Remove` lifecycle, and leaves the notifier
+  to the application.
+- `DIFF` There is no cue notify asset, no cue parameters tag container,
+  and no automatic reset/loop policy. The payload is a
+  `GameplayEventPayload` plus a magnitude and stack count.
+
+## 6.2 Matching and delivery
+
+**Rule.** Exact listeners receive only the subscribed tag;
+hierarchical listeners also receive every descendant. An optional owner
+scopes a subscription or cue to one entity, and both are retired when
+that entity is destroyed. Dispatch is synchronous and reentrant:
+listeners are captured, then revalidated before each call, so a listener
+removed during dispatch receives no later callback from it, and a
+listener added during dispatch waits for the next one. A listener may
+mutate cue state; state is committed before callbacks run and is never
+rolled back.
+
+## 6.3 Effect-owned cues
+
+**Rule.** A definition may declare a cue tag. An active, uninhibited,
+non-instant instance owns one persistent cue: applying it emits `Added`,
+a stack change emits `Updated`, and inhibition, removal, expiration, or
+target destruction emits `Removed`. Periodic ticks and instant
+applications emit `Execute` transitions instead of persistent ones.
+
+- `SRC` Unreal's `GameplayCueInterface` receives `Execute` and
+  `Add`/`Remove` from `UGameplayCueManager`, driven by active effect
+  events. VOLT drives the same shape from its effect change stream.
+- Cue lifetime follows the instance, not the granted tags. Clearing
+  unowned tags therefore cannot remove an effect's cue.
+
+## 6.4 Binding and late synchronization
+
+**Rule.** A cue system is bound to exactly one effect system in the same
+world, and binding is allowed before or after effects exist. The first
+bind synchronizes the instances that already exist: every uninhibited,
+non-instant instance with a cue tag gets its persistent cue with the
+current source, target, magnitude, and stack count. Inhibited instances
+receive theirs when they resume, and instant instances are not replayed
+because their one-shot was delivered when they applied. Re-binding the
+same system re-runs the synchronization, adopting instances that still
+have no cue and never duplicating one; binding a different system in the
+same world is rejected.
+
+- `INFER` A transition stream alone cannot describe events that happened
+  before the subscription. Explicit synchronization is the deterministic
+  answer; requiring binding first would make the failure a runtime
+  assertion for an otherwise valid setup order.
+
+## 6.5 Presentation handoff
+
+**Rule.** An optional `GameplayCueBuffer` receives every transition in
+addition to synchronous listeners. It is a bounded FIFO: `Drain(Span)`
+copies in order without allocating, the buffer grows geometrically to
+its configured maximum, and overflow throws before enqueueing so no
+transition is silently lost. It is caller-owned and not thread-safe.
+Disposing the buffer before the cue system stops the handoff without
+throwing; synchronous listeners still receive every transition, and
+gameplay cleanup is never interrupted by a dead presentation consumer.
+
+## 6.6 State resolution and exception policy
+
+**Rule.** Cue ownership is resolved against the live instance whenever
+one exists, not against the point-in-time flag in the notification
+payload, because an earlier subscriber may have inhibited, stacked, or
+removed the instance since the change was raised. A cue therefore
+cannot outlive the state that justified it.
+
+**Rule.** Listener exceptions propagate to the caller after the
+transition is committed. A failed `Added` notification rolls the new
+persistent cue back and reports `Removed` for it, so a throwing listener
+cannot leave a half-visible instance. During effect binding
+synchronization, every instance is still visited and the failures are
+reported as one aggregate exception.
+
+## 6.7 Performance
+
+Measured on the cloud verification VM (2 logical cores, .NET 10.0.13)
+with `--warmupCount 1 --iterationCount 3` under `[InProcess]`, so the
+numbers are indicative rather than a tuned baseline. Every warmed
+dispatch row allocated 0 managed bytes.
+
+| Operation | Mean | Allocated |
+| --- | ---: | ---: |
+| Execute with no listeners | 8.1 ns | 0 B |
+| Execute with one exact listener | 48.6 ns | 0 B |
+| Execute with a hierarchical listener on the parent tag | 55.5 ns | 0 B |
+| Execute with 1,000 listeners on an unrelated tag | 17–19 ns | 0 B |
+| Execute with 1,000 relevant listeners | 23.5 µs | 0 B |
+| Add and remove a persistent cue | 89–92 ns | 0 B |
+| Update a persistent cue | 26 ns | 0 B |
+| Subscribe and unsubscribe | 27–28 ns | 0 B |
+| Buffered enqueue and drain of one transition | 18.5 ns | 0 B |
+
+Dispatch is proportional to the listeners that the tag index selects, not
+to the registered population: a thousand unrelated subscriptions do not
+add measurable cost, while a thousand relevant listeners cost about
+23 ns each. Hierarchical matching resolves through the cached ancestry,
+so a descendant dispatch does not walk the registry.
+
+| Persistent cues | 1,000 | 10,000 | 100,000 |
+| --- | ---: | ---: | ---: |
+| Add N cues | 74.1 µs | 570.6 µs | 5.58 ms |
+| Remove N cues | 59.2 µs | 402.8 µs | 5.35 ms |
+| Destroy N entities with a cue-tagged effect | 1.68 ms | 4.20 ms | 55.3 ms |
+
+| Apply and expire N cue-tagged effects, then destroy the entities | 1,000 | 10,000 | 100,000 |
+| --- | ---: | ---: | ---: |
+| Mean | 2.96 ms | 13.9 ms | 87.8 ms |
+
+The batch rows include entity creation and effect bookkeeping, so they
+are a lifecycle envelope rather than a pure cue cost; the per-cue add,
+remove, and update rows above are the isolated operations. The reported
+allocations for a batch (about 7 KB for the cue store plus 88 B per
+effect-and-cue pair at 100,000) are first-use growth of the cue, effect,
+and entity stores, not per-transition allocation. Warm dispatch,
+persistent add/remove/update, buffered handoff, and subscription
+maintenance are zero-allocation. A large idle cue population costs no
+fixed-step work at all: cues are driven by explicit calls and effect
+transitions, and the system has no per-frame scan.
+
+Run the measurement with:
+
+```bash
+dotnet run -c Release --project benchmarks/Volt.Benchmarks -- \
+    --filter '*GameplayCue*' --warmupCount 1 --iterationCount 3
+```
+
+## 6.8 Scope
+
+- Cue tags, magnitudes, stack counts, and payloads are delivered as
+  values; there is no per-cue parameter container, no cue notify graph,
+  and no built-in sound or particle binding.
+- Cue dispatch is synchronous on the gameplay thread. A presentation
+  layer that needs frame-boundary delivery drains the buffer itself.
+- Replication, prediction, and rollback of cue state are not
+  implemented. Nothing in this part makes the runtime networked.
