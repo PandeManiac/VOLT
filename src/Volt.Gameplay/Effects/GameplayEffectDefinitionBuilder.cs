@@ -55,6 +55,7 @@ public sealed class GameplayEffectDefinitionBuilder
 
 	private bool _factorInStackCount = true;
 	private bool _executePeriodicOnApplication = true;
+	private GameplayTag _cueTag;
 
 	internal GameplayEffectDefinitionBuilder(string name)
 	{
@@ -283,6 +284,18 @@ public sealed class GameplayEffectDefinitionBuilder
 		return this;
 	}
 
+	/// <summary>Associates an optional gameplay cue with applications of this effect.</summary>
+	public GameplayEffectDefinitionBuilder GameplayCue(GameplayTag cueTag)
+	{
+		if (!cueTag.IsValid)
+		{
+			throw new ArgumentException("A gameplay cue tag must be registered.", nameof(cueTag));
+		}
+
+		_cueTag = cueTag;
+		return this;
+	}
+
 	/// <summary>
 	/// Validates and creates the definition.
 	/// </summary>
@@ -424,6 +437,7 @@ public sealed class GameplayEffectDefinitionBuilder
 			_stackExpirationPolicy,
 			_periodicInhibitionPolicy,
 			_factorInStackCount,
-			_executePeriodicOnApplication);
+			_executePeriodicOnApplication,
+			_cueTag);
 	}
 }

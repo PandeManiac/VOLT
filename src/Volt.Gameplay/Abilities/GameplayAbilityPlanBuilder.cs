@@ -1,3 +1,4 @@
+using Volt.Gameplay.Cues;
 using Volt.Gameplay.Effects;
 using Volt.Gameplay.Events;
 using Volt.Gameplay.Tags;
@@ -136,6 +137,30 @@ public sealed class GameplayAbilityPlanBuilder
 
 		_steps.Add(GameplayAbilityPlanStep.PublishEvent(tag));
 
+		return this;
+	}
+
+	/// <summary>Appends a one-shot presentation cue step.</summary>
+	public GameplayAbilityPlanBuilder ExecuteCue(GameplayTag tag)
+	{
+		if (!tag.IsValid)
+		{
+			throw new ArgumentException("A cue step needs a registered tag.", nameof(tag));
+		}
+
+		_steps.Add(GameplayAbilityPlanStep.ExecuteCue(tag));
+		return this;
+	}
+
+	/// <summary>Appends a persistent cue step automatically owned by this activation.</summary>
+	public GameplayAbilityPlanBuilder AddCue(GameplayTag tag)
+	{
+		if (!tag.IsValid)
+		{
+			throw new ArgumentException("A cue step needs a registered tag.", nameof(tag));
+		}
+
+		_steps.Add(GameplayAbilityPlanStep.AddCue(tag));
 		return this;
 	}
 

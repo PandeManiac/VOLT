@@ -1,3 +1,4 @@
+using Volt.Gameplay.Cues;
 using Volt.Gameplay.Effects;
 using Volt.Gameplay.Events;
 using Volt.Gameplay.Tags;
@@ -37,6 +38,7 @@ public readonly struct GameplayAbilityPlanStep
 		GameplayWaitAny? wait = null,
 		GameplayAbilityTaskDefinition? customTask = null,
 		GameplayCondition? condition = null,
+		GameplayCueHandle cue = default,
 		int targetStep = -1)
 	{
 		Kind = kind;
@@ -50,6 +52,7 @@ public readonly struct GameplayAbilityPlanStep
 		Wait = wait;
 		CustomTask = customTask;
 		Condition = condition;
+		Cue = cue;
 		TargetStep = targetStep;
 	}
 
@@ -115,6 +118,9 @@ public readonly struct GameplayAbilityPlanStep
 	/// <see cref="GameplayAbilityPlanStepKind.Branch"/> step.
 	/// </summary>
 	public GameplayCondition? Condition { get; }
+
+	/// <summary>Gets the activation-owned persistent cue identity when assigned at runtime.</summary>
+	public GameplayCueHandle Cue { get; }
 
 	/// <summary>
 	/// Gets the index a branch jumps to when its condition does not
@@ -221,6 +227,20 @@ public readonly struct GameplayAbilityPlanStep
 	/// <summary>
 	/// Creates a step that ends the ability normally.
 	/// </summary>
+	public static GameplayAbilityPlanStep ExecuteCue(GameplayTag tag)
+	{
+		return new GameplayAbilityPlanStep(GameplayAbilityPlanStepKind.ExecuteCue, tag: tag);
+	}
+
+	/// <summary>Creates a persistent cue step that the activation automatically releases.</summary>
+	public static GameplayAbilityPlanStep AddCue(GameplayTag tag)
+	{
+		return new GameplayAbilityPlanStep(GameplayAbilityPlanStepKind.AddCue, tag: tag);
+	}
+
+	/// <summary>
+	/// Creates a step that ends the ability normally.
+	/// </summary>
 	public static GameplayAbilityPlanStep End()
 	{
 		return new GameplayAbilityPlanStep(
@@ -271,6 +291,7 @@ public readonly struct GameplayAbilityPlanStep
 			Wait,
 			CustomTask,
 			Condition,
+			Cue,
 			targetStep);
 	}
 
@@ -288,6 +309,8 @@ public readonly struct GameplayAbilityPlanStep
 				$"ApplyEffect({Effect?.Name}, {EffectTarget})",
 			GameplayAbilityPlanStepKind.PublishEvent =>
 				$"PublishEvent({Tag})",
+			GameplayAbilityPlanStepKind.ExecuteCue => $"ExecuteCue({Tag})",
+			GameplayAbilityPlanStepKind.AddCue => $"AddCue({Tag})",
 			GameplayAbilityPlanStepKind.WaitAny =>
 				$"WaitAny({Wait?.ToString() ?? "none"})",
 			GameplayAbilityPlanStepKind.WaitCustom =>

@@ -53,5 +53,11 @@ public enum GameplayAbilityPlanStepKind : byte
 	/// <summary>
 	/// Continues at another step unconditionally.
 	/// </summary>
-	Goto = 9
+	Goto = 9,
+
+	/// <summary>Executes a one-shot gameplay cue.</summary>
+	ExecuteCue = 10,
+
+	/// <summary>Adds a persistent cue owned by this activation.</summary>
+	AddCue = 11
 }
