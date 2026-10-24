@@ -5,6 +5,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!--
+      The allocation guards measure a warmed loop on the current thread.
+      Tiered compilation can recompile an instrumented method mid-loop and
+      report those bytes as gameplay allocations, which made the guards
+      intermittently fail under load. Disabling tiering keeps the
+      measurement deterministic without changing what the guards assert.
+    -->
+    <TieredCompilation>false</TieredCompilation>
   </PropertyGroup>
 
   <ItemGroup>

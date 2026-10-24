@@ -2,6 +2,7 @@ using System.Text;
 using Volt.Ecs;
 using Volt.Gameplay.Abilities;
 using Volt.Gameplay.Attributes;
+using Volt.Gameplay.Cues;
 using Volt.Gameplay.Effects;
 using Volt.Gameplay.Tags;
 
@@ -135,6 +136,7 @@ internal sealed class LifecycleStressHarness : IDisposable
 	private readonly List<GameplayAbilityHandle> _staleAbilities = [];
 	private readonly List<GameplayModifierHandle> _staleModifiers = [];
 	private readonly List<Entity> _staleEntities = [];
+	private readonly GameplayCueBuffer _cueBuffer = new(128, 65536);
 
 	private SplitMix64 _random;
 	private int _traceSequence;
@@ -164,6 +166,9 @@ internal sealed class LifecycleStressHarness : IDisposable
 		Attributes = new GameplayAttributeStore(World);
 		Tags = new GameplayTagStore(World);
 		Effects = new GameplayEffectSystem(World, Attributes, Tags);
+		Cues = new GameplayCueSystem(World);
+		Cues.BindEffects(Effects);
+		Cues.PresentationBuffer = _cueBuffer;
 		Abilities = new GameplayAbilitySystem(World, Tags, Effects, Attributes);
 
 		if (!options.DestroyCallbackBeforeStores)
@@ -174,6 +179,7 @@ internal sealed class LifecycleStressHarness : IDisposable
 		Attributes.AttributeChanged += HandleAttributeChanged;
 		Tags.TagsChanged += HandleTagsChanged;
 		Effects.Changed += HandleEffectChanged;
+		Cues.Changed += HandleCueChanged;
 		Abilities.Changed += HandleAbilityChanged;
 
 		SeedInitialState();
@@ -186,6 +192,8 @@ internal sealed class LifecycleStressHarness : IDisposable
 	public GameplayTagStore Tags { get; }
 
 	public GameplayEffectSystem Effects { get; }
+
+	public GameplayCueSystem Cues { get; }
 
 	public GameplayAbilitySystem Abilities { get; }
 
@@ -304,9 +312,13 @@ internal sealed class LifecycleStressHarness : IDisposable
 		Attributes.AttributeChanged -= HandleAttributeChanged;
 		Tags.TagsChanged -= HandleTagsChanged;
 		Effects.Changed -= HandleEffectChanged;
+		Cues.Changed -= HandleCueChanged;
 		Abilities.Changed -= HandleAbilityChanged;
 
 		Abilities.Dispose();
+		Cues.PresentationBuffer = null;
+		Cues.Dispose();
+		_cueBuffer.Dispose();
 		Effects.Dispose();
 		Tags.Dispose();
 		Attributes.Dispose();
@@ -590,7 +602,11 @@ internal sealed class LifecycleStressHarness : IDisposable
 
 		GameplayTag tag = _random.Pick(LifecycleStressSchema.Tags);
 
-		if (_model.TagCount(entity, tag) == 0)
+		// Only an unowned grant is removable from outside an effect. A
+		// tag held solely by active effects must make RemoveTag report
+		// false rather than steal the owner's grant, so the generator
+		// makes sure an unowned grant exists first.
+		if (_model.UnownedTagCount(entity, tag) == 0)
 		{
 			AddTag(entity, tag);
 			return;
@@ -624,40 +640,18 @@ internal sealed class LifecycleStressHarness : IDisposable
 			? candidate
 			: EnsureEntity();
 
-		// A bulk clear revokes effect-granted tags without a per-grant
-		// notification, so an active effect cannot learn that its count is
-		// gone. The harness only clears entities on which no instance owns
-		// a grant; GameplayTagStoreTests covers Clear on its own.
-		if (HasGrantedEffectTags(entity))
+		bool modeled = _model.ClearTags(entity);
+
+		bool removed = Tags.Clear(entity);
+
+		Trace("tag.clear", $"{Describe(entity)} => {removed}");
+
+		if (modeled != removed)
 		{
-			Trace("tag.clear", $"{Describe(entity)} => skipped");
-			return;
+			throw CreateFailure(
+				$"Clear returned {removed} for {Describe(entity)} but the " +
+				$"reference model expected {modeled}.");
 		}
-
-		_model.ClearTags(entity);
-
-		bool hadTags = Tags.Clear(entity);
-
-		Trace("tag.clear", $"{Describe(entity)} => {hadTags}");
-	}
-
-	private bool HasGrantedEffectTags(Entity entity)
-	{
-		if (!_model.TryGetEntity(entity, out ReferenceEntity? model)
-			|| model is null)
-		{
-			return false;
-		}
-
-		foreach (ReferenceEffect effect in model.Effects)
-		{
-			if (effect.TagsGranted && effect.Definition.GrantedTags.Count > 0)
-			{
-				return true;
-			}
-		}
-
-		return false;
 	}
 
 	private void ExecuteSetBase(Entity? selected = null)
@@ -1512,7 +1506,7 @@ internal sealed class LifecycleStressHarness : IDisposable
 			Entity entity = ModelOrRandom(subject);
 			GameplayTag tag = _random.Pick(LifecycleStressSchema.Tags);
 
-			if (_model.TagCount(entity, tag) > 0)
+			if (_model.UnownedTagCount(entity, tag) > 0)
 			{
 				RemoveTag(entity, tag);
 			}
@@ -1598,6 +1592,19 @@ internal sealed class LifecycleStressHarness : IDisposable
 		return _random.Pick(_model.Living).Entity;
 	}
 
+	/// <summary>
+	/// Records cue transitions without generating further operations.
+	/// The events are part of the trace that a failing seed reproduces,
+	/// which is what makes a cue ownership mismatch diagnosable.
+	/// </summary>
+	private void HandleCueChanged(GameplayCueEvent change)
+	{
+		Trace(
+			$"cue.{change.Kind}",
+			$"{GameplayTagRegistry.Shared.GetName(change.Tag)} " +
+			$"{Describe(change.Target)} {Describe(change.Effect)}");
+	}
+
 	private void Verify()
 	{
 		Check(
@@ -1631,6 +1638,24 @@ internal sealed class LifecycleStressHarness : IDisposable
 			$"ActiveAbilityCount {Abilities.ActiveAbilityCount} != model " +
 			$"{_model.ActiveAbilityCount}");
 
+		int expectedCues = _model.ExpectedCueCount;
+
+		Check(
+			Cues.ActiveCueCount == expectedCues,
+			$"ActiveCueCount {Cues.ActiveCueCount} != model {expectedCues}");
+
+		foreach (ReferenceEffect effect in _model.Effects)
+		{
+			bool hasCue = Cues.TryFindEffectForTesting(effect.Handle, out _);
+
+			Check(
+				hasCue == effect.CueActive,
+				$"{Describe(effect.Handle)} cue {hasCue} != model " +
+				$"{effect.CueActive}.");
+		}
+
+		DrainCueBuffer();
+
 		foreach (ReferenceEntity entity in _model.Living)
 		{
 			VerifyEntity(entity);
@@ -1639,6 +1664,24 @@ internal sealed class LifecycleStressHarness : IDisposable
 		VerifyTagDenseIndex();
 		VerifyAttributeDenseIndex();
 		VerifyStaleHandles();
+	}
+
+	/// <summary>
+	/// Empties the presentation handoff so the bounded buffer cannot
+	/// overflow across a long run. The cue events themselves are
+	/// validated through the model comparison; the buffer is only a
+	/// consumer path here.
+	/// </summary>
+	private void DrainCueBuffer()
+	{
+		Span<GameplayCueEvent> events = stackalloc GameplayCueEvent[64];
+		int drained;
+
+		do
+		{
+			drained = _cueBuffer.Drain(events);
+		}
+		while (drained == events.Length);
 	}
 
 	private void VerifyEntity(ReferenceEntity entity)
