@@ -64,3 +64,34 @@ jobs:
 
       - name: Run the gameplay demo
         run: dotnet run --project samples/Volt.GameplayDemo -c Release --no-restore
+
+  vulkan-gpu:
+    name: GPU-backed Vulkan validation
+    if: github.event_name != 'pull_request'
+    needs: build-test
+    runs-on: [self-hosted, linux, vulkan-gpu]
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install the .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore Volt.slnx
+
+      - name: Build the Vulkan mesh demo
+        run: dotnet build samples/Volt.VulkanMeshDemo -c Release --no-restore
+
+      - name: Run headless Vulkan validation
+        run: >-
+          ./tools/test-vulkan-headless.sh
+          --project samples/Volt.VulkanMeshDemo
+          --frames 600
+          --validation
+          --screenshots
+          --expect-clusters 3
