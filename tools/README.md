@@ -9,7 +9,9 @@ real rendered frames in automation.
 
 The harness is self-contained: it creates and destroys its own graphical
 environment, so it can run from a terminal, a CI job, or an agent session
-without touching the desktop that launched it.
+without touching the desktop that launched it. It verifies a real Vulkan
+device and rendered output only when its dependencies include an actual GPU;
+mock-tool self-tests are not GPU validation.
 
 ### Usage
 
@@ -263,8 +265,13 @@ never silently ignored.
 
 Required: Bash, `weston` 15 (headless backend), `weston-screenshooter`,
 `dotnet`, GNU coreutils (`mktemp`, `timeout`), and Python 3 (screenshot
-verification). The harness fails with exit code `3` listing anything
-missing. It does not install packages.
+verification). The sample build additionally requires `glslangValidator`.
+Actual validation requires a working Vulkan loader, a physical/assigned Vulkan
+device and driver, and `VK_LAYER_KHRONOS_validation`; the headless Weston
+compositor also needs its headless GL support. The harness fails with exit
+code `3` listing anything missing. It does not install packages. Software-only
+Vulkan adapters or mock graphics tools are not evidence of physical GPU
+correctness.
 
 Linux only: the harness targets the Wayland/Weston stack used by VOLT.
 
@@ -296,3 +303,45 @@ The missing-dependency test uses only ordinary utilities plus the mock
 `dotnet`, so it does not require a .NET installation on the test host.
 
 `bash -n` and `shellcheck -S style` should stay clean for both scripts.
+
+### GitHub Actions policy
+
+The hosted `build-test` job runs for normal pushes, pull requests, and manual
+dispatches. GPU validation is a separate job on the labels
+`[self-hosted, linux, vulkan-gpu]`; it is excluded from normal pushes and pull
+requests so a missing hardware runner cannot keep routine CI queued. To run it,
+use **Actions → CI → Run workflow** and set `gpu_validation` to `true`. It
+runs only after the hosted build/test job succeeds. A manually requested GPU
+run with no matching runner will still queue until a runner is available;
+verify the repository's registered runner labels first. Do not mark a skipped
+or queued hardware job as a pass. This job is not configured as a required
+branch-protection check; standard hosted CI remains the applicable required
+check.
+
+### Real GPU validation procedure
+
+On an authorized Linux runner with the `self-hosted`, `linux`, and
+`vulkan-gpu` labels, .NET 10, `glslangValidator`, Weston 15 with headless GL,
+`weston-screenshooter`, Python 3, a working Vulkan driver/loader, and
+`VK_LAYER_KHRONOS_validation`, run:
+
+```bash
+dotnet restore Volt.slnx
+dotnet build samples/Volt.VulkanMeshDemo -c Release --no-restore
+VOLT_VULKAN_INTEGRATION=1 dotnet test tests/Volt.Graphics.Vulkan.Tests -c Release --no-build
+./tools/test-vulkan-headless.sh \
+    --project samples/Volt.VulkanMeshDemo \
+    --frames 600 \
+    --validation \
+    --screenshots \
+    --expect-clusters 3
+```
+
+The first test command opts into the native Vulkan integration tests; the
+harness then confirms validation-layer activation, all 600 accepted frames,
+screenshot integrity, and the expected three rendering clusters. Preserve the
+harness run directory and test output with the validation record. Zero
+unexpected Vulkan validation diagnostics are required. Record the actual GPU,
+driver and Vulkan API/layer versions and the command exit statuses separately
+from hosted CI results. The `tools/tests/test-vulkan-headless.sh` self-tests
+exercise harness behavior using mock tools; they do not satisfy this procedure.

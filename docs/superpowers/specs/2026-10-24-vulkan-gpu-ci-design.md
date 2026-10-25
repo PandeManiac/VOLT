@@ -6,13 +6,13 @@ Add an opt-in GPU-backed Vulkan validation job to the existing GitHub Actions CI
 
 ## Scope and trigger policy
 
-Keep the job in `.github/workflows/ci.yml`. Run it only for the workflow's existing push branches and `workflow_dispatch`; do not run it on `pull_request`. This avoids executing untrusted pull-request code on the self-hosted runner. The normal hosted build/test job remains unchanged, and the Vulkan job should depend on its success.
+Keep the job in `.github/workflows/ci.yml`. Run it only when a maintainer deliberately dispatches the workflow with the `gpu_validation` boolean set to `true`; do not run it for push or `pull_request` events. This avoids executing untrusted pull-request code on the self-hosted runner and prevents routine CI from queuing indefinitely when no GPU runner is online. The normal hosted build/test job remains unchanged, and the Vulkan job depends on its success. A deliberately requested run may wait if the owner has not yet registered an eligible runner.
 
 ## Execution and validation
 
 The GPU job uses the labels `[self-hosted, linux, vulkan-gpu]`, checks out the repository, sets up .NET 10, restores the solution, and builds `samples/Volt.VulkanMeshDemo` in Release mode. It then invokes `tools/test-vulkan-headless.sh` against that sample with Vulkan validation and screenshot verification enabled, requiring three horizontal rendered-content clusters. This checks both validation-layer activation/diagnostics and actual rendered output.
 
-The runner is expected to already provide the headless harness's documented Linux prerequisites, including Weston 15 with its headless GL backend, `weston-screenshooter`, Python 3, .NET 10, and a working Vulkan GPU and validation-layer setup. The workflow will not install or modify runner-wide system packages.
+The runner is expected to already provide the headless harness's documented Linux prerequisites, including Weston 15 with its headless GL backend, `weston-screenshooter`, Python 3, .NET 10, `glslangValidator`, and a working Vulkan GPU and validation-layer setup. The workflow will not install or modify runner-wide system packages. The workflow-dispatch form makes hardware validation reachable but does not register or provision a runner.
 
 ## Failure behavior
 
@@ -20,7 +20,7 @@ The harness's exit code determines job success. A failed build, inactive validat
 
 ## Files
 
-- Modify `.github/workflows/ci.yml` to add the guarded GPU job.
+- Modify `.github/workflows/ci.yml` to add the manually gated GPU job.
 - Add this design document for review before implementation planning.
 
 ## Verification
