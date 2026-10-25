@@ -16,6 +16,12 @@ on:
       - master
       - feat/gameplay-events-ability-tasks
   workflow_dispatch:
+    inputs:
+      gpu_validation:
+        description: Run optional GPU-backed Vulkan validation on a registered vulkan-gpu runner
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
@@ -65,9 +71,12 @@ jobs:
       - name: Run the gameplay demo
         run: dotnet run --project samples/Volt.GameplayDemo -c Release --no-restore
 
+  # Hardware validation is a deliberately requested workflow run, not a
+  # dependency of ordinary pushes. A missing self-hosted GPU runner must not
+  # leave normal CI queued indefinitely.
   vulkan-gpu:
     name: GPU-backed Vulkan validation
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && inputs.gpu_validation == true
     needs: build-test
     runs-on: [self-hosted, linux, vulkan-gpu]
     timeout-minutes: 15
