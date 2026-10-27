@@ -124,11 +124,19 @@ independent executable that:
 dotnet run --project samples/Volt.PlayDemo
 ```
 
-Create a fresh playable project from the template:
+Add `--frames N` to bound a run so it exits by itself, and `--validation`
+to load the Vulkan validation layer. A run prints the selected GPU, whether
+validation is enabled, and `Presented N accepted frames.` on exit; a bounded
+run that presents the wrong number of frames exits non-zero.
 
 ```bash
 dotnet run --project samples/Volt.PlayDemo -- --create /tmp/NewGame
 ```
+
+`--create` writes only into a folder that does not exist yet or is empty,
+so it cannot overwrite work in progress. Running it twice reports that the
+folder `already contains files`; open the existing project with
+`--project <folder>` instead.
 
 The created project contains a player object with the built-in move
 behaviour (`Axis`, `Speed`, `Automatic`) and can be opened, edited, and

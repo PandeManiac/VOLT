@@ -71,6 +71,15 @@ application supplies a per-frame callback. See
 `samples/Volt.UiDemo` for a complete standalone program that uses no
 editor code.
 
+The host reports what it selected through `DeviceName`,
+`ValidationLayersEnabled`, `PresentationFencesEnabled`, and
+`PresentedFrames`. `samples/Volt.UiDemo`, `samples/Volt.PlayDemo`, and
+the editor print those values and `Presented N accepted frames.` on
+exit, so a GPU run states whether its window ever reached the display.
+`--frames N` bounds such a run and `--validation` loads
+`VK_LAYER_KHRONOS_validation`; those are the sample-contract arguments
+the headless Vulkan harness in `tools/` drives.
+
 ## Widget lifetime
 
 - `Widget.Add` attaches a child; `Remove` detaches and disposes it.

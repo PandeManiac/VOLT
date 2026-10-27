@@ -69,7 +69,10 @@ public sealed class EditorProject
 			Directory.EnumerateFileSystemEntries(fullRoot).Any())
 		{
 			throw new InvalidOperationException(
-				$"The project directory '{fullRoot}' is not empty.");
+				$"The project directory '{fullRoot}' already contains " +
+				"files, so no project was written there. Choose a folder " +
+				"that does not exist yet or is empty, or open the existing " +
+				"project instead.");
 		}
 
 		Directory.CreateDirectory(fullRoot);

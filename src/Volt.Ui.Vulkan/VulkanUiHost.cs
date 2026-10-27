@@ -231,6 +231,21 @@ public sealed class VulkanUiHost : IDisposable
 	public int PresentedFrames { get; private set; }
 
 	/// <summary>
+	/// Gets the name of the GPU this host selected.
+	/// </summary>
+	public string DeviceName { get; private set; } = "unknown";
+
+	/// <summary>
+	/// Gets whether the Vulkan validation layer is enabled.
+	/// </summary>
+	/// <remarks>
+	/// This is true only when the layer is actually loaded: requesting
+	/// validation without an available layer fails the constructor
+	/// rather than running unvalidated.
+	/// </remarks>
+	public bool ValidationLayersEnabled => _instance.ValidationEnabled;
+
+	/// <summary>
 	/// Gets the wall-clock interval of the frame being updated.
 	/// </summary>
 	/// <remarks>
@@ -677,6 +692,8 @@ public sealed class VulkanUiHost : IDisposable
 			candidates[selected].GraphicsQueueFamilyIndex
 			?? throw new InvalidOperationException(
 				"The selected GPU has no presentation queue.");
+
+		DeviceName = candidates[selected].Name;
 
 		return devices[selected];
 	}

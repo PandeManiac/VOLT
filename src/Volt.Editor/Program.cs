@@ -91,6 +91,9 @@ internal static class Program
 				Size = new Volt.Platform.Windows.WindowSize(1600, 960)
 			});
 
+		Console.WriteLine($"GPU: {host.DeviceName}");
+		Console.WriteLine($"Validation: {host.ValidationLayersEnabled}");
+
 		using EditorShell shell = new(session, projectRoot, layout);
 
 		host.Ui.Add(shell);
@@ -113,6 +116,19 @@ internal static class Program
 			});
 
 		SaveWorkspace(session.Project?.RootPath, shell.Layout);
+
+		Console.WriteLine(
+			$"Presented {host.PresentedFrames} accepted frames.");
+
+		if (frameLimit is int required &&
+			host.PresentedFrames != required)
+		{
+			Console.Error.WriteLine(
+				$"Presented {host.PresentedFrames} frames, but " +
+				$"{required} were requested.");
+
+			return 1;
+		}
 
 		return 0;
 	}

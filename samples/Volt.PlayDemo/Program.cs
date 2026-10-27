@@ -98,6 +98,9 @@ internal static class Program
 				Size = new WindowSize(1280, 800)
 			});
 
+		Console.WriteLine($"GPU: {host.DeviceName}");
+		Console.WriteLine($"Validation: {host.ValidationLayersEnabled}");
+
 		UiTheme theme = host.Ui.Theme;
 
 		Label state = new("Playing")
@@ -226,6 +229,19 @@ internal static class Program
 			});
 
 		play.Stop();
+
+		Console.WriteLine(
+			$"Presented {host.PresentedFrames} accepted frames.");
+
+		if (frameLimit is int required &&
+			host.PresentedFrames != required)
+		{
+			Console.Error.WriteLine(
+				$"Presented {host.PresentedFrames} frames, but " +
+				$"{required} were requested.");
+
+			return 1;
+		}
 
 		return 0;
 	}

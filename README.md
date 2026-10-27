@@ -163,7 +163,9 @@ dotnet run --project src/Volt.Editor
 
 `--project` opens a folder that already exists; run the editor without it to
 use the start screen, which can create or open a project. Replace
-`/tmp/MyGame` with any absolute path:
+`/tmp/MyGame` with any absolute path that does not exist yet or is empty:
+`--create` refuses to write a new project into a folder that already has
+files, so it can never overwrite work in progress.
 
 ```bash
 dotnet run --project samples/Volt.PlayDemo -- --create /tmp/MyGame
@@ -172,6 +174,22 @@ dotnet run --project samples/Volt.PlayDemo -- --project /tmp/MyGame
 ```
 
 The play demo can also run an existing project directly, without the editor.
+
+All three programs print the selected GPU, whether the validation layer is
+enabled, and `Presented N accepted frames.` when they exit. Add `--frames N`
+for a bounded run that exits by itself, and `--validation` to load
+`VK_LAYER_KHRONOS_validation`:
+
+```bash
+dotnet run --project samples/Volt.UiDemo -- --frames 300 --validation
+dotnet run --project src/Volt.Editor -- --project /tmp/MyGame --frames 300 --validation
+dotnet run --project samples/Volt.PlayDemo -- --project /tmp/MyGame --frames 300 --validation
+```
+
+A run that prints the frame line presented frames to the display; a run that
+returns without it did not. Those same arguments are the sample contract
+`tools/test-vulkan-headless.sh` drives, so the headless harness can collect
+the device, frame count, screenshot, and validation diagnostics for them.
 
 ### Benchmarks
 
