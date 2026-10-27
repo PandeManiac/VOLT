@@ -17,7 +17,8 @@ namespace Volt.UiDemo;
 /// The whole interface is built from public Volt.Ui widgets, laid out
 /// by the retained layout engine, painted into a draw list, and
 /// presented by the Vulkan backend. The demo exercises nested stacks,
-/// interaction, scrolling, tabs, a tree view, menus, and theming.
+/// interaction, scrolling, tabs, a tree view, menus, theming, and
+/// uploaded image textures.
 /// </remarks>
 internal static class Program
 {
@@ -116,7 +117,7 @@ internal static class Program
 		root.Add(BuildMenuBar(theme, status));
 		root.Add(BuildToolbar(theme, status));
 		root.Add(
-			BuildWorkspace(theme, status, counter));
+			BuildWorkspace(ui, theme, status, counter));
 		root.Add(BuildStatusBar(theme, status, counter));
 
 		ui.Add(root);
@@ -244,6 +245,7 @@ internal static class Program
 	}
 
 	private static Widget BuildWorkspace(
+		UiContext ui,
 		UiTheme theme,
 		Label status,
 		Label counter)
@@ -296,6 +298,11 @@ internal static class Program
 			"scroll",
 			"Scroll",
 			BuildScrollPage(theme));
+
+		tabs.AddPage(
+			"images",
+			"Images",
+			BuildImagePage(ui, theme, status));
 
 		DockLayoutHost host = new(tree, tabs, theme);
 
@@ -503,6 +510,177 @@ internal static class Program
 		};
 
 		return scroll;
+	}
+
+	private static Widget BuildImagePage(
+		UiContext ui,
+		UiTheme theme,
+		Label status)
+	{
+		StackPanel page = new()
+		{
+			Spacing = 12f,
+			Padding = new UiThickness(18f)
+		};
+
+		page.Add(
+			new Label("Image textures")
+			{
+				Font = theme.Fonts.Heading,
+				TextColor = theme.Palette.Text
+			});
+
+		page.Add(
+			new Label(
+				"The image below is a caller-owned RGBA8 buffer " +
+				"registered with the UI context. The renderer uploads it " +
+				"once and uploads it again only when its revision " +
+				"changes.")
+			{
+				Font = theme.Fonts.Small,
+				TextColor = theme.Palette.TextMuted,
+				Wrap = UiTextWrap.Wrap
+			});
+
+		UiImageTexture texture = ui.Textures.Create(
+			256,
+			160,
+			"demo-image");
+
+		DrawPreviewImage(texture, 0, theme.Palette.Accent);
+
+		ImageView view = new(texture)
+		{
+			Scale = UiImageScale.Fill,
+			Height = UiLength.Points(200f),
+			DrawBorder = true
+		};
+
+		ImageView thumbnail = new(texture)
+		{
+			Scale = UiImageScale.Fit,
+			Width = UiLength.Points(120f),
+			Height = UiLength.Points(90f),
+			DrawBorder = true
+		};
+
+		StackPanel images = new(UiOrientation.Horizontal)
+		{
+			Spacing = 10f
+		};
+
+		images.Add(view);
+		images.Add(thumbnail);
+
+		page.Add(images);
+
+		Label details = new(string.Empty)
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.TextMuted
+		};
+
+		Describe(texture, details);
+
+		page.Add(details);
+
+		StackPanel modes = new(UiOrientation.Horizontal)
+		{
+			Spacing = 6f
+		};
+
+		foreach (UiImageScale scale in Enum.GetValues<UiImageScale>())
+		{
+			UiImageScale captured = scale;
+			Button button = new(scale.ToString());
+
+			button.Clicked += _ =>
+			{
+				view.Scale = captured;
+				status.Text = $"Image scale: {captured}.";
+			};
+
+			modes.Add(button);
+		}
+
+		int frame = 0;
+
+		Button redraw = new("Draw a new frame");
+
+		redraw.Clicked += _ =>
+		{
+			frame++;
+			DrawPreviewImage(texture, frame, theme.Palette.Accent);
+			Describe(texture, details);
+
+			status.Text = $"Uploaded image revision " +
+				$"{texture.Revision} on the next frame.";
+		};
+
+		modes.Add(new Separator(UiOrientation.Vertical));
+		modes.Add(redraw);
+
+		page.Add(modes);
+
+		return page;
+	}
+
+	private static void Describe(UiImageTexture texture, Label details)
+	{
+		details.Text = $"Texture {texture.Id.Value}, revision " +
+			$"{texture.Revision}, {texture.Width}x{texture.Height} texels.";
+	}
+
+	/// <summary>
+	/// Fills a demo texture with a gradient, a checkerboard, and a marker
+	/// that advances one step per call, then hands the whole frame to the
+	/// registry in one write.
+	/// </summary>
+	private static void DrawPreviewImage(
+		UiImageTexture texture,
+		int frame,
+		UiColor marker)
+	{
+		int width = texture.Width;
+		int height = texture.Height;
+		byte[] pixels = new byte[texture.Stride * height];
+
+		for (int y = 0; y < height; y++)
+		{
+			for (int x = 0; x < width; x++)
+			{
+				bool light = (((x / 16) + (y / 16)) & 1) == 0;
+				int shade = light ? 44 : 26;
+				int offset = (y * texture.Stride) + (x * 4);
+
+				pixels[offset] = (byte)Math.Clamp(
+					shade + ((x * 72) / width),
+					0,
+					255);
+
+				pixels[offset + 1] = (byte)Math.Clamp(
+					shade + ((y * 48) / height),
+					0,
+					255);
+
+				pixels[offset + 2] = (byte)shade;
+				pixels[offset + 3] = 255;
+			}
+		}
+
+		texture.SetPixels(pixels);
+
+		const int MarkerSize = 28;
+		int travel = Math.Max(1, width - MarkerSize - 16);
+		int markerX = (frame * 12) % travel;
+
+		texture.Fill(
+			new UiPixelRect(
+				markerX + 8,
+				height - MarkerSize - 8,
+				MarkerSize,
+				MarkerSize),
+			marker);
 	}
 
 	private static Widget BuildStatusBar(

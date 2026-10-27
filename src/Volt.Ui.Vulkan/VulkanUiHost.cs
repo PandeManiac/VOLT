@@ -457,6 +457,7 @@ public sealed class VulkanUiHost : IDisposable
 			_commandBuffers,
 			pixels,
 			_ui.Theme.Fonts.Enumerate().ToArray(),
+			_ui.Textures,
 			_options.VertexShaderPath ?? DefaultShader("ui.vert.spv"),
 			_options.FragmentShaderPath ?? DefaultShader("ui.frag.spv"));
 	}
@@ -727,6 +728,7 @@ public sealed class VulkanUiHost : IDisposable
 			VulkanCommandBuffers commandBuffers,
 			WindowSize pixels,
 			IReadOnlyList<UiFont> fonts,
+			UiTextureRegistry textures,
 			string vertexShaderPath,
 			string fragmentShaderPath)
 		{
@@ -759,6 +761,7 @@ public sealed class VulkanUiHost : IDisposable
 					swapchain,
 					imageViews,
 					fonts,
+					textures,
 					vertexShaderPath,
 					fragmentShaderPath);
 

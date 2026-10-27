@@ -19,9 +19,17 @@ namespace Volt.Ui.Vulkan;
 /// <para>
 /// Solid batches sample a white texel in layer zero of a single R8
 /// texture array. Each UI font owns one additional layer; glyph
-/// coverage is uploaded when an atlas revision changes. One descriptor
-/// set and one pipeline are shared by every batch, while a scissor and
-/// a layer push constant change per batch.
+/// coverage is uploaded when an atlas revision changes. A coverage
+/// batch tints the sampled channel with its command color, while an
+/// image batch samples an RGBA texture and is modulated by it.
+/// </para>
+/// <para>
+/// One pipeline and one descriptor set layout serve every batch. The
+/// layout carries the font atlas and one image; each image slot of the
+/// context's texture registry owns a descriptor set, so a batch binds
+/// the set of the texture it samples rather than indexing a descriptor
+/// array. A scissor, the atlas layer, and the sampling mode change per
+/// batch.
 /// </para>
 /// <para>
 /// Vertex and index buffers are host-visible and duplicated per frame
@@ -52,6 +60,15 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 	private readonly VulkanBuffer[] _indexBuffers;
 	private readonly Dictionary<UiFont, int> _fontLayers = [];
 	private readonly Dictionary<UiFont, int> _uploadedRevisions = [];
+	private readonly UiTextureRegistry _textures;
+
+	private readonly ImageResource?[] _imageResources =
+		new ImageResource?[UiTextureRegistry.MaximumTextures];
+
+	private readonly DescriptorSet[] _descriptorSets =
+		new DescriptorSet[UiTextureShaderInput.SetSlotCount];
+
+	private readonly float[] _pushConstants = new float[2];
 	private UiVertex[] _clipSpaceVertices = [];
 
 	private RenderPass _renderPass;
@@ -59,8 +76,8 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 	private Pipeline _pipeline;
 	private DescriptorSetLayout _descriptorSetLayout;
 	private DescriptorPool _descriptorPool;
-	private DescriptorSet _descriptorSet;
 	private Sampler _sampler;
+	private ImageResource? _whiteResource;
 	private Image _atlasImage;
 	private DeviceMemory _atlasMemory;
 	private ImageView _atlasView;
@@ -75,6 +92,7 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		VulkanSwapchain swapchain,
 		VulkanSwapchainImageViews imageViews,
 		IReadOnlyList<UiFont> fonts,
+		UiTextureRegistry textures,
 		string vertexShaderPath,
 		string fragmentShaderPath)
 	{
@@ -83,6 +101,7 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		ArgumentNullException.ThrowIfNull(swapchain);
 		ArgumentNullException.ThrowIfNull(imageViews);
 		ArgumentNullException.ThrowIfNull(fonts);
+		ArgumentNullException.ThrowIfNull(textures);
 		ArgumentException.ThrowIfNullOrWhiteSpace(vertexShaderPath);
 		ArgumentException.ThrowIfNullOrWhiteSpace(fragmentShaderPath);
 
@@ -103,6 +122,7 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		_instance = instance;
 		_device = device;
 		_physicalDevice = physicalDevice;
+		_textures = textures;
 		_api = instance.Api;
 		_format = swapchain.ImageFormat;
 		_extent = swapchain.Extent;
@@ -129,11 +149,16 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 			CreateAtlasImage(layerCount);
 			CreateSampler();
 			UploadFontAtlases();
+			CreateWhiteImage();
 
 			_descriptorSetLayout = CreateDescriptorSetLayout();
 			_descriptorPool = CreateDescriptorPool();
-			_descriptorSet = AllocateDescriptorSet();
-			UpdateDescriptorSet();
+			AllocateDescriptorSets();
+
+			for (int index = 0; index < _descriptorSets.Length; index++)
+			{
+				UpdateDescriptorSet(index);
+			}
 
 			_renderPass = CreateRenderPass();
 			_pipelineLayout = CreatePipelineLayout();
@@ -222,6 +247,8 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 			UploadFontAtlases();
 		}
 
+		SyncImageTextures();
+
 		ClearValue clear = new()
 		{
 			Color = new ClearColorValue(
@@ -257,17 +284,11 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 				PipelineBindPoint.Graphics,
 				_pipeline);
 
-			DescriptorSet descriptorSet = _descriptorSet;
-
-			_api.CmdBindDescriptorSets(
-				commandBuffer,
-				PipelineBindPoint.Graphics,
-				_pipelineLayout,
-				firstSet: 0,
-				descriptorSetCount: 1,
-				&descriptorSet,
-				dynamicOffsetCount: 0,
-				pDynamicOffsets: null);
+			// The descriptor set is bound per batch, not once per
+			// frame: a coverage batch needs the white texel in the
+			// image binding while an image batch needs its own
+			// texture. Consecutive batches usually share a set.
+			int boundSetSlot = -1;
 
 			Silk.NET.Vulkan.Buffer vertexBuffer =
 				_vertexBuffers[slot].Handle;
@@ -295,6 +316,11 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 				{
 					continue;
 				}
+
+				UiTextureShaderInput shaderInput =
+					UiTextureShaderInput.Resolve(
+						batch.Texture,
+						_fontLayers);
 
 				int left = Math.Clamp(batch.Scissor.X, 0, (int)_extent.Width);
 				int top = Math.Clamp(batch.Scissor.Y, 0, (int)_extent.Height);
@@ -326,15 +352,37 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 					1,
 					&scissor);
 
-				float layer = ResolveLayer(batch.Texture);
+				if (shaderInput.SetSlot != boundSetSlot)
+				{
+					DescriptorSet descriptorSet =
+						_descriptorSets[shaderInput.SetSlot];
 
-				_api.CmdPushConstants(
-					commandBuffer,
-					_pipelineLayout,
-					PushConstantStages,
-					0,
-					sizeof(float),
-					&layer);
+					_api.CmdBindDescriptorSets(
+						commandBuffer,
+						PipelineBindPoint.Graphics,
+						_pipelineLayout,
+						firstSet: 0,
+						descriptorSetCount: 1,
+						&descriptorSet,
+						dynamicOffsetCount: 0,
+						pDynamicOffsets: null);
+
+					boundSetSlot = shaderInput.SetSlot;
+				}
+
+				_pushConstants[0] = shaderInput.Layer;
+				_pushConstants[1] = shaderInput.Mode;
+
+				fixed (float* pushConstants = _pushConstants)
+				{
+					_api.CmdPushConstants(
+						commandBuffer,
+						_pipelineLayout,
+						PushConstantStages,
+						0,
+						sizeof(float) * 2,
+						pushConstants);
+				}
 
 				_api.CmdDrawIndexed(
 					commandBuffer,
@@ -366,6 +414,25 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		{
 			_vertexBuffers[index]?.Dispose();
 			_indexBuffers[index]?.Dispose();
+		}
+
+		for (int index = 0; index < _imageResources.Length; index++)
+		{
+			ImageResource? resource = _imageResources[index];
+
+			if (resource is null)
+			{
+				continue;
+			}
+
+			DestroyImageResource(resource);
+			_imageResources[index] = null;
+		}
+
+		if (_whiteResource is not null)
+		{
+			DestroyImageResource(_whiteResource);
+			_whiteResource = null;
 		}
 
 		foreach (Framebuffer framebuffer in _framebuffers)
@@ -585,16 +652,19 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 
 	private DescriptorPool CreateDescriptorPool()
 	{
+		// One set per image slot plus the coverage set, each with two
+		// combined image samplers: the font atlas and one image.
 		DescriptorPoolSize size = new()
 		{
 			Type = DescriptorType.CombinedImageSampler,
-			DescriptorCount = 1
+			DescriptorCount = checked(
+				(uint)(_descriptorSets.Length * 2))
 		};
 
 		DescriptorPoolCreateInfo description = new()
 		{
 			SType = StructureType.DescriptorPoolCreateInfo,
-			MaxSets = 1,
+			MaxSets = checked((uint)_descriptorSets.Length),
 			PoolSizeCount = 1,
 			PPoolSizes = &size
 		};
@@ -610,7 +680,7 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		return pool;
 	}
 
-	private DescriptorSet AllocateDescriptorSet()
+	private void AllocateDescriptorSets()
 	{
 		DescriptorSetLayout layout = _descriptorSetLayout;
 
@@ -618,34 +688,74 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		{
 			SType = StructureType.DescriptorSetAllocateInfo,
 			DescriptorPool = _descriptorPool,
-			DescriptorSetCount = 1,
+			DescriptorSetCount = checked((uint)_descriptorSets.Length),
 			PSetLayouts = &layout
 		};
 
-		EnsureSuccess(
-			_api.AllocateDescriptorSets(
-				_device.Handle,
-				&description,
-				out DescriptorSet set),
-			"Allocate UI descriptor set");
-
-		return set;
+		fixed (DescriptorSet* sets = _descriptorSets)
+		{
+			EnsureSuccess(
+				_api.AllocateDescriptorSets(
+					_device.Handle,
+					&description,
+					sets),
+				"Allocate UI descriptor sets");
+		}
 	}
 
-	private void UpdateDescriptorSet()
+	/// <summary>
+	/// Binds the font atlas and the image of one descriptor set slot.
+	/// </summary>
+	/// <param name="slot">
+	/// Zero for the coverage set, which carries the white texel, or one
+	/// plus an image slot index.
+	/// </param>
+	/// <remarks>
+	/// A set may only be written while no submitted frame uses it. The
+	/// caller updates a slot after the device went idle, which is what
+	/// every image upload and release does.
+	/// </remarks>
+	private void UpdateDescriptorSet(int slot)
 	{
-		DescriptorImageInfo image = new()
+		DescriptorImageInfo atlas = new()
 		{
 			Sampler = _sampler,
 			ImageView = _atlasView,
 			ImageLayout = ImageLayout.ShaderReadOnlyOptimal
 		};
 
-		WriteDescriptorSet write = new()
+		ImageView imageView = _whiteResource?.View ?? _atlasView;
+
+		if (slot > 0)
+		{
+			imageView = _imageResources[slot - 1]?.View ?? imageView;
+		}
+
+		DescriptorImageInfo image = new()
+		{
+			Sampler = _sampler,
+			ImageView = imageView,
+			ImageLayout = ImageLayout.ShaderReadOnlyOptimal
+		};
+
+		WriteDescriptorSet* writes = stackalloc WriteDescriptorSet[2];
+
+		writes[0] = new WriteDescriptorSet
 		{
 			SType = StructureType.WriteDescriptorSet,
-			DstSet = _descriptorSet,
+			DstSet = _descriptorSets[slot],
 			DstBinding = 0,
+			DstArrayElement = 0,
+			DescriptorCount = 1,
+			DescriptorType = DescriptorType.CombinedImageSampler,
+			PImageInfo = &atlas
+		};
+
+		writes[1] = new WriteDescriptorSet
+		{
+			SType = StructureType.WriteDescriptorSet,
+			DstSet = _descriptorSets[slot],
+			DstBinding = 1,
 			DstArrayElement = 0,
 			DescriptorCount = 1,
 			DescriptorType = DescriptorType.CombinedImageSampler,
@@ -654,8 +764,8 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 
 		_api.UpdateDescriptorSets(
 			_device.Handle,
-			1,
-			&write,
+			2,
+			writes,
 			0,
 			null);
 	}
@@ -730,17 +840,17 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 	}
 
 	/// <summary>
-	/// Stage that reads the UI push constant.
+	/// Stages that read the UI push constant.
 	/// </summary>
 	/// <remarks>
-	/// `ui.vert` reads the atlas layer through a push constant and
-	/// `ui.frag` reads none, so the pipeline layout range and every
-	/// push must name the vertex stage. Naming the fragment stage
-	/// instead makes pipeline creation invalid and leaves the vertex
-	/// shader reading undefined data.
+	/// `ui.frag` reads the atlas layer and the sampling mode through a
+	/// push constant, so the pipeline layout range and every push must
+	/// name the fragment stage. A range that omits the stage a shader
+	/// declares the block in makes pipeline creation invalid and leaves
+	/// that shader reading undefined data.
 	/// </remarks>
 	private const ShaderStageFlags PushConstantStages =
-		ShaderStageFlags.VertexBit;
+		ShaderStageFlags.FragmentBit;
 
 	private PipelineLayout CreatePipelineLayout()
 	{
@@ -748,7 +858,7 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		{
 			StageFlags = PushConstantStages,
 			Offset = 0,
-			Size = sizeof(float)
+			Size = sizeof(float) * 2
 		};
 
 		DescriptorSetLayout layout = _descriptorSetLayout;
@@ -1271,16 +1381,450 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		return _clipSpaceVertices.AsSpan(0, vertices.Length);
 	}
 
-	private float ResolveLayer(UiTextureKey texture)
+	/// <summary>
+	/// Creates the one-texel white image that every batch without an
+	/// image samples.
+	/// </summary>
+	/// <remarks>
+	/// Coverage batches use its full alpha, so a solid rectangle draws
+	/// exactly the color it was recorded with. It also fills the image
+	/// binding of every descriptor set whose slot has no live image.
+	/// </remarks>
+	private void CreateWhiteImage()
 	{
-		if (texture.Kind == UiTextureKind.Font &&
-			texture.Font is not null &&
-			_fontLayers.TryGetValue(texture.Font, out int layer))
+		ImageResource white = CreateImageResource(1, 1);
+
+		byte[] pixels = [255, 255, 255, 255];
+
+		_whiteResource = white;
+
+		UploadImageData(white, pixels, 1, 1);
+	}
+
+	/// <summary>
+	/// Creates a sampler-visible RGBA8 image of a given size.
+	/// </summary>
+	private ImageResource CreateImageResource(int width, int height)
+	{
+		ImageCreateInfo imageInfo = new()
 		{
-			return layer;
+			SType = StructureType.ImageCreateInfo,
+			ImageType = ImageType.Type2D,
+			Format = Format.R8G8B8A8Unorm,
+			Extent = new Extent3D(
+				checked((uint)width),
+				checked((uint)height),
+				1),
+			MipLevels = 1,
+			ArrayLayers = 1,
+			Samples = SampleCountFlags.Count1Bit,
+			Tiling = ImageTiling.Optimal,
+			Usage = ImageUsageFlags.SampledBit |
+				ImageUsageFlags.TransferDstBit,
+			SharingMode = SharingMode.Exclusive,
+			InitialLayout = ImageLayout.Undefined
+		};
+
+		Image image = default;
+		DeviceMemory memory = default;
+		ImageView view = default;
+
+		try
+		{
+			EnsureSuccess(
+				_api.CreateImage(
+					_device.Handle,
+					&imageInfo,
+					null,
+					out image),
+				"Create UI image texture");
+
+			_api.GetImageMemoryRequirements(
+				_device.Handle,
+				image,
+				out MemoryRequirements requirements);
+
+			uint memoryType = checked((uint)_device.FindMemoryTypeIndex(
+				_physicalDevice,
+				requirements.MemoryTypeBits,
+				MemoryPropertyFlags.DeviceLocalBit));
+
+			MemoryAllocateInfo allocate = new()
+			{
+				SType = StructureType.MemoryAllocateInfo,
+				AllocationSize = requirements.Size,
+				MemoryTypeIndex = memoryType
+			};
+
+			EnsureSuccess(
+				_api.AllocateMemory(
+					_device.Handle,
+					&allocate,
+					null,
+					out memory),
+				"Allocate UI image texture memory");
+
+			EnsureSuccess(
+				_api.BindImageMemory(
+					_device.Handle,
+					image,
+					memory,
+					0),
+				"Bind UI image texture memory");
+
+			ImageViewCreateInfo viewInfo = new()
+			{
+				SType = StructureType.ImageViewCreateInfo,
+				Image = image,
+				ViewType = ImageViewType.Type2D,
+				Format = Format.R8G8B8A8Unorm,
+				SubresourceRange = new ImageSubresourceRange(
+					ImageAspectFlags.ColorBit,
+					0,
+					1,
+					0,
+					1)
+			};
+
+			EnsureSuccess(
+				_api.CreateImageView(
+					_device.Handle,
+					&viewInfo,
+					null,
+					out view),
+				"Create UI image texture view");
 		}
 
-		return 0f;
+		catch
+		{
+			if (view.Handle != 0)
+			{
+				_api.DestroyImageView(_device.Handle, view, null);
+			}
+
+			if (image.Handle != 0)
+			{
+				_api.DestroyImage(_device.Handle, image, null);
+			}
+
+			if (memory.Handle != 0)
+			{
+				_api.FreeMemory(_device.Handle, memory, null);
+			}
+
+			throw;
+		}
+
+		return new ImageResource
+		{
+			Image = image,
+			Memory = memory,
+			View = view,
+			Width = width,
+			Height = height
+		};
+	}
+
+	private void DestroyImageResource(ImageResource resource)
+	{
+		if (resource.View.Handle != 0)
+		{
+			_api.DestroyImageView(_device.Handle, resource.View, null);
+		}
+
+		if (resource.Image.Handle != 0)
+		{
+			_api.DestroyImage(_device.Handle, resource.Image, null);
+		}
+
+		if (resource.Memory.Handle != 0)
+		{
+			_api.FreeMemory(_device.Handle, resource.Memory, null);
+		}
+	}
+
+	/// <summary>
+	/// Brings the GPU copy of every registered image up to date.
+	/// </summary>
+	/// <remarks>
+	/// <para>
+	/// An image is uploaded when its revision changes, and a released
+	/// slot frees its GPU resources and binds the white texel instead.
+	/// Descriptor sets are only rewritten when a slot's image actually
+	/// changed, so a steady frame issues no upload, no device wait, and
+	/// no descriptor write.
+	/// </para>
+	/// <para>
+	/// Uploading waits for the device because an image is replaced in
+	/// place: the previous frame must have finished sampling it before
+	/// its contents change. Publishing a render target through this path
+	/// therefore costs one device wait per changed image; a renderer that
+	/// draws into the sampled image directly avoids that cost.
+	/// </para>
+	/// </remarks>
+	private void SyncImageTextures()
+	{
+		ReadOnlySpan<UiImageTexture?> slots = _textures.Slots;
+
+		bool descriptorsChanged = false;
+
+		for (int index = 0; index < slots.Length; index++)
+		{
+			UiImageTexture? texture = slots[index];
+			ImageResource? resource = _imageResources[index];
+
+			if (texture is null)
+			{
+				if (resource is null)
+				{
+					continue;
+				}
+
+				_device.WaitIdle();
+
+				DestroyImageResource(resource);
+				_imageResources[index] = null;
+				descriptorsChanged = true;
+
+				continue;
+			}
+
+			if (resource is null ||
+				resource.Width != texture.Width ||
+				resource.Height != texture.Height)
+			{
+				if (resource is not null)
+				{
+					_device.WaitIdle();
+					DestroyImageResource(resource);
+				}
+
+				resource = CreateImageResource(
+					texture.Width,
+					texture.Height);
+
+				_imageResources[index] = resource;
+				descriptorsChanged = true;
+			}
+
+			if (resource.Revision == texture.Revision)
+			{
+				continue;
+			}
+
+			UploadImageData(
+				resource,
+				texture.Pixels,
+				texture.Width,
+				texture.Height);
+
+			resource.Revision = texture.Revision;
+		}
+
+		if (!descriptorsChanged)
+		{
+			return;
+		}
+
+		for (int index = 0; index < _imageResources.Length; index++)
+		{
+			UpdateDescriptorSet(index + 1);
+		}
+	}
+
+	/// <summary>
+	/// Copies straight-alpha RGBA pixels into a device-local image and
+	/// leaves it readable by the fragment shader.
+	/// </summary>
+	private void UploadImageData(
+		ImageResource resource,
+		ReadOnlySpan<byte> pixels,
+		int width,
+		int height)
+	{
+		ulong byteCount = checked((ulong)pixels.Length);
+
+		_device.WaitIdle();
+
+		using VulkanBuffer staging = new(
+			_instance,
+			_device,
+			_physicalDevice,
+			byteCount,
+			BufferUsageFlags.TransferSrcBit,
+			MemoryPropertyFlags.HostVisibleBit |
+				MemoryPropertyFlags.HostCoherentBit);
+
+		staging.Write(pixels);
+
+		using VulkanCommandPool pool = new(
+			_instance,
+			_device,
+			CommandPoolCreateFlags.TransientBit);
+
+		using VulkanCommandBuffers buffers = new(
+			_instance,
+			_device,
+			pool,
+			1);
+
+		CommandBuffer commandBuffer = buffers.GetBuffer(0);
+
+		VulkanCommandRecording.Begin(_instance, commandBuffer);
+
+		ImageLayout oldLayout = resource.Layout;
+
+		ImageMemoryBarrier toTransfer = new()
+		{
+			SType = StructureType.ImageMemoryBarrier,
+			OldLayout = oldLayout,
+			NewLayout = ImageLayout.TransferDstOptimal,
+			SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+			DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+			Image = resource.Image,
+			SubresourceRange = new ImageSubresourceRange(
+				ImageAspectFlags.ColorBit,
+				0,
+				1,
+				0,
+				1),
+			SrcAccessMask = oldLayout == ImageLayout.Undefined
+				? AccessFlags.None
+				: AccessFlags.ShaderReadBit,
+			DstAccessMask = AccessFlags.TransferWriteBit
+		};
+
+		_api.CmdPipelineBarrier(
+			commandBuffer,
+			oldLayout == ImageLayout.Undefined
+				? PipelineStageFlags.TopOfPipeBit
+				: PipelineStageFlags.FragmentShaderBit,
+			PipelineStageFlags.TransferBit,
+			0,
+			0,
+			null,
+			0,
+			null,
+			1,
+			&toTransfer);
+
+		BufferImageCopy copy = new()
+		{
+			BufferOffset = 0,
+			BufferRowLength = 0,
+			BufferImageHeight = 0,
+			ImageSubresource = new ImageSubresourceLayers(
+				ImageAspectFlags.ColorBit,
+				0,
+				0,
+				1),
+			ImageOffset = new Offset3D(0, 0, 0),
+			ImageExtent = new Extent3D(
+				checked((uint)width),
+				checked((uint)height),
+				1)
+		};
+
+		_api.CmdCopyBufferToImage(
+			commandBuffer,
+			staging.Handle,
+			resource.Image,
+			ImageLayout.TransferDstOptimal,
+			1,
+			&copy);
+
+		ImageMemoryBarrier toShader = new()
+		{
+			SType = StructureType.ImageMemoryBarrier,
+			OldLayout = ImageLayout.TransferDstOptimal,
+			NewLayout = ImageLayout.ShaderReadOnlyOptimal,
+			SrcQueueFamilyIndex = Vk.QueueFamilyIgnored,
+			DstQueueFamilyIndex = Vk.QueueFamilyIgnored,
+			Image = resource.Image,
+			SubresourceRange = new ImageSubresourceRange(
+				ImageAspectFlags.ColorBit,
+				0,
+				1,
+				0,
+				1),
+			SrcAccessMask = AccessFlags.TransferWriteBit,
+			DstAccessMask = AccessFlags.ShaderReadBit
+		};
+
+		_api.CmdPipelineBarrier(
+			commandBuffer,
+			PipelineStageFlags.TransferBit,
+			PipelineStageFlags.FragmentShaderBit,
+			0,
+			0,
+			null,
+			0,
+			null,
+			1,
+			&toShader);
+
+		resource.Layout = ImageLayout.ShaderReadOnlyOptimal;
+
+		VulkanCommandRecording.End(_instance, commandBuffer);
+
+		FenceCreateInfo fenceInfo = new()
+		{
+			SType = StructureType.FenceCreateInfo
+		};
+
+		EnsureSuccess(
+			_api.CreateFence(
+				_device.Handle,
+				&fenceInfo,
+				null,
+				out Fence fence),
+			"Create UI image upload fence");
+
+		try
+		{
+			VulkanQueueSubmission.Submit(
+				_instance,
+				_device,
+				commandBuffer,
+				fence);
+
+			VulkanQueueSubmission.WaitForFence(
+				_instance,
+				_device,
+				fence,
+				5_000_000_000UL);
+		}
+
+		finally
+		{
+			_api.DestroyFence(_device.Handle, fence, null);
+		}
+	}
+
+	/// <summary>
+	/// One uploaded image texture and the slot it lives in.
+	/// </summary>
+	private sealed class ImageResource
+	{
+		public Image Image { get; init; }
+
+		public DeviceMemory Memory { get; init; }
+
+		public ImageView View { get; init; }
+
+		public int Width { get; init; }
+
+		public int Height { get; init; }
+
+		public ImageLayout Layout { get; set; } =
+			ImageLayout.Undefined;
+
+		/// <summary>
+		/// Gets or sets the texture revision held on the GPU. It starts
+		/// at -1 so a fresh image is always uploaded once, because a
+		/// newly created Vulkan image holds undefined contents.
+		/// </summary>
+		public int Revision { get; set; } = -1;
 	}
 
 	private VulkanBuffer CreateBuffer(

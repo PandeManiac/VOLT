@@ -171,6 +171,49 @@ Implemented limitations, stated honestly:
   and committed text arrives through `TextInput`, but no candidate
   window is drawn by VOLT.
 
+## Images
+
+`UiImageTexture` is a caller-owned RGBA8 buffer, the context's
+`UiTextureRegistry` hands out the `UiTextureId` a draw list uses, and
+`ImageView` draws one inside its content area:
+
+```csharp
+UiImageTexture texture = ui.Textures.Create(256, 160, "preview");
+texture.SetPixels(rgbaPixels);   // straight alpha, top-down
+
+ImageView view = new(texture)
+{
+    Scale = UiImageScale.Fill,   // Stretch, Fit, or Fill
+    DrawBorder = true
+};
+
+ui.Add(view);
+```
+
+`ImageBounds` reports the rectangle the image was actually drawn into
+and `TryMapToTexture` turns a root-space point into a texel coordinate,
+so a viewport panel does not have to duplicate the scale arithmetic.
+
+Rules worth knowing:
+
+- Pixels are straight-alpha RGBA, top-down, row by row. The first pixel
+  is the one drawn at the top-left corner, exactly as the Vulkan
+  backend samples it, so no widget needs a vertical flip.
+- A texture's size is fixed for its lifetime and its identity stays
+  with the instance. `Revision` advances when pixels change, which is
+  what tells a renderer to upload again; an image that did not change
+  is never copied.
+- A context holds at most `UiTextureRegistry.MaximumTextures` (16)
+  images. Slot numbers are stable: releasing one frees its slot for the
+  next registration without renumbering the others, and disposing the
+  context releases every image.
+- An image that is not registered in the drawing context paints
+  nothing, so a released texture can never draw another image's slot.
+
+A backend that consumes `UiDrawList` or `UiGeometry` sees images as
+`UiTextureKind.Image` batches carrying the `UiTextureId`, and a batch
+breaks whenever the sampled texture changes.
+
 ## Controls
 
 Labels, buttons, toggle buttons, check boxes, radio buttons, text
@@ -212,9 +255,14 @@ inside the dock host.
 `Volt.Ui.Vulkan` contains two layers:
 
 1. `VulkanUiRenderer` owns the pipeline, sampler, font atlas texture
-   array, per-frame host-visible vertex and index buffers, and render
-   pass for a swapchain generation. It issues one draw per batch.
-   Font atlases are uploaded only when their revision changes.
+   array, one image texture per live registry slot, per-frame
+   host-visible vertex and index buffers, and render pass for a
+   swapchain generation. It issues one draw per batch. Font atlases and
+   images are uploaded only when their revision changes, and releasing
+   a slot frees its texture and binds an opaque white texel instead.
+   Coverage batches sample the atlas array while image batches sample
+   their own RGBA texture, so one pipeline serves both and a per-batch
+   push constant selects the path.
 2. `VulkanUiHost` owns the window, instance, surface, device, swapchain
    recreation, input translation, and the frame loop. It exposes
    `Ui`, `DeltaSeconds`, `LogicalSize`, `DpiScale`, and
@@ -296,7 +344,13 @@ What these numbers support, and what they do not:
   not yet composite an offscreen 3D mesh render target.
 - Text shaping, bidirectional text, and IME candidate windows are
   documented above.
-- Icons are drawn procedurally (glyphs and rectangles); no icon font
-  or image asset pipeline is wired into the theme yet.
+- Images can be drawn (`UiImageTexture`, `ImageView`), but there is no
+  image asset pipeline: an application creates and fills the pixels
+  itself. Icons are drawn procedurally from glyphs and rectangles, and
+  the theme has no icon font.
+- An image whose revision changed is replaced in place, which waits for
+  the device. Publishing a render target through that path costs one
+  device wait per changed image and frame; a renderer that draws into
+  the sampled image directly avoids it.
 - `UiContext` consumes one pointer. Multi-touch and pen input are not
   part of the current input contract.

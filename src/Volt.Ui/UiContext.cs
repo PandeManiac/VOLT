@@ -135,6 +135,16 @@ public sealed class UiContext : IDisposable
 
 	public IUiClipboard Clipboard { get; set; }
 
+	/// <summary>
+	/// Gets the image textures this context can draw.
+	/// </summary>
+	/// <remarks>
+	/// A renderer reads this registry to upload images and to free the
+	/// slots that were released. Disposing the context releases every
+	/// image it holds.
+	/// </remarks>
+	public UiTextureRegistry Textures { get; } = new();
+
 	public IList<UiShortcut> Shortcuts => _shortcuts;
 
 	public UiCursor Cursor
@@ -855,6 +865,7 @@ public sealed class UiContext : IDisposable
 		_tooltipOwner = null;
 		_tooltip = null;
 		_shortcuts.Clear();
+		Textures.Clear();
 		_root.Dispose();
 	}
 
