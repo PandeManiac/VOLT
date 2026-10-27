@@ -31,6 +31,13 @@ namespace Volt.Ui.Vulkan;
 /// the thread that created SDL's video subsystem and owns the window.
 /// Disposal releases every GPU object after the device is idle.
 /// </para>
+/// <para>
+/// Only the window-system extensions and VK_KHR_swapchain are required.
+/// Presentation fences from the swapchain maintenance feature are used
+/// when the platform exposes them, and swapchain generations otherwise
+/// retire through an explicit device idle, so a GPU without that
+/// extension still runs the UI.
+/// </para>
 /// </remarks>
 public sealed class VulkanUiHost : IDisposable
 {
@@ -97,8 +104,24 @@ public sealed class VulkanUiHost : IDisposable
 
 		try
 		{
-			string[] extensions =
-				VulkanWindowSupport.GetRequiredInstanceExtensions(_window);
+			List<string> extensions =
+			[
+				.. VulkanWindowSupport.GetRequiredInstanceExtensions(
+					_window)
+			];
+
+			// The maintenance feature is only visible to the device
+			// query once the instance enables its prerequisites, so
+			// add whichever of them this loader supports.
+			foreach (string instanceExtension in
+				VulkanSwapchainMaintenance1Extensions
+					.GetSupportedInstanceExtensions())
+			{
+				if (!extensions.Contains(instanceExtension))
+				{
+					extensions.Add(instanceExtension);
+				}
+			}
 
 			instance = new VulkanInstance(
 				new VulkanInstanceDescription(
@@ -113,21 +136,29 @@ public sealed class VulkanUiHost : IDisposable
 
 			_physicalDevice = physicalDevice;
 
-			string maintenanceExtension =
+			// Presentation fences make retirement cheaper, but the
+			// host is correct without them: every generation is
+			// retired only after an explicit device idle.
+			string? maintenanceExtension =
 				VulkanLogicalDevice
 					.GetSupportedSwapchainMaintenance1Extension(
 						instance,
-						physicalDevice)
-				?? throw new NotSupportedException(
-					"The selected GPU does not support " +
-					"VK_KHR_swapchain_maintenance1.");
+						physicalDevice);
+
+			string[] deviceExtensions = maintenanceExtension is null
+				? [SwapchainExtension]
+				: [SwapchainExtension, maintenanceExtension];
 
 			device = new VulkanLogicalDevice(
 				instance,
 				physicalDevice,
 				_selectedQueueFamily,
-				[SwapchainExtension, maintenanceExtension],
-				enableSwapchainMaintenance1: true);
+				deviceExtensions,
+				enableSwapchainMaintenance1:
+					maintenanceExtension is not null);
+
+			PresentationFencesEnabled =
+				device.SwapchainMaintenance1Enabled;
 
 			commandPool = new VulkanCommandPool(instance, device);
 
@@ -177,6 +208,17 @@ public sealed class VulkanUiHost : IDisposable
 	/// Gets the current physical pixels per logical unit.
 	/// </summary>
 	public float DpiScale => _dpiScale;
+
+	/// <summary>
+	/// Gets whether presentation fences from the swapchain
+	/// maintenance feature are in use for new swapchain generations.
+	/// </summary>
+	/// <remarks>
+	/// When this is false, the platform does not expose the feature and
+	/// each generation is retired through an explicit device idle
+	/// instead.
+	/// </remarks>
+	public bool PresentationFencesEnabled { get; private set; }
 
 	/// <summary>
 	/// Gets the current logical surface size.

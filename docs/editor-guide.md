@@ -10,10 +10,12 @@ not embed ImGui, Avalonia, WPF, WinForms, or Qt.
 dotnet run --project src/Volt.Editor
 ```
 
-Open a project directly:
+Open an existing project folder directly; replace `/tmp/MyGame` with any
+absolute path. Without `--project` the editor starts on its start screen
+instead:
 
 ```bash
-dotnet run --project src/Volt.Editor -- --project /path/to/MyGame
+dotnet run --project src/Volt.Editor -- --project /tmp/MyGame
 ```
 
 Optional flags:
@@ -125,7 +127,7 @@ dotnet run --project samples/Volt.PlayDemo
 Create a fresh playable project from the template:
 
 ```bash
-dotnet run --project samples/Volt.PlayDemo -- --create /path/to/NewGame
+dotnet run --project samples/Volt.PlayDemo -- --create /tmp/NewGame
 ```
 
 The created project contains a player object with the built-in move

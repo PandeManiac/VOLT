@@ -161,13 +161,17 @@ dotnet run --project samples/Volt.UiDemo
 dotnet run --project src/Volt.Editor
 ```
 
-Open an existing project directly, or create a playable project from the template:
+`--project` opens a folder that already exists; run the editor without it to
+use the start screen, which can create or open a project. Replace
+`/tmp/MyGame` with any absolute path:
 
 ```bash
-dotnet run --project src/Volt.Editor -- --project /path/to/MyGame
-dotnet run --project samples/Volt.PlayDemo -- --create /path/to/MyGame
-dotnet run --project samples/Volt.PlayDemo -- --project /path/to/MyGame
+dotnet run --project samples/Volt.PlayDemo -- --create /tmp/MyGame
+dotnet run --project src/Volt.Editor -- --project /tmp/MyGame
+dotnet run --project samples/Volt.PlayDemo -- --project /tmp/MyGame
 ```
+
+The play demo can also run an existing project directly, without the editor.
 
 ### Benchmarks
 

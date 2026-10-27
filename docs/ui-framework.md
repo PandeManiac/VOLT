@@ -173,6 +173,14 @@ inside the dock host.
    `Ui`, `DeltaSeconds`, `LogicalSize`, `DpiScale`, and
    `RequestExit`, and the application supplies one update callback.
 
+The host requires only the window-system extensions and
+`VK_KHR_swapchain`, plus a presentable surface. Presentation fences
+from `VK_KHR_swapchain_maintenance1` are enabled when the platform
+exposes them, and each swapchain generation is otherwise retired
+through an explicit device idle, so a GPU without that extension
+still runs the UI. `PresentationFencesEnabled` reports which path is
+in use.
+
 A different backend only needs to consume `UiDrawList` or
 `UiGeometry`; neither contains API-specific types. The UI framework
 itself contains no Vulkan reference.

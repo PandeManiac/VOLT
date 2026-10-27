@@ -83,6 +83,12 @@ internal static class Program
 				Size = new WindowSize(1280, 800)
 			});
 
+		Console.WriteLine(
+			host.PresentationFencesEnabled
+				? "Presentation fences: enabled."
+				: "Presentation fences: unavailable; swapchain " +
+					"generations retire through device idle.");
+
 		UiContext ui = host.Ui;
 		UiTheme theme = ui.Theme;
 
