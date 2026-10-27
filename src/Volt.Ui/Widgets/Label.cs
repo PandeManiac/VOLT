@@ -131,19 +131,23 @@ public class Label : Widget
 			return;
 		}
 
-		UiTextLayoutResult layout = EnsureLayout(ContentBounds.Width);
+		// The draw list is in root coordinates, so text is placed with
+		// the global content rectangle, not the widget-local one.
+		UiRect content = GlobalContentBounds;
+
+		UiTextLayoutResult layout = EnsureLayout(content.Width);
 		float y = _verticalTextAlignment switch
 		{
-			UiTextVerticalAlignment.Center => ContentBounds.Y +
-				MathF.Max(0f, (ContentBounds.Height - layout.Height) * 0.5f),
-			UiTextVerticalAlignment.End => ContentBounds.Y +
-				MathF.Max(0f, ContentBounds.Height - layout.Height),
-			_ => ContentBounds.Y
+			UiTextVerticalAlignment.Center => content.Y +
+				MathF.Max(0f, (content.Height - layout.Height) * 0.5f),
+			UiTextVerticalAlignment.End => content.Y +
+				MathF.Max(0f, content.Height - layout.Height),
+			_ => content.Y
 		};
 
 		drawList.AddText(
 			layout,
-			new UiPoint(ContentBounds.X, y),
+			new UiPoint(content.X, y),
 			TextColor ?? Context?.Theme.Palette.Text ?? UiColor.White);
 	}
 

@@ -124,16 +124,21 @@ public class Button : Widget
 		}
 
 		UiFont font = _font ?? theme.Fonts.Body;
+
+		// The draw list is in root coordinates, so the caption is
+		// centered inside the global content rectangle.
+		UiRect content = GlobalContentBounds;
+
 		UiTextLayoutResult layout = EnsureLayout(
 			font,
 			Text,
-			ContentBounds.Width);
+			content.Width);
 
-		float x = ContentBounds.X +
-			MathF.Max(0f, (ContentBounds.Width - layout.Width) * 0.5f);
+		float x = content.X +
+			MathF.Max(0f, (content.Width - layout.Width) * 0.5f);
 
-		float y = ContentBounds.Y +
-			MathF.Max(0f, (ContentBounds.Height - layout.Height) * 0.5f);
+		float y = content.Y +
+			MathF.Max(0f, (content.Height - layout.Height) * 0.5f);
 
 		drawList.AddText(
 			layout,

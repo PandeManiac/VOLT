@@ -377,16 +377,20 @@ public class ScrollView : Widget
 	{
 		float thickness = TrackThickness;
 
+		// The track is drawn and hit-tested in root coordinates, so it
+		// follows the global content rectangle.
+		UiRect content = GlobalContentBounds;
+
 		return Orientation == UiOrientation.Vertical
 			? new UiRect(
-				ContentBounds.Right - thickness,
-				ContentBounds.Y,
+				content.Right - thickness,
+				content.Y,
 				thickness,
-				ContentBounds.Height)
+				content.Height)
 			: new UiRect(
-				ContentBounds.X,
-				ContentBounds.Bottom - thickness,
-				ContentBounds.Width,
+				content.X,
+				content.Bottom - thickness,
+				content.Width,
 				thickness);
 	}
 

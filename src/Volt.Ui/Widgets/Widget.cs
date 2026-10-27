@@ -348,8 +348,8 @@ public abstract class Widget : IDisposable
 	public UiRect VisualBounds => _visualBounds;
 
 	/// <summary>
-	/// Gets the content area after margin and padding, relative to the
-	/// parent's content area.
+	/// Gets the content area after margin and padding, relative to this
+	/// widget's outer bounds.
 	/// </summary>
 	public UiRect ContentBounds => _contentBounds;
 
@@ -391,11 +391,11 @@ public abstract class Widget : IDisposable
 	public UiRect ClipBounds => _clipBounds;
 
 	/// <summary>
-	/// Gets the global origin of children arranged in the content area.
+	/// Gets the global origin of the content area.
 	/// </summary>
 	public UiPoint ContentOrigin => new(
-		_contentBounds.X,
-		_contentBounds.Y);
+		_globalBounds.X + _contentBounds.X,
+		_globalBounds.Y + _contentBounds.Y);
 
 	public bool IsAncestorOf(Widget widget)
 	{
@@ -799,7 +799,24 @@ public abstract class Widget : IDisposable
 
 		_bounds = bounds;
 		_visualBounds = Deflate(bounds, _margin);
-		_contentBounds = Deflate(_visualBounds, _padding);
+
+		// ArrangeContent receives the same child-local space that
+		// Arrange expects from its children, where zero is this
+		// widget's outer top-left corner. Carrying the
+		// parent-relative position into it would add that offset a
+		// second time when a child is arranged, displacing nested
+		// content by its parent's own position and compounding with
+		// every additional level of nesting.
+		_contentBounds = new UiRect(
+			_margin.Left + _padding.Left,
+			_margin.Top + _padding.Top,
+			MathF.Max(
+				0f,
+				bounds.Width - _margin.Horizontal - _padding.Horizontal),
+			MathF.Max(
+				0f,
+				bounds.Height - _margin.Vertical - _padding.Vertical));
+
 		_globalBounds = new UiRect(
 			parentContentOrigin.X + bounds.X,
 			parentContentOrigin.Y + bounds.Y,

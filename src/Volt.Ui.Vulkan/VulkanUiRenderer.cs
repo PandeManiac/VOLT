@@ -1245,14 +1245,13 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 	}
 
 	/// <summary>
-	/// Converts pixel-space UI vertices into Vulkan clip space.
+	/// Converts pixel-space UI vertices into Vulkan clip space with a
+	/// scratch array that is reused across frames.
 	/// </summary>
 	/// <remarks>
-	/// <see cref="UiGeometry"/> deliberately emits physical pixels so
-	/// any backend can consume it and so clipping stays in one
-	/// coordinate system. The vertex shader forwards positions
-	/// unchanged, so this backend performs the single Y flip and
-	/// normalization here. The scratch array is reused across frames.
+	/// The mapping itself lives in <see cref="UiClipSpace"/> so it can
+	/// be tested without a device. See its remarks for why pixel space
+	/// and Vulkan clip space share one orientation.
 	/// </remarks>
 	private ReadOnlySpan<UiVertex> ToClipSpace(
 		ReadOnlySpan<UiVertex> vertices,
@@ -1263,20 +1262,11 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 			_clipSpaceVertices = new UiVertex[vertices.Length];
 		}
 
-		float width = MathF.Max(1f, extent.Width);
-		float height = MathF.Max(1f, extent.Height);
-
-		for (int index = 0; index < vertices.Length; index++)
-		{
-			UiVertex vertex = vertices[index];
-
-			_clipSpaceVertices[index] = new UiVertex(
-				new System.Numerics.Vector2(
-					(vertex.Position.X / width * 2f) - 1f,
-					1f - (vertex.Position.Y / height * 2f)),
-				vertex.Uv,
-				vertex.Color);
-		}
+		UiClipSpace.Convert(
+			vertices,
+			_clipSpaceVertices.AsSpan(0, vertices.Length),
+			extent.Width,
+			extent.Height);
 
 		return _clipSpaceVertices.AsSpan(0, vertices.Length);
 	}

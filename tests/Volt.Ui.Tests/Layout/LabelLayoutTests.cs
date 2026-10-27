@@ -39,8 +39,11 @@ public sealed class LabelLayoutTests
 
 		host.Layout();
 
-		Assert.Equal(5f, label.ContentBounds.X - label.VisualBounds.X);
-		Assert.Equal(3f, label.ContentBounds.Y - label.VisualBounds.Y);
+		// ContentBounds is relative to the widget's own outer bounds,
+		// so padding alone moves it. The label's position inside its
+		// parent must not leak into it.
+		Assert.Equal(5f, label.ContentBounds.X);
+		Assert.Equal(3f, label.ContentBounds.Y);
 		Assert.Equal(
 			label.VisualBounds.Width - 10f,
 			label.ContentBounds.Width);

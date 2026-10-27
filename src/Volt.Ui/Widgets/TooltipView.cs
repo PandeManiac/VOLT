@@ -74,9 +74,13 @@ public sealed class TooltipView : Widget
 			_layoutText = Text;
 		}
 
+		// The draw list is in root coordinates, so the text is placed
+		// with the global content rectangle.
+		UiRect content = GlobalContentBounds;
+
 		drawList.AddText(
 			_layout,
-			new UiPoint(ContentBounds.X, ContentBounds.Y),
+			new UiPoint(content.X, content.Y),
 			TextColor ?? theme.Palette.Text);
 	}
 }

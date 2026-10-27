@@ -56,9 +56,10 @@ internal sealed class GameView : Widget
 			Context?.Theme.Palette.Selection ?? UiColor.White,
 			Context?.Theme.Palette.TextMuted ?? UiColor.White);
 
-		drawList.AddRect(Bounds, palette.Background);
+		// The draw list is in root coordinates.
+		drawList.AddRect(GlobalBounds, palette.Background);
 
-		UiRect area = ContentBounds;
+		UiRect area = GlobalContentBounds;
 
 		if (area.IsEmpty)
 		{

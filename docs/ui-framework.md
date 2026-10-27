@@ -27,6 +27,33 @@ the hit widget to the root; key events tunnel from the root to the
 focused widget and then bubble back. Returning `true` stops
 propagation. Handlers may remove widgets or change focus safely.
 
+## Coordinate system
+
+Layout, painting, text, clipping, hit testing, and the Vulkan backend
+share one coordinate system:
+
+- The origin is the top-left corner of the surface and Y grows
+  downward. `UiRect`, `UiDrawList`, `UiBatch.Scissor`, and the pointer
+  positions reported by `VulkanUiHost` all use it.
+- `ContentBounds` and `VisualBounds` are relative to the widget's own
+  outer bounds. `ArrangeContent` and every `ArrangeChild*` call work in
+  that widget-local space, so a container never re-applies its own
+  position and nesting cannot accumulate offsets.
+- `GlobalVisualBounds`, `GlobalContentBounds`, and `ContentOrigin` are
+  in root coordinates. Painting, popups, and tooltips use those.
+- Vulkan clip space keeps the same orientation: (-1, -1) is the
+  viewport's top-left corner. `UiClipSpace.Convert` therefore only
+  scales and translates pixels, and the scissor rectangle of a batch
+  always covers exactly the pixels its geometry came from.
+- Font atlases are packed and uploaded top-down and glyph UVs measure
+  from the top-left, so text needs no orientation adjustment of its
+  own.
+
+Regression coverage lives in
+`tests/Volt.Ui.Tests/Rendering/CoordinateSystemTests.cs` and
+`tests/Volt.Ui.Vulkan.Tests/UiClipSpaceTests.cs`; both run without a
+device.
+
 ## Minimal headless example
 
 ```csharp

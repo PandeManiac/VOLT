@@ -38,6 +38,7 @@
     <Project Path="tests/Volt.Graphics.Tests/Volt.Graphics.Tests.csproj" />
     <Project Path="tests/Volt.Platform.Tests/Volt.Platform.Tests.csproj" />
     <Project Path="tests/Volt.Ui.Tests/Volt.Ui.Tests.csproj" />
+    <Project Path="tests/Volt.Ui.Vulkan.Tests/Volt.Ui.Vulkan.Tests.csproj" />
     <Project Path="tests/Volt.Editor.Core.Tests/Volt.Editor.Core.Tests.csproj" />
     <Project Path="tests/Volt.Editor.Tests/Volt.Editor.Tests.csproj" />
     <Project Path="tests/Volt.VulkanMeshDemo.Tests/Volt.VulkanMeshDemo.Tests.csproj" />

@@ -85,16 +85,20 @@ public class CheckBox : Widget
 	{
 		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
 		UiFont font = ResolveFont();
+		// The draw list is in root coordinates, so the box and its
+		// label are placed inside the global content rectangle.
+		UiRect content = GlobalContentBounds;
+
 		UiTextLayoutResult layout = EnsureLayout(
 			font,
-			MathF.Max(0f, ContentBounds.Width - BoxSize - 6f));
+			MathF.Max(0f, content.Width - BoxSize - 6f));
 
 		float box = BoxSize;
-		float boxY = ContentBounds.Y +
-			MathF.Max(0f, (ContentBounds.Height - box) * 0.5f);
+		float boxY = content.Y +
+			MathF.Max(0f, (content.Height - box) * 0.5f);
 
 		UiRect boxRect = new(
-			ContentBounds.X,
+			content.X,
 			boxY,
 			box,
 			box);
@@ -138,8 +142,8 @@ public class CheckBox : Widget
 		}
 
 		float textX = boxRect.Right + 6f;
-		float textY = ContentBounds.Y +
-			MathF.Max(0f, (ContentBounds.Height - layout.Height) * 0.5f);
+		float textY = content.Y +
+			MathF.Max(0f, (content.Height - layout.Height) * 0.5f);
 
 		drawList.AddText(
 			layout,
