@@ -9,5 +9,6 @@ public enum WindowEventType
 	Unknown = 0,
 	CloseRequested = 1,
 	Resized = 2,
-	PixelSizeChanged = 3
+	PixelSizeChanged = 3,
+	TextInput = 4
 }

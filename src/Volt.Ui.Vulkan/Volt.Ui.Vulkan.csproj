@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Volt.Ui.Vulkan</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Volt.Ui/Volt.Ui.csproj" />
+    <ProjectReference Include="../Volt.Graphics.Vulkan/Volt.Graphics.Vulkan.csproj" />
+    <ProjectReference Include="../Volt.Platform/Volt.Platform.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Shaders/ui.vert.spv" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Shaders/ui.frag.spv" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CompileUiShaders"
+          BeforeTargets="GetCopyToOutputDirectoryItems"
+          Inputs="Shaders/ui.vert;Shaders/ui.frag"
+          Outputs="Shaders/ui.vert.spv;Shaders/ui.frag.spv">
+    <Exec Command="glslangValidator -V &quot;$(MSBuildProjectDirectory)/Shaders/ui.vert&quot; -o &quot;$(MSBuildProjectDirectory)/Shaders/ui.vert.spv&quot;" />
+    <Exec Command="glslangValidator -V &quot;$(MSBuildProjectDirectory)/Shaders/ui.frag&quot; -o &quot;$(MSBuildProjectDirectory)/Shaders/ui.frag.spv&quot;" />
+  </Target>
+
+</Project>

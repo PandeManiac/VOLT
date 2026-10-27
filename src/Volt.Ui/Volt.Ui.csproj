@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Volt.Ui</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="StbTrueTypeSharp" Version="1.26.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="../../assets/fonts/IBMPlexSans-Regular.ttf"
+                      LogicalName="Volt.Ui.Fonts.IBMPlexSans-Regular.ttf" />
+    <EmbeddedResource Include="../../assets/fonts/JetBrainsMono-Regular.ttf"
+                      LogicalName="Volt.Ui.Fonts.JetBrainsMono-Regular.ttf" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Volt.Ui.Tests" />
+  </ItemGroup>
+
+</Project>
