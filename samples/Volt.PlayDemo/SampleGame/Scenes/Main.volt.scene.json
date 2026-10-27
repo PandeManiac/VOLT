@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "id": "fd609b4e-865a-4e9f-a335-2ae31a40f0bc",
+  "name": "Main",
+  "entities": [
+    {
+      "id": "94223713-c7fb-4f4d-a385-a845460c2893",
+      "name": "Main Camera",
+      "transform": {
+        "position": {
+          "x": 0,
+          "y": 1.5,
+          "z": 6
+        },
+        "eulerAngles": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "components": [
+        {
+          "typeId": "volt.camera",
+          "data": {
+            "typeId": "volt.camera",
+            "displayName": "Camera",
+            "primary": true,
+            "fieldOfView": 60,
+            "near": 0.1,
+            "far": 1000
+          }
+        }
+      ]
+    },
+    {
+      "id": "b73b40cb-a52e-4aff-937d-a1ff1d7e5a82",
+      "name": "Cube",
+      "transform": {
+        "position": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "eulerAngles": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "components": [
+        {
+          "typeId": "volt.meshRenderer",
+          "data": {
+            "typeId": "volt.meshRenderer",
+            "displayName": "Mesh Renderer",
+            "mesh": "builtin:cube",
+            "material": "builtin:default",
+            "visible": true
+          }
+        },
+        {
+          "typeId": "volt.behaviour.spin",
+          "data": {
+            "typeId": "volt.behaviour.spin",
+            "displayName": "Spin Behaviour",
+            "enabled": true,
+            "axis": {
+              "x": 0,
+              "y": 1,
+              "z": 0
+            },
+            "degreesPerSecond": 35
+          }
+        }
+      ]
+    },
+    {
+      "id": "d689e883-ac47-41ca-bb88-f8f54f330628",
+      "name": "Player",
+      "transform": {
+        "position": {
+          "x": -3,
+          "y": 0,
+          "z": 0
+        },
+        "eulerAngles": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "components": [
+        {
+          "typeId": "volt.meshRenderer",
+          "data": {
+            "typeId": "volt.meshRenderer",
+            "displayName": "Mesh Renderer",
+            "mesh": "builtin:cube",
+            "material": "builtin:default",
+            "visible": true
+          }
+        },
+        {
+          "typeId": "volt.behaviour.move",
+          "data": {
+            "typeId": "volt.behaviour.move",
+            "displayName": "Move Behaviour",
+            "enabled": true,
+            "axis": {
+              "x": 1,
+              "y": 0,
+              "z": 0
+            },
+            "speed": 3,
+            "range": 0,
+            "automatic": false,
+            "phase": 0
+          }
+        }
+      ]
+    }
+  ]
+}
