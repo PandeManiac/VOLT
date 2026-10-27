@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Volt.Editor.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Volt.Ecs/Volt.Ecs.csproj" />
+    <ProjectReference Include="../Volt.Rendering/Volt.Rendering.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Volt.Editor.Core.Tests" />
+  </ItemGroup>
+
+</Project>
