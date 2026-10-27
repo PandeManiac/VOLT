@@ -272,12 +272,16 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 			Silk.NET.Vulkan.Buffer vertexBuffer =
 				_vertexBuffers[slot].Handle;
 
+			// The offsets array must be a valid pointer even when the
+			// only binding starts at zero: Vulkan dereferences it.
+			ulong vertexOffset = 0;
+
 			_api.CmdBindVertexBuffers(
 				commandBuffer,
 				firstBinding: 0,
 				bindingCount: 1,
 				&vertexBuffer,
-				null);
+				&vertexOffset);
 
 			_api.CmdBindIndexBuffer(
 				commandBuffer,
@@ -322,13 +326,15 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 					1,
 					&scissor);
 
-				float layer = ResolveLayer(batch.Texture);					_api.CmdPushConstants(
-						commandBuffer,
-						_pipelineLayout,
-						ShaderStageFlags.FragmentBit,
-						0,
-						sizeof(float),
-						&layer);
+				float layer = ResolveLayer(batch.Texture);
+
+				_api.CmdPushConstants(
+					commandBuffer,
+					_pipelineLayout,
+					PushConstantStages,
+					0,
+					sizeof(float),
+					&layer);
 
 				_api.CmdDrawIndexed(
 					commandBuffer,
@@ -723,11 +729,24 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		return pass;
 	}
 
+	/// <summary>
+	/// Stage that reads the UI push constant.
+	/// </summary>
+	/// <remarks>
+	/// `ui.vert` reads the atlas layer through a push constant and
+	/// `ui.frag` reads none, so the pipeline layout range and every
+	/// push must name the vertex stage. Naming the fragment stage
+	/// instead makes pipeline creation invalid and leaves the vertex
+	/// shader reading undefined data.
+	/// </remarks>
+	private const ShaderStageFlags PushConstantStages =
+		ShaderStageFlags.VertexBit;
+
 	private PipelineLayout CreatePipelineLayout()
 	{
 		PushConstantRange range = new()
 		{
-			StageFlags = ShaderStageFlags.FragmentBit,
+			StageFlags = PushConstantStages,
 			Offset = 0,
 			Size = sizeof(float)
 		};
