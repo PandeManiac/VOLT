@@ -716,6 +716,7 @@ public sealed class VulkanUiHost : IDisposable
 	/// </summary>
 	private sealed class SwapchainResources : IDisposable
 	{
+		private readonly VulkanSwapchain _swapchain;
 		private readonly VulkanSwapchainImageViews _imageViews;
 
 		public SwapchainResources(
@@ -778,6 +779,7 @@ public sealed class VulkanUiHost : IDisposable
 				throw;
 			}
 
+			_swapchain = swapchain;
 			_imageViews = imageViews;
 			Renderer = renderer;
 			Frames = frames;
@@ -794,6 +796,10 @@ public sealed class VulkanUiHost : IDisposable
 			Frames.Dispose();
 			Renderer.Dispose();
 			_imageViews.Dispose();
+
+			// The swapchain owns the images the image views were
+			// created from, so it is destroyed after them.
+			_swapchain.Dispose();
 		}
 	}
 }
