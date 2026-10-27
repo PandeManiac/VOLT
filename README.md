@@ -68,6 +68,16 @@ This is currently a **single-frame demonstration**, not a continuous renderer. T
 
 See the [Vulkan surface demo README](samples/Volt.VulkanSurfaceDemo/README.md) for sample-specific setup and limitations.
 
+### Volt.Ui and the editor
+
+`Volt.Ui` is VOLT's native, retained-mode user interface framework. It owns a widget tree, invalidation-based measure and arrange layout, theming, font rasterization and text editing, focus, pointer capture, event routing, docking, and a batched draw list. It has no reference to `Volt.Ecs`, SDL, or Vulkan: the same widget tree is driven headlessly by tests and by a windowed host.
+
+`Volt.Ui.Vulkan` renders the draw list with one shared pipeline, a coverage-atlas texture array, dynamic scissor state, and one draw per batch. `VulkanUiHost` provides the SDL3 window, swapchain recreation, Unicode input translation, and continuous frame loop for any application that wants a Volt.Ui window.
+
+`Volt.Editor` is a graphical game development editor built entirely from Volt.Ui widgets. It provides a Unity-familiar menu bar, toolbar, dockable Hierarchy, Scene, Game, Inspector, Project, Console, and Profiler panels, scene authoring with transform gizmos and undo, versioned scene and project persistence, a workspace layout that survives restart, and an isolated Play Mode that runs authored content in a separate ECS world. See the [UI framework documentation](docs/ui-framework.md) and the [editor guide](docs/editor-guide.md).
+
+The editor's scene and game views draw grid, axes, entity markers, and gizmos as UI geometry; compositing a full offscreen 3D mesh render target is not implemented yet. Gameplay logic currently comes from built-in behaviours stored in authored component data, not from separately loaded user assemblies.
+
 ### Projects
 
 | Project | Purpose |
@@ -80,10 +90,14 @@ See the [Vulkan surface demo README](samples/Volt.VulkanSurfaceDemo/README.md) f
 | `Volt.Graphics.Vulkan` | Vulkan graphics backend and native resource management |
 | `Volt.Platform` | SDL3 windowing, events, and platform integration |
 | `Volt.Rendering` | Camera and extraction abstractions, render components, and interpolated transform history |
+| `Volt.Ui` | Native retained-mode UI: widgets, layout, text, styling, input, docking |
+| `Volt.Ui.Vulkan` | Vulkan UI renderer and window host |
+| `Volt.Editor.Core` | Authored scenes, projects, undo commands, runtime worlds, and play sessions |
+| `Volt.Editor` | Graphical editor shell, panels, viewports, and executable |
 | `Volt.*.Tests` | Automated tests for the corresponding engine subsystems |
 | `Volt.Benchmarks` | BenchmarkDotNet performance benchmarks |
 
-The `samples/` directory contains focused demonstrations of platform, Vulkan, and gameplay functionality. Samples are integration and diagnostic tools, not yet a public game-creation workflow.
+The `samples/` directory contains focused demonstrations of platform, Vulkan, gameplay, and UI functionality. `Volt.UiDemo` is a standalone Volt.Ui application with no editor dependency. `Volt.PlayDemo` opens, runs, and presents an authored project without the editor.
 
 ## Building
 
@@ -137,6 +151,23 @@ SDL_VIDEODRIVER=x11 dotnet run \
 The `--validation` option requests the Vulkan validation layer and requires `VK_LAYER_KHRONOS_validation` to be installed. Omit the option to run without validation.
 
 The demo displays a color-interpolated triangle against a dark background for a few seconds, then releases its resources and exits. It does not yet run a continuous rendering loop.
+
+### Volt.Ui demo and editor
+
+Both need a working SDL3 video backend and a Vulkan device. The UI shaders are checked in as SPIR-V; `glslangValidator` is only required when the shader sources change.
+
+```bash
+dotnet run --project samples/Volt.UiDemo
+dotnet run --project src/Volt.Editor
+```
+
+Open an existing project directly, or create a playable project from the template:
+
+```bash
+dotnet run --project src/Volt.Editor -- --project /path/to/MyGame
+dotnet run --project samples/Volt.PlayDemo -- --create /path/to/MyGame
+dotnet run --project samples/Volt.PlayDemo -- --project /path/to/MyGame
+```
 
 ### Benchmarks
 
