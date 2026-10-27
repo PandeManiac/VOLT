@@ -66,6 +66,16 @@ Toolbar (Select, Move, Rotate, Scale, Play, Pause, Step, Stop)
 Status bar
 ```
 
+The menu bar, toolbar, and status bar are fixed-height rows of one
+vertical stack, and the workspace between them is the row that declares
+`FlexGrow`. That is what keeps the status bar on the bottom edge and
+ends the dock area where the status bar begins, at any window size:
+a row that fills the space it is offered would otherwise claim the
+whole surface and push the rows after it out of the window.
+`tests/Volt.Editor.Tests/EditorShellLayoutTests.cs` lays the shell out
+headlessly at real window sizes and asserts that chrome placement,
+panel containment, paint clipping, and hit testing all agree.
+
 Panels are real `DockHost` panels. Drag splitters to resize, drop a
 panel onto another tab group to combine them, and use **Window** to
 close or reopen panels. The layout is serialized to
@@ -174,8 +184,13 @@ not yet a mesh-rendering game framework.
 - Windows was not available to verify; code paths are platform-neutral
   and use SDL3 and Vulkan, but only Linux builds and tests were run.
 - The editor has no automated UI test that opens a native window.
-  Session, scene, project, undo, play-mode, layout, and rendering
-  geometry are covered headlessly.
+  Session, scene, project, undo, play mode, dock layout, rendering
+  geometry, and the whole shell's layout, clipping, and hit testing are
+  covered headlessly; only a window on a GPU shows pixels.
+- In a window shorter than a panel's minimum content, that panel clips
+  its own overflow rather than scrolling it. The strict
+  no-geometry-outside-the-window check therefore runs at the window the
+  editor opens with.
 
 ## Where to look
 

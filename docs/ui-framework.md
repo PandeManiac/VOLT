@@ -52,7 +52,9 @@ share one coordinate system:
 Regression coverage lives in
 `tests/Volt.Ui.Tests/Rendering/CoordinateSystemTests.cs` and
 `tests/Volt.Ui.Vulkan.Tests/UiClipSpaceTests.cs`; both run without a
-device.
+device. The editor's own chrome, panel containment, paint clipping,
+and hit testing are asserted at real window sizes by
+`tests/Volt.Editor.Tests/EditorShellLayoutTests.cs`.
 
 ## Minimal headless example
 
@@ -134,6 +136,15 @@ the headless Vulkan harness in `tools/` drives.
 Containers: `StackPanel` (horizontal or vertical), `Panel`
 (single-child host), `CanvasPanel` (explicit slots), `ScrollView`,
 `Splitter`, and the docking composites described below.
+
+A stack hands leftover main-axis space to the children that declare
+`FlexGrow` and takes a deficit from the children that declare
+`FlexShrink`; no other child changes size. A container that fills what
+it is offered (`Panel`) reports that offer as its desired size, so a
+row that should absorb the leftover height has to say `FlexGrow = 1`.
+Without that declaration the stack's content is taller than the stack
+and every later child is arranged outside it, which is the shape of
+the bug pinned by `tests/Volt.Ui.Tests/Layout/StackFlexTests.cs`.
 
 Invalidation entry points are `InvalidateMeasure`, `InvalidateArrange`,
 `InvalidateVisual`, and `InvalidateLayoutTree`. Changing a property

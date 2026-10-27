@@ -31,6 +31,7 @@ public sealed class EditorShell : Panel
 	private readonly Label _startError;
 	private readonly Label _status;
 	private readonly Label _statusRight;
+	private readonly Panel _statusBar;
 
 	private readonly Dictionary<EditorTool, ToggleButton> _toolButtons = [];
 	private readonly Dictionary<PanelTab, MenuItem> _windowMenuItems = [];
@@ -86,7 +87,14 @@ public sealed class EditorShell : Panel
 
 		_workspace = new Panel
 		{
-			DrawBackground = false
+			DrawBackground = false,
+
+			// The workspace is the flexible row between the fixed-height
+			// menu bar and status bar. A stack only hands leftover space
+			// to children that declare it, so without this the workspace
+			// would claim every pixel the stack offers, overflow the
+			// surface, and push the status bar below the window.
+			FlexGrow = 1f
 		};
 
 		_workspace.Add(_workspaceStack);
@@ -106,7 +114,7 @@ public sealed class EditorShell : Panel
 			VerticalAlignment = UiAlignment.Center
 		};
 
-		Panel statusBar = new()
+		_statusBar = new Panel
 		{
 			Height = UiLength.Points(26f),
 			DrawBackground = true
@@ -120,7 +128,7 @@ public sealed class EditorShell : Panel
 
 		statusRow.Add(_status);
 		statusRow.Add(_statusRight);
-		statusBar.Add(statusRow);
+		_statusBar.Add(statusRow);
 
 		StackPanel root = new()
 		{
@@ -129,7 +137,7 @@ public sealed class EditorShell : Panel
 
 		root.Add(_menuBar);
 		root.Add(_workspace);
-		root.Add(statusBar);
+		root.Add(_statusBar);
 
 		Add(root);
 
@@ -175,6 +183,21 @@ public sealed class EditorShell : Panel
 	public DockLayout Layout => _layout;
 
 	public DockHost Dock => _dock;
+
+	/// <summary>
+	/// Gets the menu bar. Layout tests assert the chrome edges with it.
+	/// </summary>
+	internal MenuBar MenuBarView => _menuBar;
+
+	/// <summary>
+	/// Gets the tool strip that sits under the menu bar.
+	/// </summary>
+	internal Widget ToolbarView => _toolbar;
+
+	/// <summary>
+	/// Gets the status bar that hugs the bottom edge.
+	/// </summary>
+	internal Widget StatusBarView => _statusBar;
 
 	public event Action? ExitRequested;
 
