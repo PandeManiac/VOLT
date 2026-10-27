@@ -5,6 +5,8 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Volt.GameplayDemo/Volt.GameplayDemo.csproj" />
+    <Project Path="samples/Volt.PlayDemo/Volt.PlayDemo.csproj" />
+    <Project Path="samples/Volt.UiDemo/Volt.UiDemo.csproj" />
     <Project Path="samples/Volt.VulkanCubeDemo/Volt.VulkanCubeDemo.csproj" />
     <Project Path="samples/Volt.VulkanMeshDemo/Volt.VulkanMeshDemo.csproj" />
     <Project Path="samples/Volt.VulkanProbe/Volt.VulkanProbe.csproj" />
@@ -20,6 +22,10 @@
     <Project Path="src/Volt.Graphics.Vulkan/Volt.Graphics.Vulkan.csproj" />
     <Project Path="src/Volt.Graphics/Volt.Graphics.csproj" />
     <Project Path="src/Volt.Platform/Volt.Platform.csproj" />
+    <Project Path="src/Volt.Ui/Volt.Ui.csproj" />
+    <Project Path="src/Volt.Ui.Vulkan/Volt.Ui.Vulkan.csproj" />
+    <Project Path="src/Volt.Editor.Core/Volt.Editor.Core.csproj" />
+    <Project Path="src/Volt.Editor/Volt.Editor.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Volt.Core.Tests/Volt.Core.Tests.csproj" />
@@ -31,6 +37,9 @@
     <Project Path="tests/Volt.Rendering.Tests/Volt.Rendering.Tests.csproj" />
     <Project Path="tests/Volt.Graphics.Tests/Volt.Graphics.Tests.csproj" />
     <Project Path="tests/Volt.Platform.Tests/Volt.Platform.Tests.csproj" />
+    <Project Path="tests/Volt.Ui.Tests/Volt.Ui.Tests.csproj" />
+    <Project Path="tests/Volt.Editor.Core.Tests/Volt.Editor.Core.Tests.csproj" />
+    <Project Path="tests/Volt.Editor.Tests/Volt.Editor.Tests.csproj" />
     <Project Path="tests/Volt.VulkanMeshDemo.Tests/Volt.VulkanMeshDemo.Tests.csproj" />
   </Folder>
 </Solution>
