@@ -289,14 +289,15 @@ ratios without discarding the state inside open panels.
   can assign asset references in the inspector. Its **New Scene**
   action opens the scene and moves the browser to the scene's folder
   so the new tile is visible. Grid and list modes share the selected
-  asset, so switching views keeps the same item highlighted. The
-  folder tree keeps the current folder selected and its collapsed
-  branches collapsed as it rebuilds, and the selected item's details
-  survive a refresh. Switching between tiles and the list scrolls the
-  selected item into view, and the arrow keys move the selection and
-  focus between neighboring tiles, keeping the active tile in view.
-  Changing the interface scale preserves
-  the browser's folder, view, search, and selection. Opening another
+  asset, so switching views keeps the same item highlighted and moves
+  keyboard focus onto it, leaving `F2`, `Delete`, and arrow navigation
+  ready to use. The folder tree keeps the current folder selected and
+  its collapsed branches collapsed as it rebuilds, and the selected
+  item's details survive a refresh. Switching between tiles and the
+  list scrolls the selected item into view, and the arrow keys move
+  the selection and focus between neighboring tiles, keeping the
+  active tile in view. Changing the interface scale preserves the
+  browser's folder, view, search, and selection. Opening another
   project returns the browser to that project's root and clears its
   search filter. Right-click an asset for **Open**, **Rename…**,
   **Duplicate**, or **Delete**. Renaming keeps the file extension; the

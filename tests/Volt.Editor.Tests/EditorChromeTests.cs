@@ -1449,6 +1449,85 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_ViewSwitchKeepsKeyboardFocusOnTheSelection()
+	{
+		const string Main = "Scenes/Main.volt.scene.json";
+
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView main = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Main.volt.scene.json");
+
+		Click(main);
+		Paint(0.3);
+
+		IconButton listMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as a list");
+
+		Click(listMode);
+		Paint(0.4);
+
+		TreeView list = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(root => root.Tag is ProjectAsset));
+
+		Assert.Same(list, _context.FocusedWidget);
+
+		ProjectAsset selected = Assert.IsType<ProjectAsset>(
+			list.SelectedItem?.Tag);
+
+		Assert.Equal(Main, selected.Id);
+
+		// The keyboard should keep acting on the selected asset without
+		// another click.
+		Assert.True(_context.KeyDown(UiKey.F2));
+		Paint(0.5);
+
+		TextField name = Assert.IsType<TextField>(_context.FocusedWidget);
+
+		Assert.Equal("Main", name.Text);
+
+		_context.KeyDown(UiKey.Escape);
+
+		Assert.Null(_context.Modal);
+
+		IconButton gridMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as tiles");
+
+		Click(gridMode);
+		Paint(0.6);
+
+		IconTileView selectedTile = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.IsSelected);
+
+		Assert.Same(selectedTile, _context.FocusedWidget);
+	}
+
+	[Fact]
 	public void ProjectBrowser_ContextMenuDuplicatesAScene()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);

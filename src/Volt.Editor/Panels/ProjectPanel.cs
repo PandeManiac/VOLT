@@ -98,8 +98,14 @@ public sealed class ProjectPanel : Panel
 
 		_refreshButton = CreateAction(UiIcon.Refresh, "Rescan the project folder", RefreshCatalog);
 		_newSceneButton = CreateAction(UiIcon.Plus, "Create a new scene", CreateScene);
-		_tilesButton = CreateAction(UiIcon.TileView, "Show assets as tiles", () => SetMode(grid: true));
-		_listButton = CreateAction(UiIcon.ListView, "Show assets as a list", () => SetMode(grid: false));
+		_tilesButton = CreateAction(
+			UiIcon.TileView,
+			"Show assets as tiles",
+			() => SetMode(grid: true, focusSelection: true));
+		_listButton = CreateAction(
+			UiIcon.ListView,
+			"Show assets as a list",
+			() => SetMode(grid: false, focusSelection: true));
 
 		header.Add(_upButton);
 		header.Add(_breadcrumb);
@@ -386,7 +392,7 @@ public sealed class ProjectPanel : Panel
 		return button;
 	}
 
-	private void SetMode(bool grid)
+	private void SetMode(bool grid, bool focusSelection = false)
 	{
 		_gridMode = grid;
 		_tilesButton.IsActive = grid;
@@ -396,6 +402,33 @@ public sealed class ProjectPanel : Panel
 		_emptyHost.IsVisible = IsEmpty();
 		SyncSelection(updateDetails: false);
 		_revealSelectionPending = true;
+
+		if (focusSelection)
+		{
+			FocusSelection();
+		}
+	}
+
+	private void FocusSelection()
+	{
+		if (_gridMode)
+		{
+			foreach (IconTileView tile in _tileViews)
+			{
+				if (tile.IsSelected && tile.Focus())
+				{
+					RevealSelection();
+					return;
+				}
+			}
+
+			return;
+		}
+
+		if (_list.SelectedItem is not null && _list.Focus())
+		{
+			RevealSelection();
+		}
 	}
 
 	protected override void ArrangeContent(UiRect contentBounds)
