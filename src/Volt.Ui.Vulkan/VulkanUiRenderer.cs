@@ -126,12 +126,9 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 			(ulong)UiFontAtlas.Size *
 			(ulong)(fonts.Count + 1));
 
-		for (int index = 0; index < fonts.Count; index++)
+		foreach (KeyValuePair<UiFont, int> pair in BuildFontLayers(fonts))
 		{
-			if (!_fontLayers.ContainsKey(fonts[index]))
-			{
-				_fontLayers.Add(fonts[index], index + 1);
-			}
+			_fontLayers.Add(pair.Key, pair.Value);
 		}
 
 		int layerCount = _fontLayers.Count + 1;
@@ -1486,14 +1483,52 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 
 	private float ResolveLayer(UiTextureKey texture)
 	{
-		if (texture.Kind == UiTextureKind.Font &&
-			texture.Font is not null &&
-			_fontLayers.TryGetValue(texture.Font, out int layer))
+		if (texture.Kind != UiTextureKind.Font)
+		{
+			return 0f;
+		}
+
+		UiFont font = texture.Font ??
+			throw new InvalidOperationException(
+				"A font batch must name the font whose atlas it samples.");
+
+		if (_fontLayers.TryGetValue(font, out int layer))
 		{
 			return layer;
 		}
 
-		return 0f;
+		// Layer zero is the opaque white texel, so sampling it would draw
+		// solid blocks where letters belong. Failing loudly names the font
+		// that is missing from the renderer's layer map.
+		throw new InvalidOperationException(
+			$"The {font.Size:0.#}pt '{font.FamilyName}' font has no atlas " +
+			"layer in this renderer. Every font the UI paints with must be " +
+			"part of the theme font set the renderer was created with.");
+	}
+
+	/// <summary>
+	/// Assigns one texture-array layer to every distinct font.
+	/// </summary>
+	/// <remarks>
+	/// Layer zero is the renderer's opaque white texel, so font layers
+	/// start at one. Layers follow the supplied order and a repeated font
+	/// keeps its first layer, which keeps the mapping deterministic and
+	/// compact.
+	/// </remarks>
+	internal static Dictionary<UiFont, int> BuildFontLayers(
+		IReadOnlyList<UiFont> fonts)
+	{
+		Dictionary<UiFont, int> layers = [];
+
+		foreach (UiFont font in fonts)
+		{
+			if (!layers.ContainsKey(font))
+			{
+				layers.Add(font, layers.Count + 1);
+			}
+		}
+
+		return layers;
 	}
 
 	private VulkanBuffer CreateBuffer(

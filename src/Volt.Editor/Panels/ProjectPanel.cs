@@ -60,8 +60,6 @@ public sealed class ProjectPanel : Panel
 
 		ClipToBounds = true;
 
-		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
-
 		StackPanel header = new(UiOrientation.Horizontal)
 		{
 			Spacing = 4f,
@@ -69,10 +67,11 @@ public sealed class ProjectPanel : Panel
 		};
 
 		_upButton = CreateAction(UiIcon.ChevronRight, "Go to the parent folder", GoUp);
+		// Fonts are applied on attach: a panel is constructed before it has
+		// a context theme, and a font captured here would belong to a
+		// private font set the renderer has no atlas layer for.
 		_breadcrumb = new Label("Project")
 		{
-			Font = theme.Fonts.Small,
-			TextColor = theme.Palette.TextMuted,
 			FlexGrow = 1f,
 			VerticalAlignment = UiAlignment.Center,
 			ClipToBounds = true
@@ -160,8 +159,6 @@ public sealed class ProjectPanel : Panel
 
 		_details = new Label(string.Empty)
 		{
-			Font = theme.Fonts.MonoSmall,
-			TextColor = theme.Palette.TextDisabled,
 			Height = UiLength.Points(20f),
 			ClipToBounds = true
 		};
@@ -185,6 +182,17 @@ public sealed class ProjectPanel : Panel
 
 		SetMode(grid: true);
 		Rebuild(force: true);
+	}
+
+	protected override void OnAttached()
+	{
+		UiTheme theme = Context!.Theme;
+
+		_breadcrumb.Font = theme.Fonts.Small;
+		_breadcrumb.TextColor = theme.Palette.TextMuted;
+
+		_details.Font = theme.Fonts.MonoSmall;
+		_details.TextColor = theme.Palette.TextDisabled;
 	}
 
 	protected override void OnDetached()

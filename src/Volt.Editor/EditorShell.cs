@@ -171,6 +171,14 @@ public sealed class EditorShell : Panel
 
 	protected override void OnAttached()
 	{
+		// The shell owns the theme its fonts and metrics were built from.
+		// Publishing it to the context keeps the fonts widgets captured
+		// at construction and the context theme in one font set, which is
+		// what the Vulkan renderer maps to atlas layers. Without this a
+		// second font set exists that has no layers, and its glyphs sample
+		// the opaque white layer instead of the letters.
+		Context?.SetTheme(_theme);
+
 		InstallShortcuts();
 	}
 
@@ -210,6 +218,8 @@ public sealed class EditorShell : Panel
 	/// </param>
 	public void Update(double deltaSeconds, float dpiScale = 1f)
 	{
+		ApplyDpiScale(dpiScale);
+
 		_session.Update(deltaSeconds);
 
 		for (int index = _frameTicks.Count - 1;
@@ -269,6 +279,35 @@ public sealed class EditorShell : Panel
 
 		RebuildChrome();
 		_session.SetStatus($"Interface scale {uiScale * 100f:0}%");
+	}
+
+	/// <summary>
+	/// Rebuilds the chrome when the display scale changes.
+	/// </summary>
+	/// <remarks>
+	/// A monitor change replaces the number of physical pixels per
+	/// logical unit, so fonts are rasterized again at the new product and
+	/// every widget that captured a font is rebuilt. The new font set is
+	/// published to the context, which is what makes the renderer rebuild
+	/// its atlas layers instead of sampling a set it cannot map.
+	/// </remarks>
+	private void ApplyDpiScale(float dpiScale)
+	{
+		if (!float.IsFinite(dpiScale) || dpiScale <= 0f)
+		{
+			return;
+		}
+
+		if (MathF.Abs(dpiScale - _theme.DpiScale) < 0.001f)
+		{
+			return;
+		}
+
+		_theme = UiTheme.CreateDark(dpiScale).WithUiScale(_uiScale);
+
+		Context?.SetTheme(_theme);
+
+		RebuildChrome();
 	}
 
 	/// <summary>
