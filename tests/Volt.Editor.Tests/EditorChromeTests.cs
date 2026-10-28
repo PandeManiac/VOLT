@@ -1028,6 +1028,57 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_FocusedAssetDoesNotReceiveSceneShortcuts()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+
+		SceneDocument scene = _session.Scene!;
+		SceneEntity entity = scene.Entities.First();
+
+		_session.Select(entity.Id);
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView main = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Main.volt.scene.json");
+
+		Click(main);
+		Paint(0.3);
+
+		Assert.Contains(Descendants(project), widget => widget.HasFocus);
+
+		int entities = scene.EntityCount;
+		int history = _session.Undo.UndoCount;
+
+		_context.KeyDown(UiKey.Delete);
+		_context.KeyDown(UiKey.F2);
+
+		Assert.Equal(entities, scene.EntityCount);
+		Assert.Equal(history, _session.Undo.UndoCount);
+		Assert.Contains(entity.Id, _session.Selection);
+		Assert.Contains(Descendants(project), widget => widget.HasFocus);
+	}
+
+	[Fact]
 	public void ProjectBrowser_SelectionFollowsAssetsBetweenGridAndList()
 	{
 		const string Main = "Scenes/Main.volt.scene.json";

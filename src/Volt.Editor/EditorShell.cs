@@ -1318,19 +1318,19 @@ public sealed class EditorShell : Panel
 			UiKey.C,
 			UiKeyModifiers.Control,
 			() => Guard("Copy", () => _session.CopySelection()),
-			() => _session.Selection.Count > 0));
+			() => _session.Selection.Count > 0 && CanUseEntityShortcut()));
 
 		AddShortcut(new UiShortcut(
 			UiKey.X,
 			UiKeyModifiers.Control,
 			() => Guard("Cut", () => _session.CutSelection()),
-			() => _session.Selection.Count > 0));
+			() => _session.Selection.Count > 0 && CanUseEntityShortcut()));
 
 		AddShortcut(new UiShortcut(
 			UiKey.V,
 			UiKeyModifiers.Control,
 			() => Guard("Paste", () => _session.PasteClipboard()),
-			() => !_session.Clipboard.IsEmpty));
+			() => !_session.Clipboard.IsEmpty && CanUseEntityShortcut()));
 
 		// Selection commands follow the familiar editor layout. A
 		// focused text field gets these keys first, so select-all still
@@ -1339,7 +1339,7 @@ public sealed class EditorShell : Panel
 			UiKey.A,
 			UiKeyModifiers.Control,
 			() => Guard("Select all", () => _session.SelectAll()),
-			() => _session.Scene is not null));
+			() => _session.Scene is not null && CanUseEntityShortcut()));
 
 		AddShortcut(new UiShortcut(
 			UiKey.A,
@@ -1400,11 +1400,28 @@ public sealed class EditorShell : Panel
 	/// <remarks>
 	/// A focused text field owns the keyboard for editing text. Without
 	/// this guard, Ctrl+D, Delete, or a selection shortcut could change
-	/// the scene while the user is renaming an object.
+	/// the scene while the user is renaming an object. The Project
+	/// browser also owns its own selection, so scene shortcuts stand
+	/// down while an asset or folder has focus.
 	/// </remarks>
 	private bool CanUseEntityShortcut()
 	{
-		return Context?.FocusedWidget is not TextField;
+		if (Context?.FocusedWidget is TextField)
+		{
+			return false;
+		}
+
+		for (Widget? current = Context?.FocusedWidget;
+			current is not null;
+			current = current.Parent)
+		{
+			if (current is ProjectPanel)
+			{
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	/// <summary>

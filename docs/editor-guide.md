@@ -293,7 +293,8 @@ ratios without discarding the state inside open panels.
   folder tree keeps the current folder selected as it rebuilds, and
   the selected item's details survive a refresh. Opening another
   project returns the browser to that project's root and clears its
-  search filter.
+  search filter. Scene shortcuts such as Delete and F2 stand down while
+  the browser has keyboard focus.
 - **Console** records editor actions and errors.
 - **Profiler** reports frame timing and runtime counts while the
   editor is running.
