@@ -200,6 +200,36 @@ public sealed class Window : IDisposable
 		return _events.TryDequeue(out windowEvent);
 	}
 
+	/// <summary>
+	/// Enables Unicode text input for this window.
+	/// </summary>
+	/// <remarks>
+	/// While enabled, composed text is queued as
+	/// <see cref="WindowEventType.TextInput"/> events. Composition support
+	/// depends on the platform input method, so the exact text delivered
+	/// for a key press must come from these events rather than from the
+	/// physical key state.
+	/// </remarks>
+	public void StartTextInput()
+	{
+		ThrowIfDisposed();
+
+		if (!SDL.StartTextInput(_handle))
+		{
+			throw new InvalidOperationException(
+				$"SDL could not enable text input: {SDL.GetError()}");
+		}
+	}
+
+	/// <summary>
+	/// Disables Unicode text input for this window.
+	/// </summary>
+	public void StopTextInput()
+	{
+		ThrowIfDisposed();
+		SDL.StopTextInput(_handle);
+	}
+
 	public void Dispose()
 	{
 		if (_disposed)
@@ -277,6 +307,20 @@ public sealed class Window : IDisposable
 						new WindowSize(
 							nativeEvent.Window.Data1,
 							nativeEvent.Window.Data2)));
+				break;
+
+			case SDL.EventType.TextInput:
+				string? text = System.Runtime.InteropServices
+					.Marshal.PtrToStringUTF8(nativeEvent.Text.Text);
+
+				if (!string.IsNullOrEmpty(text))
+				{
+					_events.Enqueue(
+						new WindowEvent(
+							WindowEventType.TextInput,
+							Text: text));
+				}
+
 				break;
 		}
 	}

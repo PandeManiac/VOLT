@@ -8,8 +8,10 @@ namespace Volt.Platform.Events;
 /// </summary>
 /// <remarks>
 /// Size contains logical dimensions for Resized events and framebuffer pixel
-/// dimensions for PixelSizeChanged events. It is unused for CloseRequested.
+/// dimensions for PixelSizeChanged events. Text carries the composed Unicode
+/// string for TextInput events. Both are unused for CloseRequested.
 /// </remarks>
 public readonly record struct WindowEvent(
 	WindowEventType Type,
-	WindowSize Size = default);
+	WindowSize Size = default,
+	string? Text = null);

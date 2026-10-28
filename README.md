@@ -68,6 +68,20 @@ This is currently a **single-frame demonstration**, not a continuous renderer. T
 
 See the [Vulkan surface demo README](samples/Volt.VulkanSurfaceDemo/README.md) for sample-specific setup and limitations.
 
+### Volt.Ui and the editor
+
+`Volt.Ui` is VOLT's native, retained-mode user interface framework. It owns a widget tree, invalidation-based measure and arrange layout, theming, font rasterization and text editing, focus, pointer capture, event routing, docking, and a batched draw list. It has no reference to `Volt.Ecs`, SDL, or Vulkan: the same widget tree is driven headlessly by tests and by a windowed host.
+
+`Volt.Ui.Vulkan` renders the draw list with one shared pipeline, a coverage-atlas texture array, dynamic scissor state, and one draw per batch. `VulkanUiHost` provides the SDL3 window, swapchain recreation, Unicode input translation, and continuous frame loop for any application that wants a Volt.Ui window.
+
+`Volt.Editor` is a graphical game development editor built entirely from Volt.Ui widgets. It provides a Unity-familiar menu bar, toolbar, dockable Hierarchy, Scene, Game, Inspector, Project, Console, and Profiler panels, scene authoring with transform gizmos, box selection, multi-object editing, and undo, versioned scene and project persistence, a workspace layout that survives restart, and an isolated Play Mode that runs authored content in a separate ECS world. See the [UI framework documentation](docs/ui-framework.md) and the [editor guide](docs/editor-guide.md).
+
+`dotnet run --project src/Volt.Editor -- --snapshot editor.png` writes the whole editor to a PNG on a machine with no display server or GPU: the shell lays out and paints headlessly, `UiRasterizer` composites the draw list on the CPU, and a depth-tested software rasterizer draws the scene's meshes and ground grid into the viewport with the same camera, geometry, and lighting constants as the GPU path, supersampling its edges before downsampling, rather than leaving a placeholder.
+
+The editor's scene and game views render their worlds into offscreen Vulkan targets with depth testing, and the UI samples that image into the panel; grid, axes, selection outlines, markers, and gizmos are UI overlays drawn on top, as are the scene view's floating tool and display chrome and its orientation compass. Gameplay logic currently comes from built-in behaviours stored in authored component data, not from separately loaded user assemblies.
+
+The editor's interface comes from one design system instead of per-panel styling: `UiTheme` supplies the palette, metrics, and role fonts, `UiIconPainter` draws the icon vocabulary from vector geometry, and reusable controls (`IconButton`, `ToolButton`, `IconTileView`, `EmptyStateView`) carry the tool strip, the hierarchy, the inspector sections, the asset tiles, and the empty states. Numeric fields use a monospace face so values align, and inspector vectors label their axes in the conventional red, green, and blue. **Window → Interface Scale** resizes the whole interface from 75% to 200% with fonts rasterized at the new size, and **Window → Reset Layout** restores the default workspace.
+
 ### Projects
 
 | Project | Purpose |
@@ -80,10 +94,14 @@ See the [Vulkan surface demo README](samples/Volt.VulkanSurfaceDemo/README.md) f
 | `Volt.Graphics.Vulkan` | Vulkan graphics backend and native resource management |
 | `Volt.Platform` | SDL3 windowing, events, and platform integration |
 | `Volt.Rendering` | Camera and extraction abstractions, render components, and interpolated transform history |
+| `Volt.Ui` | Native retained-mode UI: widgets, layout, text, styling, input, docking |
+| `Volt.Ui.Vulkan` | Vulkan UI renderer and window host |
+| `Volt.Editor.Core` | Authored scenes, projects, undo commands, runtime worlds, and play sessions |
+| `Volt.Editor` | Graphical editor shell, panels, viewports, and executable |
 | `Volt.*.Tests` | Automated tests for the corresponding engine subsystems |
 | `Volt.Benchmarks` | BenchmarkDotNet performance benchmarks |
 
-The `samples/` directory contains focused demonstrations of platform, Vulkan, and gameplay functionality. Samples are integration and diagnostic tools, not yet a public game-creation workflow.
+The `samples/` directory contains focused demonstrations of platform, Vulkan, gameplay, and UI functionality. `Volt.UiDemo` is a standalone Volt.Ui application with no editor dependency. `Volt.PlayDemo` opens, runs, and presents an authored project without the editor.
 
 ## Building
 
@@ -137,6 +155,45 @@ SDL_VIDEODRIVER=x11 dotnet run \
 The `--validation` option requests the Vulkan validation layer and requires `VK_LAYER_KHRONOS_validation` to be installed. Omit the option to run without validation.
 
 The demo displays a color-interpolated triangle against a dark background for a few seconds, then releases its resources and exits. It does not yet run a continuous rendering loop.
+
+### Volt.Ui demo and editor
+
+Both need a working SDL3 video backend and a Vulkan device. The UI shaders are checked in as SPIR-V; `glslangValidator` is only required when the shader sources change.
+
+```bash
+dotnet run --project samples/Volt.UiDemo
+dotnet run --project src/Volt.Editor
+```
+
+`--project` opens a folder that already exists; run the editor without it to
+use the start screen, which can create or open a project. Replace
+`/tmp/MyGame` with any absolute path that does not exist yet or is empty:
+`--create` refuses to write a new project into a folder that already has
+files, so it can never overwrite work in progress.
+
+```bash
+dotnet run --project samples/Volt.PlayDemo -- --create /tmp/MyGame
+dotnet run --project src/Volt.Editor -- --project /tmp/MyGame
+dotnet run --project samples/Volt.PlayDemo -- --project /tmp/MyGame
+```
+
+The play demo can also run an existing project directly, without the editor.
+
+All three programs print the selected GPU, whether the validation layer is
+enabled, and `Presented N accepted frames.` when they exit. Add `--frames N`
+for a bounded run that exits by itself, and `--validation` to load
+`VK_LAYER_KHRONOS_validation`:
+
+```bash
+dotnet run --project samples/Volt.UiDemo -- --frames 300 --validation
+dotnet run --project src/Volt.Editor -- --project /tmp/MyGame --frames 300 --validation
+dotnet run --project samples/Volt.PlayDemo -- --project /tmp/MyGame --frames 300 --validation
+```
+
+A run that prints the frame line presented frames to the display; a run that
+returns without it did not. Those same arguments are the sample contract
+`tools/test-vulkan-headless.sh` drives, so the headless harness can collect
+the device, frame count, screenshot, and validation diagnostics for them.
 
 ### Benchmarks
 

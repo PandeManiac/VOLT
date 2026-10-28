@@ -436,6 +436,33 @@ public sealed unsafe class VulkanLogicalDevice : IDisposable
 	}
 
 	/// <summary>
+	/// Selects a memory type for a resource allocated by this
+	/// device and physical device.
+	/// </summary>
+	public int FindMemoryTypeIndex(
+		PhysicalDevice physicalDevice,
+		uint typeBits,
+		MemoryPropertyFlags requiredProperties)
+	{
+		ReadOnlySpan<MemoryPropertyFlags> flags =
+			GetMemoryTypeFlags(physicalDevice);
+
+		for (int index = 0; index < flags.Length; index++)
+		{
+			if ((typeBits & (1u << index)) != 0 &&
+				(flags[index] & requiredProperties) ==
+					requiredProperties)
+			{
+				return index;
+			}
+		}
+
+		throw new NotSupportedException(
+			"No Vulkan memory type satisfies the requested " +
+			"properties.");
+	}
+
+	/// <summary>
 	/// Prevents new transfers while execution or cleanup
 	/// on this device is unresolved.
 	/// </summary>

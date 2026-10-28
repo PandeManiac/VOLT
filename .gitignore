@@ -148,6 +148,7 @@ __pycache__/
 venv/
 
 # Agent-generated documentation
-/docs/
+/docs/*
+!/docs/images/
 
 .VSCodeCounter/

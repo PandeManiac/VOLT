@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Volt.Editor</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Volt.Ui/Volt.Ui.csproj" />
+    <ProjectReference Include="../Volt.Ui.Vulkan/Volt.Ui.Vulkan.csproj" />
+    <ProjectReference Include="../Volt.Editor.Core/Volt.Editor.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Volt.Editor.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../Volt.Ui.Vulkan/Shaders/ui.vert.spv"
+          Link="Shaders/ui.vert.spv"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Volt.Ui.Vulkan/Shaders/ui.frag.spv"
+          Link="Shaders/ui.frag.spv"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

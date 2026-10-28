@@ -1,5 +1,46 @@
 # VOLT test tooling
 
+## Editor documentation screenshots
+
+`tools/capture-editor-docs.sh` regenerates the images embedded in
+`docs/editor-guide.md` through the editor's headless `--snapshot`
+command. It needs only .NET 10 and the repository: no display server,
+GPU, or open project.
+
+```bash
+./tools/capture-editor-docs.sh
+```
+
+It writes three 1440 by 900 captures to `docs/images`:
+
+| File | Snapshot preset | Contents |
+| --- | --- | --- |
+| `editor-workspace.png` | `workspace` | Starter project, default layout, no selection |
+| `editor-authoring.png` | `authoring` | Starter cube selected, Move tool active, populated inspector |
+| `editor-start.png` | `start` | Start screen before a project is open |
+
+Pass `--check` to capture into a temporary directory and compare each
+image with the committed one; it exits non-zero and names stale files.
+The comparison uses `tools/compare-editor-docs.py`, which allows an
+eight-level per-channel difference and 0.2% differing pixels, the same
+rule as the golden snapshot tests. Small platform antialiasing drift
+passes; a moved panel, a lost label, or a wrong colour does not. The
+hosted CI build runs this check on every push and pull request.
+`--check` requires Python 3. `--no-build` skips the Release build, and
+`--output-dir PATH` writes elsewhere.
+
+If a comparison fails after an intentional interface change, regenerate
+the images and review them before committing. Pass
+`--channel-tolerance N` or `--pixel-tolerance R` to the comparator
+directly when investigating a borderline difference.
+
+The comparator's own tests use only the Python standard library and run
+before the freshness check in CI:
+
+```bash
+python3 tools/tests/test-compare-editor-docs.py
+```
+
 ## Headless Vulkan harness
 
 `tools/test-vulkan-headless.sh` runs a VOLT Vulkan sample against a
@@ -307,7 +348,8 @@ The missing-dependency test uses only ordinary utilities plus the mock
 ### GitHub Actions policy
 
 The hosted `build-test` job runs for normal pushes, pull requests, and manual
-dispatches. GPU validation is a separate job on the labels
+dispatches, and includes the documentation screenshot freshness check.
+GPU validation is a separate job on the labels
 `[self-hosted, linux, vulkan-gpu]`; it is excluded from normal pushes and pull
 requests so a missing hardware runner cannot keep routine CI queued. To run it,
 use **Actions → CI → Run workflow** and set `gpu_validation` to `true`. It
