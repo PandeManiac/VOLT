@@ -606,6 +606,77 @@ public sealed class EditorChromeTests : IDisposable
 		Assert.NotNull(_session.Project);
 	}
 
+	[Fact]
+	public void Inspector_AddComponentOnlyOffersMissingComponents()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneDocument scene = _session.Scene!;
+		SceneEntity cube = scene.Entities.First(
+			entity => entity.GetComponent<MeshRendererData>() is not null);
+
+		_session.Select(cube.Id);
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		Dropdown types = Descendants(inspector)
+			.OfType<Dropdown>()
+			.Single();
+
+		Button add = Descendants(inspector)
+			.OfType<Button>()
+			.Single(button => button.Text == "Add Component");
+
+		EditorComponentDescriptor[] missing = [.. ComponentCatalog.Default.All
+			.Where(descriptor => !cube.HasComponent(descriptor.TypeId))];
+
+		Assert.NotEmpty(missing);
+		Assert.Equal(
+			missing.Select(descriptor => descriptor.DisplayName),
+			types.Items);
+		Assert.True(add.IsEnabled);
+		Assert.True(types.IsEnabled);
+
+		UiPoint center = add.GlobalVisualBounds.Center;
+
+		_context.PointerDown(UiMouseButton.Left, center);
+		_context.PointerUp(UiMouseButton.Left, center);
+
+		_context.BeginFrame(
+			0.2,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		Assert.NotNull(cube.GetComponent(missing[0].TypeId));
+		Assert.DoesNotContain(missing[0].DisplayName, types.Items);
+
+		foreach (EditorComponentDescriptor descriptor in missing.Skip(1))
+		{
+			_session.AddComponent(cube.Id, descriptor.TypeId);
+		}
+
+		_context.BeginFrame(
+			0.3,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		Assert.Empty(types.Items);
+		Assert.False(add.IsEnabled);
+		Assert.False(types.IsEnabled);
+	}
+
 	private EditorShell BuildShell(float width, float height)
 	{
 		EditorShell shell = new(_session);

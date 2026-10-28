@@ -18,6 +18,8 @@ public sealed class InspectorPanel : Panel
 	private readonly TextField _name;
 	private readonly PropertyGrid _grid;
 	private readonly Dropdown _componentTypes;
+	private readonly Button _addButton;
+	private readonly List<EditorComponentDescriptor> _addableComponents = [];
 	private readonly EmptyStateView _empty;
 	private readonly IconView _entityIcon;
 	private readonly Label _entitySubtitle;
@@ -91,20 +93,18 @@ public sealed class InspectorPanel : Panel
 			MinWidth = 80f
 		};
 
-		_componentTypes.SetItems(
-			ComponentCatalog.Default.All.Select(
-				descriptor => descriptor.DisplayName),
-			0);
+		_componentTypes.SetItems(Array.Empty<string>());
 
-		Button add = new("Add Component")
+		_addButton = new Button("Add Component")
 		{
-			MinHeight = 24f
+			MinHeight = 24f,
+			IsEnabled = false
 		};
 
-		add.Clicked += _ => AddSelectedComponent();
+		_addButton.Clicked += _ => AddSelectedComponent();
 
 		_addBar.Add(_componentTypes);
-		_addBar.Add(add);
+		_addBar.Add(_addButton);
 		_stack.Add(_addBar);
 
 		_grid = new PropertyGrid
@@ -208,6 +208,10 @@ public sealed class InspectorPanel : Panel
 		{
 			_name.Text = string.Empty;
 			_componentBar.ClearChildren();
+			_addableComponents.Clear();
+			_componentTypes.SetItems(Array.Empty<string>());
+			_componentTypes.IsEnabled = false;
+			_addButton.IsEnabled = false;
 			_grid.SetGroups([]);
 			_updating = false;
 			return;
@@ -222,10 +226,53 @@ public sealed class InspectorPanel : Panel
 		_entityIcon.Color = EditorIcons.EntityColor(entity, palette);
 		UpdateSubtitle(entity);
 
+		RebuildAddableComponents(entity);
 		RebuildComponentBar(entity);
 		_grid.SetGroups(BuildGroups(entity));
 
 		_updating = false;
+	}
+
+	/// <summary>
+	/// Refreshes the add list so it only offers components the
+	/// selected object does not already have.
+	/// </summary>
+	/// <remarks>
+	/// A duplicate is rejected by the scene model, so offering one
+	/// would only produce an error. When every registered component is
+	/// present the list and the button go empty and disabled rather
+	/// than leaving an action that cannot succeed.
+	/// </remarks>
+	private void RebuildAddableComponents(SceneEntity entity)
+	{
+		string? selected = _componentTypes.SelectedItem;
+
+		_addableComponents.Clear();
+
+		foreach (EditorComponentDescriptor descriptor in
+			ComponentCatalog.Default.All)
+		{
+			if (!entity.HasComponent(descriptor.TypeId))
+			{
+				_addableComponents.Add(descriptor);
+			}
+		}
+
+		int index = selected is null
+			? 0
+			: _addableComponents.FindIndex(descriptor =>
+				string.Equals(
+					descriptor.DisplayName,
+					selected,
+					StringComparison.Ordinal));
+
+		_componentTypes.SetItems(
+			_addableComponents.Select(
+				descriptor => descriptor.DisplayName),
+			index < 0 ? 0 : index);
+
+		_componentTypes.IsEnabled = _addableComponents.Count > 0;
+		_addButton.IsEnabled = _addableComponents.Count > 0;
 	}
 
 	/// <summary>
@@ -592,16 +639,19 @@ public sealed class InspectorPanel : Panel
 
 	private void AddSelectedComponent()
 	{
-		if (_session.ActiveEntity is not SceneEntity entity ||
-			_componentTypes.SelectedIndex < 0 ||
-			_componentTypes.SelectedIndex >=
-				ComponentCatalog.Default.All.Count)
+		if (_session.ActiveEntity is not SceneEntity entity)
 		{
 			return;
 		}
 
-		EditorComponentDescriptor descriptor =
-			ComponentCatalog.Default.All[_componentTypes.SelectedIndex];
+		int index = _componentTypes.SelectedIndex;
+
+		if (index < 0 || index >= _addableComponents.Count)
+		{
+			return;
+		}
+
+		EditorComponentDescriptor descriptor = _addableComponents[index];
 
 		try
 		{
