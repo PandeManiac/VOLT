@@ -14,6 +14,7 @@ public sealed class EditorSettingsTests
 
 		Assert.Equal(EditorSettings.CurrentVersion, settings.Version);
 		Assert.Equal(60, settings.TargetFrameRate);
+		Assert.Equal(1f, settings.InterfaceScale, 3);
 	}
 
 	[Theory]
@@ -63,18 +64,37 @@ public sealed class EditorSettingsTests
 			EditorSettings.ClampTargetFrameRate(typed));
 	}
 
+	[Theory]
+	[InlineData(0f, 0.75f)]
+	[InlineData(0.5f, 0.75f)]
+	[InlineData(1.25f, 1.25f)]
+	[InlineData(3f, 2f)]
+	[InlineData(float.NaN, 1f)]
+	[InlineData(float.PositiveInfinity, 1f)]
+	public void Clamp_BringsInterfaceScalesIntoTheSupportedRange(
+		float typed,
+		float expected)
+	{
+		Assert.Equal(
+			expected,
+			EditorSettings.ClampInterfaceScale(typed),
+			3);
+	}
+
 	[Fact]
 	public void Serialize_RoundTripsThroughDeserialize()
 	{
 		EditorSettings settings = new()
 		{
-			TargetFrameRate = 144
+			TargetFrameRate = 144,
+			InterfaceScale = 1.25f
 		};
 
 		EditorSettings restored = EditorSettings.Deserialize(
 			settings.Serialize());
 
 		Assert.Equal(144, restored.TargetFrameRate);
+		Assert.Equal(1.25f, restored.InterfaceScale, 3);
 		Assert.Equal(EditorSettings.CurrentVersion, restored.Version);
 	}
 

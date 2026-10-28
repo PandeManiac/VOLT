@@ -35,6 +35,21 @@ public sealed class EditorSettings
 	/// </summary>
 	public const int MaximumTargetFrameRate = 480;
 
+	/// <summary>
+	/// The interface scale a workspace starts at.
+	/// </summary>
+	public const float DefaultInterfaceScale = 1f;
+
+	/// <summary>
+	/// The smallest interface scale the editor persists.
+	/// </summary>
+	public const float MinimumInterfaceScale = 0.75f;
+
+	/// <summary>
+	/// The largest interface scale the editor persists.
+	/// </summary>
+	public const float MaximumInterfaceScale = 2f;
+
 	private static readonly JsonSerializerOptions s_options = new()
 	{
 		PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -51,6 +66,12 @@ public sealed class EditorSettings
 	/// budget the profiler graphs against.
 	/// </summary>
 	public int TargetFrameRate { get; set; } = DefaultTargetFrameRate;
+
+	/// <summary>
+	/// Gets or sets the interface scale the editor restores at startup,
+	/// which is the same setting the Preferences modal offers.
+	/// </summary>
+	public float InterfaceScale { get; set; } = DefaultInterfaceScale;
 
 	/// <summary>
 	/// Gets whether a frame rate is one the editor accepts.
@@ -78,6 +99,19 @@ public sealed class EditorSettings
 	}
 
 	/// <summary>
+	/// Brings a typed interface scale into the supported range.
+	/// </summary>
+	public static float ClampInterfaceScale(float scale)
+	{
+		return float.IsFinite(scale)
+			? Math.Clamp(
+				scale,
+				MinimumInterfaceScale,
+				MaximumInterfaceScale)
+			: DefaultInterfaceScale;
+	}
+
+	/// <summary>
 	/// Returns a copy whose values are all representable, falling back
 	/// to defaults rather than trusting a file.
 	/// </summary>
@@ -88,7 +122,8 @@ public sealed class EditorSettings
 			Version = CurrentVersion,
 			TargetFrameRate = IsValidTargetFrameRate(TargetFrameRate)
 				? TargetFrameRate
-				: DefaultTargetFrameRate
+				: DefaultTargetFrameRate,
+			InterfaceScale = ClampInterfaceScale(InterfaceScale)
 		};
 	}
 

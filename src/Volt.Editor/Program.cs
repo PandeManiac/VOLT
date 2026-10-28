@@ -161,12 +161,11 @@ internal static class Program
 			};
 		}
 
-		if (uiScale is float scale)
-		{
-			// Applying the scale before the first frame keeps startup
-			// free of a visible rebuild.
-			shell.ApplyUiScale(scale);
-		}
+		// A command-line scale wins for this run; otherwise the scale
+		// saved with the workspace is restored. Either way it is applied
+		// before the first frame, which keeps startup free of a visible
+		// rebuild.
+		shell.ApplyUiScale(uiScale ?? settings.InterfaceScale);
 
 		host.Ui.Add(shell);
 		shell.ExitRequested += host.RequestExit;
@@ -201,7 +200,10 @@ internal static class Program
 			});
 
 		SaveWorkspace(session.Project?.RootPath, shell.Layout);
-		SaveSettings(session.Project?.RootPath, session.TargetFrameRate);
+		SaveSettings(
+			session.Project?.RootPath,
+			session.TargetFrameRate,
+			shell.UiScale);
 
 		Console.WriteLine(
 			$"Presented {host.PresentedFrames} accepted frames.");
@@ -489,7 +491,8 @@ internal static class Program
 
 	private static void SaveSettings(
 		string? projectRoot,
-		int targetFrameRate)
+		int targetFrameRate,
+		float interfaceScale)
 	{
 		if (projectRoot is null)
 		{
@@ -506,7 +509,8 @@ internal static class Program
 
 			EditorSettings settings = new()
 			{
-				TargetFrameRate = targetFrameRate
+				TargetFrameRate = targetFrameRate,
+				InterfaceScale = interfaceScale
 			};
 
 			string temporary = path + ".tmp";
