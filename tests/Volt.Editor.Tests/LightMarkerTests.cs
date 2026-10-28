@@ -447,6 +447,54 @@ public sealed class LightMarkerTests : IDisposable
 	}
 
 	[Fact]
+	public void InspectorToggle_PublishesTheUpdatedLightToTheRenderer()
+	{
+		SceneEntity light = _session.CreateDirectionalLight("Sun");
+		LightData data = light.GetComponent<LightData>()!;
+
+		data.Color = new Vector4(1f, 0f, 0f, 1f);
+		data.Intensity = 2f;
+
+		using UiContext inspectorContext = new();
+		using InspectorPanel inspector = new(_session);
+
+		inspectorContext.Add(inspector);
+		inspectorContext.BeginFrame(
+			0.0,
+			new UiSize(380f, 800f),
+			UiPoint.Zero);
+
+		inspectorContext.Draw();
+
+		CheckBox toggle = Descendants(inspector)
+			.OfType<CheckBox>()
+			.Single(box => box.Text == nameof(LightData.Enabled));
+
+		Click(inspectorContext, toggle.GlobalVisualBounds.Center);
+
+		RecordingViewportRenderer renderer = new();
+		SceneViewport viewport = BuildViewport(out _, renderer);
+
+		Assert.False(data.Enabled);
+		Assert.True(renderer.Published);
+		Assert.Equal(
+			ViewportLight.Default.DiffuseColor,
+			renderer.Light.DiffuseColor);
+
+		_session.UndoLast();
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(960f, 600f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		Assert.True(data.Enabled);
+		Assert.Equal(new Vector3(2f, 0f, 0f), renderer.Light.DiffuseColor);
+	}
+
+	[Fact]
 	public void SelectedLightMarker_UsesAccentColor()
 	{
 		SceneEntity light = _session.CreateDirectionalLight("Sun");
@@ -471,9 +519,11 @@ public sealed class LightMarkerTests : IDisposable
 			"A selected light's label must use the accent color.");
 	}
 
-	private SceneViewport BuildViewport(out UiDrawList drawList)
+	private SceneViewport BuildViewport(
+		out UiDrawList drawList,
+		IViewportRenderer? renderer = null)
 	{
-		SceneViewport viewport = new(_session);
+		SceneViewport viewport = new(_session, renderer);
 
 		_context.Add(viewport);
 		_context.BeginFrame(
@@ -658,6 +708,32 @@ public sealed class LightMarkerTests : IDisposable
 		}
 
 		return false;
+	}
+
+	private sealed class RecordingViewportRenderer : IViewportRenderer
+	{
+		public int FrameSlot => 0;
+
+		public bool Published { get; private set; }
+
+		public ViewportLight Light { get; private set; } =
+			ViewportLight.Default;
+
+		public UiTextureId? PrepareTexture(ViewportKind kind, int slot)
+		{
+			return null;
+		}
+
+		public void PublishRequest(ViewportRenderRequest request)
+		{
+			Published = true;
+			Light = request.Light;
+		}
+
+		public void ClearRequest(ViewportKind kind)
+		{
+			Published = false;
+		}
 	}
 
 	private static UiRect Extent(UiDrawCommand command)
