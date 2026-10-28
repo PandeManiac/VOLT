@@ -1614,6 +1614,158 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_CtrlDDuplicatesTheWholeTileSelection()
+	{
+		const string Main = "Scenes/Main.volt.scene.json";
+		const string Prop = "Scenes/Prop.volt.scene.json";
+		const string Extra = "Scenes/Extra.volt.scene.json";
+
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+		Assert.NotNull(_session.CreateScene(Prop, "Prop"));
+		Assert.NotNull(_session.CreateScene(Extra, "Extra"));
+		Assert.True(_session.OpenScene(Main));
+
+		int entities = _session.Scene!.EntityCount;
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView prop = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Prop.volt.scene.json");
+
+		IconTileView extra = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Extra.volt.scene.json");
+
+		Click(prop);
+		Paint(0.25);
+
+		UiPoint center = extra.GlobalVisualBounds.Center;
+
+		_context.PointerDown(
+			UiMouseButton.Left,
+			center,
+			UiKeyModifiers.Control);
+
+		_context.PointerUp(UiMouseButton.Left, center);
+		Paint(0.3);
+
+		Assert.True(_context.KeyDown(UiKey.D, UiKeyModifiers.Control));
+		Paint(0.35);
+
+		const string PropCopy = "Scenes/Prop 1.volt.scene.json";
+		const string ExtraCopy = "Scenes/Extra 1.volt.scene.json";
+
+		Assert.True(File.Exists(_session.Project!.ResolvePath(PropCopy)));
+		Assert.True(File.Exists(_session.Project.ResolvePath(ExtraCopy)));
+		Assert.True(File.Exists(_session.Project.ResolvePath(Main)));
+		Assert.Equal(entities, _session.Scene.EntityCount);
+		Assert.Equal(
+			2,
+			Descendants(project)
+				.OfType<IconTileView>()
+				.Count(tile => tile.IsSelected));
+		Assert.Contains(
+			Descendants(project).OfType<Label>(),
+			label => label.Text == "2 assets selected");
+	}
+
+	[Fact]
+	public void ProjectBrowser_ContextMenuDuplicatesTheWholeSelection()
+	{
+		const string Main = "Scenes/Main.volt.scene.json";
+		const string Prop = "Scenes/Prop.volt.scene.json";
+		const string Extra = "Scenes/Extra.volt.scene.json";
+
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+		Assert.NotNull(_session.CreateScene(Prop, "Prop"));
+		Assert.NotNull(_session.CreateScene(Extra, "Extra"));
+		Assert.True(_session.OpenScene(Main));
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView prop = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Prop.volt.scene.json");
+
+		IconTileView extra = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Extra.volt.scene.json");
+
+		Click(prop);
+		Paint(0.25);
+
+		UiPoint center = extra.GlobalVisualBounds.Center;
+
+		_context.PointerDown(
+			UiMouseButton.Left,
+			center,
+			UiKeyModifiers.Control);
+
+		_context.PointerUp(UiMouseButton.Left, center);
+		Paint(0.3);
+
+		_context.PointerDown(UiMouseButton.Right, center);
+
+		Assert.IsType<MenuPopup>(_context.ActivePopup);
+
+		// Open and Rename are unavailable for a multi-selection, so the
+		// first highlighted entry is Duplicate.
+		_context.KeyDown(UiKey.Down);
+		_context.KeyDown(UiKey.Enter);
+		Paint(0.35);
+
+		const string PropCopy = "Scenes/Prop 1.volt.scene.json";
+		const string ExtraCopy = "Scenes/Extra 1.volt.scene.json";
+
+		Assert.Null(_context.Modal);
+		Assert.True(File.Exists(_session.Project!.ResolvePath(PropCopy)));
+		Assert.True(File.Exists(_session.Project.ResolvePath(ExtraCopy)));
+		Assert.True(File.Exists(_session.Project.ResolvePath(Main)));
+		Assert.Equal(
+			2,
+			Descendants(project)
+				.OfType<IconTileView>()
+				.Count(tile => tile.IsSelected));
+	}
+
+	[Fact]
 	public void ProjectBrowser_ShiftArrowExtendsTheTileSelection()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);

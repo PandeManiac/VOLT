@@ -268,6 +268,20 @@ public sealed class ProjectPanel : Panel
 			return true;
 		}
 
+		// The asset view owns Ctrl+D while it has focus. The scene's
+		// duplicate shortcut stands down inside the browser, so the key
+		// duplicates the selected files instead of scene objects.
+		if (key.Modifiers == UiKeyModifiers.Control &&
+			key.Key == UiKey.D &&
+			!key.IsRepeat &&
+			AssetViewHasFocus() &&
+			!_selectedIsFolder &&
+			_selectedAssetIds.Count > 0)
+		{
+			DuplicateAssets(SelectedAssets());
+			return true;
+		}
+
 		// Asset shortcuts belong to the asset view. The folder tree
 		// and the search field can both own the keyboard while an
 		// asset is selected, so requiring focus here keeps Delete
@@ -1255,10 +1269,9 @@ public sealed class ProjectPanel : Panel
 			IsEnabled = !multiple
 		};
 
-		MenuItem duplicate = new("Duplicate", () => DuplicateAsset(asset))
-		{
-			IsEnabled = !multiple
-		};
+		MenuItem duplicate = new(
+			multiple ? $"Duplicate {selection.Count} Assets" : "Duplicate",
+			() => DuplicateAssets(selection));
 
 		MenuItem delete = new(
 			multiple ? $"Delete {selection.Count} Assets" : "Delete",
@@ -1281,21 +1294,25 @@ public sealed class ProjectPanel : Panel
 			new UiRect(position.X, position.Y, 0f, 0f));
 	}
 
-	private void DuplicateAsset(ProjectAsset asset)
+	private void DuplicateAssets(IReadOnlyList<ProjectAsset> assets)
 	{
-		if (_session.Project is not EditorProject project)
+		if (assets.Count == 0 ||
+			_session.Project is not EditorProject project)
 		{
 			return;
 		}
 
 		try
 		{
-			string copyId = project.DuplicateAsset(asset.Id);
+			IReadOnlyList<string> copies = project.DuplicateAssets(
+				assets.Select(asset => asset.Id));
 
-			SetSingleAssetState(copyId);
+			SetAssetSelection(copies);
 			Rebuild(force: true);
 			_revealSelectionPending = true;
-			_session.SetStatus($"Duplicated {asset.FileName}");
+			_session.SetStatus(assets.Count == 1
+				? $"Duplicated {assets[0].FileName}"
+				: $"Duplicated {assets.Count} assets");
 		}
 
 		catch (Exception exception)
@@ -1647,11 +1664,23 @@ public sealed class ProjectPanel : Panel
 
 	private void SetSingleAssetState(string id)
 	{
+		SetAssetSelection([id]);
+	}
+
+	private void SetAssetSelection(IReadOnlyList<string> ids)
+	{
 		_selectedAssetIds.Clear();
-		_selectedAssetIds.Add(id);
-		_selectedId = id;
+
+		if (ids.Count == 0)
+		{
+			ClearAssetSelection();
+			return;
+		}
+
+		_selectedAssetIds.UnionWith(ids);
+		_selectedId = ids[0];
 		_selectedIsFolder = false;
-		_selectionAnchorId = id;
+		_selectionAnchorId = _selectedId;
 	}
 
 	private void SelectSingleAsset(string id, bool updateDetails)

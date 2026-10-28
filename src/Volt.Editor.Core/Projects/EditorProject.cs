@@ -229,39 +229,103 @@ public sealed class EditorProject
 	/// <returns>The project-relative identity of the copy.</returns>
 	public string DuplicateAsset(string relativePath)
 	{
-		string source = ResolvePath(relativePath);
+		return DuplicateAssets([relativePath])[0];
+	}
 
-		if (!File.Exists(source))
+	/// <summary>
+	/// Copies several assets to numbered siblings in their own folders.
+	/// </summary>
+	/// <remarks>
+	/// Every source is validated before the first copy is written, so a
+	/// missing or unsafe member refuses the whole selection instead of
+	/// leaving a partial set of copies behind. Copies are named against
+	/// both the existing files and the destinations reserved earlier in
+	/// the same operation, which keeps names unique when a selection
+	/// already contains a numbered sibling. Scene assets keep their
+	/// compound extension.
+	/// </remarks>
+	/// <returns>
+	/// The project-relative identities of the copies, in source order
+	/// with duplicate sources removed.
+	/// </returns>
+	public IReadOnlyList<string> DuplicateAssets(
+		IEnumerable<string> relativePaths)
+	{
+		ArgumentNullException.ThrowIfNull(relativePaths);
+
+		List<(string Source, string RelativeDirectory, string Stem, string Extension)>
+			sources = [];
+		HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+
+		foreach (string relativePath in relativePaths)
 		{
-			throw new FileNotFoundException(
-				$"The asset '{relativePath}' does not exist.",
-				source);
+			string id = ProjectAssetCatalog.NormalizeId(relativePath);
+
+			if (!seen.Add(id))
+			{
+				continue;
+			}
+
+			string source = ResolvePath(relativePath);
+
+			if (!File.Exists(source))
+			{
+				throw new FileNotFoundException(
+					$"The asset '{relativePath}' does not exist.",
+					source);
+			}
+
+			string directory = Path.GetDirectoryName(source)!;
+			(string stem, string extension) = SplitAssetName(
+				Path.GetFileName(source));
+
+			sources.Add((
+				source,
+				Path.GetRelativePath(RootPath, directory),
+				stem,
+				extension));
 		}
 
-		string directory = Path.GetDirectoryName(source)!;
-		(string stem, string extension) = SplitAssetName(
-			Path.GetFileName(source));
-		string relativeDirectory = Path.GetRelativePath(RootPath, directory);
-
-		int index = 1;
-		string relativeCopy;
-		string destination;
-
-		do
+		if (sources.Count == 0)
 		{
-			string copyName = $"{stem} {index}{extension}";
-			relativeCopy = relativeDirectory == "."
-				? copyName
-				: Path.Combine(relativeDirectory, copyName);
-			destination = ResolvePath(relativeCopy);
-			index++;
+			return [];
 		}
-		while (File.Exists(destination) || Directory.Exists(destination));
 
-		File.Copy(source, destination, overwrite: false);
+		HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
+		List<(string Source, string Destination)> copies = [];
+
+		foreach ((string source, string relativeDirectory, string stem,
+			string extension) in sources)
+		{
+			int index = 1;
+			string destination;
+
+			do
+			{
+				string copyName = $"{stem} {index}{extension}";
+				string relativeCopy = relativeDirectory == "."
+					? copyName
+					: Path.Combine(relativeDirectory, copyName);
+
+				destination = ResolvePath(relativeCopy);
+				index++;
+			}
+			while (File.Exists(destination) ||
+				Directory.Exists(destination) ||
+				!reserved.Add(destination));
+
+			copies.Add((source, destination));
+		}
+
+		foreach ((string source, string destination) in copies)
+		{
+			File.Copy(source, destination, overwrite: false);
+		}
+
 		AssetCatalog.Refresh();
 
-		return ProjectAssetCatalog.NormalizeId(relativeCopy);
+		return [.. copies.Select(copy => ProjectAssetCatalog.NormalizeId(
+			Path.GetRelativePath(RootPath, copy.Destination)))];
 	}
 
 	/// <summary>

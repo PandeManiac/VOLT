@@ -132,6 +132,53 @@ public sealed class EditorProjectTests : IDisposable
 	}
 
 	[Fact]
+	public void DuplicateAssets_CopiesTheWholeSelectionIntoNumberedSiblings()
+	{
+		EditorProject project = EditorProject.Create(_root, "Bulk duplicates");
+		project.CreateScene("Scenes/Level.volt.scene.json", "Level");
+		project.CreateScene("Scenes/Prop.volt.scene.json", "Prop");
+		project.CreateScene("Scenes/Level 1.volt.scene.json", "Existing");
+
+		IReadOnlyList<string> copies = project.DuplicateAssets(
+		[
+			"Scenes/Level.volt.scene.json",
+			"Scenes/Prop.volt.scene.json",
+			"Scenes/Level.volt.scene.json"
+		]);
+
+		Assert.Equal(
+			[
+				"Scenes/Level 2.volt.scene.json",
+				"Scenes/Prop 1.volt.scene.json"
+			],
+			copies);
+		Assert.True(File.Exists(project.ResolvePath(copies[0])));
+		Assert.True(File.Exists(project.ResolvePath(copies[1])));
+		Assert.True(File.Exists(project.ResolvePath(
+			"Scenes/Level 1.volt.scene.json")));
+		Assert.True(project.AssetCatalog.FileExists(copies[0]));
+		Assert.True(project.AssetCatalog.FileExists(copies[1]));
+	}
+
+	[Fact]
+	public void DuplicateAssets_ValidatesEverySourceBeforeWritingCopies()
+	{
+		EditorProject project = EditorProject.Create(_root, "Bulk guards");
+		project.CreateScene("Scenes/Level.volt.scene.json", "Level");
+
+		Assert.Throws<FileNotFoundException>(() => project.DuplicateAssets(
+		[
+			"Scenes/Level.volt.scene.json",
+			"Scenes/Missing.volt.scene.json"
+		]));
+
+		Assert.False(File.Exists(project.ResolvePath(
+			"Scenes/Level 1.volt.scene.json")));
+		Assert.False(project.AssetCatalog.FileExists(
+			"Scenes/Level 1.volt.scene.json"));
+	}
+
+	[Fact]
 	public void RenameAsset_MovesTheFileAndUpdatesTheStartupPath()
 	{
 		EditorProject project = EditorProject.Create(_root, "Rename");
