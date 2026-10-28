@@ -99,6 +99,80 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void UiScale_RebuildPreservesProjectBrowserState()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+
+		ProjectPanel before = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(before)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconButton listMode = Descendants(before)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as a list");
+
+		Click(listMode);
+		Paint(0.3);
+
+		TreeView list = Descendants(before)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(root => root.Tag is ProjectAsset));
+
+		TreeViewItem main = list.Roots.Single(
+			root => root.Tag is ProjectAsset asset &&
+				asset.Id == "Scenes/Main.volt.scene.json");
+
+		list.SetSelection([main]);
+		Paint(0.4);
+
+		shell.ApplyUiScale(1.25f);
+		Paint(0.5);
+
+		ProjectPanel after = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Assert.NotSame(before, after);
+
+		IconButton listButtonAfter = Descendants(after)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as a list");
+
+		Assert.True(listButtonAfter.IsActive);
+
+		TreeView foldersAfter = Descendants(after)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		Assert.Equal("Scenes", foldersAfter.SelectedItem?.Tag);
+
+		TreeView listAfter = Descendants(after)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(root => root.Tag is ProjectAsset));
+
+		ProjectAsset selected = Assert.IsType<ProjectAsset>(listAfter.SelectedItem?.Tag);
+
+		Assert.Equal("Scenes/Main.volt.scene.json", selected.Id);
+	}
+
+	[Fact]
 	public void Toolbar_KeepsEveryControlInsideTheWindow()
 	{
 		// A grouped tool cluster used to claim the whole row, which

@@ -44,6 +44,7 @@ public sealed class EditorShell : Panel
 	private readonly List<UiShortcut> _installedShortcuts = [];
 	private readonly DockLayout _layout;
 	private readonly string _defaultProjectPath;
+	private ProjectPanelState? _projectPanelState;
 
 	private readonly Dictionary<EditorTool, IconButton> _toolButtons = [];
 	private readonly Dictionary<PanelTab, MenuItem> _windowMenuItems = [];
@@ -436,6 +437,13 @@ public sealed class EditorShell : Panel
 
 	private void RebuildChrome()
 	{
+		if (_dock is not null)
+		{
+			_projectPanelState =
+				FindDescendant<ProjectPanel>(_dock)?.CaptureState() ??
+				_projectPanelState;
+		}
+
 		for (int index = Children.Count - 1; index >= 0; index--)
 		{
 			Widget child = Children[index];
@@ -485,7 +493,7 @@ public sealed class EditorShell : Panel
 			"scene" => new SceneViewport(_session, _viewportRenderer),
 			"game" => new GameViewport(_session, _viewportRenderer),
 			"inspector" => new InspectorPanel(_session),
-			"project" => new ProjectPanel(_session),
+			"project" => new ProjectPanel(_session, _projectPanelState),
 			"console" => new ConsolePanel(_session),
 			"profiler" => new ProfilerPanel(_session),
 			_ => null

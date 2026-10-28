@@ -293,7 +293,8 @@ ratios without discarding the state inside open panels.
   folder tree keeps the current folder selected and its collapsed
   branches collapsed as it rebuilds, and the selected item's details
   survive a refresh. Switching between tiles and the list scrolls the
-  selected item into view. Opening another
+  selected item into view, and changing the interface scale preserves
+  the browser's folder, view, search, and selection. Opening another
   project returns the browser to that project's root and clears its
   search filter. Scene shortcuts such as Delete and F2 stand down while
   the browser has keyboard focus.

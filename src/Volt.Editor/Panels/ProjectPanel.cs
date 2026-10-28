@@ -65,6 +65,11 @@ public sealed class ProjectPanel : Panel
 	private bool _disposed;
 
 	public ProjectPanel(EditorSession session)
+		: this(session, null)
+	{
+	}
+
+	internal ProjectPanel(EditorSession session, ProjectPanelState? state)
 	{
 		ArgumentNullException.ThrowIfNull(session);
 		_session = session;
@@ -191,11 +196,42 @@ public sealed class ProjectPanel : Panel
 		Add(stack);
 		Add(_emptyHost);
 
+		_openProject = session.Project;
+
+		if (state is not null &&
+			session.Project is EditorProject project &&
+			state.ProjectId == project.Id)
+		{
+			_folder = state.Folder;
+			_folderSelectionActive = state.FolderSelectionActive;
+			_selectedId = state.SelectedId;
+			_selectedIsFolder = state.SelectedIsFolder;
+			_search.Text = state.Search;
+			_collapsedFolders.UnionWith(state.CollapsedFolders);
+			_skipFolderCapture = true;
+			_gridMode = state.GridMode;
+		}
+
 		_session.ProjectChanged += OnSessionChanged;
 		_session.SceneChanged += OnSessionChanged;
 
-		SetMode(grid: true);
+		SetMode(grid: _gridMode);
 		Rebuild(force: true);
+	}
+
+	internal ProjectPanelState CaptureState()
+	{
+		return new ProjectPanelState
+		{
+			ProjectId = _session.Project?.Id,
+			Folder = _folder,
+			FolderSelectionActive = _folderSelectionActive,
+			GridMode = _gridMode,
+			SelectedId = _selectedId,
+			SelectedIsFolder = _selectedIsFolder,
+			Search = _search.Text,
+			CollapsedFolders = [.. _collapsedFolders]
+		};
 	}
 
 	protected override void OnDetached()
