@@ -3,6 +3,7 @@ using Volt.Editor.Core.Scenes;
 using Volt.Editor.Viewport;
 using Volt.Ui;
 using Volt.Ui.Rendering;
+using Volt.Ui.Styling;
 
 namespace Volt.Editor.Tests;
 
@@ -52,6 +53,103 @@ public sealed class LightMarkerTests : IDisposable
 		_session.ClearSelection();
 
 		SceneViewport viewport = BuildViewport(out UiDrawList drawList);
+
+		Project(viewport, light, out UiPoint center, out UiPoint tip);
+
+		Assert.True(
+			Paints(drawList, MarkerArea(center)),
+			$"Nothing painted the sun marker at {center}.");
+
+		Assert.True(
+			PaintsLine(drawList, center, tip),
+			$"Nothing painted a beam from {center} to {tip}.");
+
+		Assert.True(
+			PaintsText(drawList, LabelArea(center), "Sun"),
+			"The light's name must be painted beside its marker.");
+	}
+
+	[Fact]
+	public void DisabledLightMarker_IsMutedAndCrossedOut()
+	{
+		SceneEntity light = _session.CreateDirectionalLight("Sun");
+		LightData data = light.GetComponent<LightData>()!;
+
+		data.Enabled = false;
+		_session.ClearSelection();
+
+		SceneViewport viewport = BuildViewport(out UiDrawList drawList);
+		UiTheme theme = _context.Theme;
+
+		Project(viewport, light, out UiPoint center, out _);
+
+		Assert.True(
+			Paints(drawList, MarkerArea(center), theme.Palette.TextDisabled),
+			"A switched-off light must keep a muted marker.");
+
+		Assert.True(
+			PaintsLine(
+				drawList,
+				new UiPoint(center.X - 7f, center.Y + 7f),
+				new UiPoint(center.X + 7f, center.Y - 7f),
+				theme.Palette.TextDisabled),
+			"A switched-off light must be crossed out.");
+
+		Assert.True(
+			PaintsText(
+				drawList,
+				LabelArea(center),
+				"Sun (off)",
+				theme.Palette.TextDisabled),
+			"The label must say that the light is off.");
+	}
+
+	[Fact]
+	public void SelectedLightMarker_UsesAccentColor()
+	{
+		SceneEntity light = _session.CreateDirectionalLight("Sun");
+
+		Assert.Equal(light.Id, _session.ActiveEntityId);
+
+		SceneViewport viewport = BuildViewport(out UiDrawList drawList);
+		UiTheme theme = _context.Theme;
+
+		Project(viewport, light, out UiPoint center, out UiPoint tip);
+
+		Assert.True(
+			PaintsLine(
+				drawList,
+				center,
+				tip,
+				theme.Palette.Accent.ScaleAlpha(0.9f)),
+			"A selected light must draw its beam in the accent color.");
+
+		Assert.True(
+			PaintsText(drawList, LabelArea(center), "Sun", theme.Palette.Accent),
+			"A selected light's label must use the accent color.");
+	}
+
+	private SceneViewport BuildViewport(out UiDrawList drawList)
+	{
+		SceneViewport viewport = new(_session);
+
+		_context.Add(viewport);
+		_context.BeginFrame(
+			0.0,
+			new UiSize(960f, 600f),
+			UiPoint.Zero);
+
+		drawList = _context.Draw();
+
+		return viewport;
+	}
+
+	private static void Project(
+		SceneViewport viewport,
+		SceneEntity light,
+		out UiPoint center,
+		out UiPoint tip)
+	{
 		UiRect bounds = viewport.GlobalVisualBounds;
 
 		Matrix4x4 viewProjection =
@@ -65,14 +163,8 @@ public sealed class LightMarkerTests : IDisposable
 				viewProjection,
 				light.Transform.Position,
 				bounds,
-				out UiPoint center),
+				out center),
 			"The light must be in front of the authoring camera.");
-
-		UiRect marker = new(center.X - 10f, center.Y - 10f, 20f, 20f);
-
-		Assert.True(
-			Paints(drawList, marker),
-			$"Nothing painted the sun marker at {center}.");
 
 		Vector3 beam = Vector3.Normalize(
 			Vector3.Transform(Vector3.UnitZ, light.Transform.Rotation));
@@ -93,36 +185,24 @@ public sealed class LightMarkerTests : IDisposable
 				viewProjection,
 				light.Transform.Position + (beam * length),
 				bounds,
-				out UiPoint tip),
+				out tip),
 			"The beam arrow must end inside the viewport.");
-
-		Assert.True(
-			PaintsBeam(drawList, center, tip),
-			$"Nothing painted a beam from {center} to {tip}.");
-
-		Assert.True(
-			PaintsText(
-				drawList,
-				new UiRect(center.X, center.Y - 40f, 180f, 40f)),
-			"The light's name must be painted beside its marker.");
 	}
 
-	private SceneViewport BuildViewport(out UiDrawList drawList)
+	private static UiRect MarkerArea(UiPoint center)
 	{
-		SceneViewport viewport = new(_session);
-
-		_context.Add(viewport);
-		_context.BeginFrame(
-			0.0,
-			new UiSize(960f, 600f),
-			UiPoint.Zero);
-
-		drawList = _context.Draw();
-
-		return viewport;
+		return new UiRect(center.X - 10f, center.Y - 10f, 20f, 20f);
 	}
 
-	private static bool Paints(UiDrawList drawList, UiRect area)
+	private static UiRect LabelArea(UiPoint center)
+	{
+		return new UiRect(center.X, center.Y - 40f, 180f, 40f);
+	}
+
+	private static bool Paints(
+		UiDrawList drawList,
+		UiRect area,
+		UiColor? color = null)
 	{
 		if (area.IsEmpty)
 		{
@@ -131,7 +211,14 @@ public sealed class LightMarkerTests : IDisposable
 
 		for (int index = 0; index < drawList.Count; index++)
 		{
-			UiRect rect = Extent(drawList.GetCommand(index));
+			UiDrawCommand command = drawList.GetCommand(index);
+
+			if (color is not null && command.Color != color)
+			{
+				continue;
+			}
+
+			UiRect rect = Extent(command);
 
 			if (rect.Intersect(area).IsEmpty)
 			{
@@ -148,10 +235,11 @@ public sealed class LightMarkerTests : IDisposable
 		return false;
 	}
 
-	private static bool PaintsBeam(
+	private static bool PaintsLine(
 		UiDrawList drawList,
 		UiPoint start,
-		UiPoint end)
+		UiPoint end,
+		UiColor? color = null)
 	{
 		const float tolerance = 1.5f;
 
@@ -160,6 +248,11 @@ public sealed class LightMarkerTests : IDisposable
 			UiDrawCommand command = drawList.GetCommand(index);
 
 			if (command.Kind != UiDrawCommandKind.Line)
+			{
+				continue;
+			}
+
+			if (color is not null && command.Color != color)
 			{
 				continue;
 			}
@@ -176,14 +269,28 @@ public sealed class LightMarkerTests : IDisposable
 		return false;
 	}
 
-	private static bool PaintsText(UiDrawList drawList, UiRect area)
+	private static bool PaintsText(
+		UiDrawList drawList,
+		UiRect area,
+		string source,
+		UiColor? color = null)
 	{
 		for (int index = 0; index < drawList.Count; index++)
 		{
 			UiDrawCommand command = drawList.GetCommand(index);
 
-			if (command.Kind == UiDrawCommandKind.Text &&
-				!command.Rect.Intersect(area).IsEmpty)
+			if (command.Kind != UiDrawCommandKind.Text ||
+				command.Text?.Source != source)
+			{
+				continue;
+			}
+
+			if (color is not null && command.Color != color)
+			{
+				continue;
+			}
+
+			if (!command.Rect.Intersect(area).IsEmpty)
 			{
 				return true;
 			}
