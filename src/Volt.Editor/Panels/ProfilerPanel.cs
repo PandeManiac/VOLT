@@ -29,6 +29,7 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 	private readonly EditorSession _session;
 	private readonly Label _frame;
 	private readonly FrameGraphView _graph;
+	private readonly Label _memory;
 	private readonly Label _scene;
 	private readonly Label _runtime;
 	private readonly Label _history;
@@ -60,6 +61,11 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 
 		_graph = new FrameGraphView();
 
+		_memory = new Label(string.Empty)
+		{
+			Font = Context?.Theme.Fonts.Small
+		};
+
 		_scene = new Label(string.Empty)
 		{
 			Font = Context?.Theme.Fonts.Small
@@ -78,8 +84,9 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 		_note = new Label(
 			"The graph records the editor's own frame intervals over " +
 			"the last 240 frames; the dashed line is a 60 fps budget. " +
-			"GPU pass timings and allocation counters are not captured " +
-			"yet.")
+			"Allocations count managed bytes between frames, so a frame " +
+			"that allocates and collects still shows its garbage. GPU " +
+			"pass timings are not captured yet.")
 		{
 			Font = Context?.Theme.Fonts.Small,
 			Wrap = UiTextWrap.Wrap,
@@ -97,6 +104,7 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 		stack.Add(heading);
 		stack.Add(_frame);
 		stack.Add(_graph);
+		stack.Add(_memory);
 		stack.Add(_scene);
 		stack.Add(_runtime);
 		stack.Add(_history);
@@ -178,6 +186,7 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 	private void RefreshFrame()
 	{
 		FrameTimeline frames = _session.Frames;
+		MemoryTimeline allocations = _session.Allocations;
 
 		_graph.Capture(frames);
 
@@ -193,6 +202,44 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 				frames.FramesPerSecond,
 				frames.Count,
 				frames.Capacity);
+
+		_memory.Text = allocations.IsEmpty
+			? "Allocations: waiting for the first frame"
+			: string.Format(
+				CultureInfo.InvariantCulture,
+				"Allocations: {0}/frame avg  ·  {1} last  ·  " +
+				"{2} in window  ·  heap {3}  ·  GC {4}/{5}/{6}",
+				FormatBytes(allocations.AverageBytesPerFrame),
+				FormatBytes(allocations.LastBytes),
+				FormatBytes(allocations.TotalBytesInWindow),
+				FormatBytes(GC.GetTotalMemory(forceFullCollection: false)),
+				GC.CollectionCount(0),
+				GC.CollectionCount(1),
+				GC.CollectionCount(2));
+	}
+
+	private static string FormatBytes(double bytes)
+	{
+		if (bytes >= 1024.0 * 1024.0)
+		{
+			return string.Format(
+				CultureInfo.InvariantCulture,
+				"{0:0.0} MiB",
+				bytes / (1024.0 * 1024.0));
+		}
+
+		if (bytes >= 1024.0)
+		{
+			return string.Format(
+				CultureInfo.InvariantCulture,
+				"{0:0.0} KiB",
+				bytes / 1024.0);
+		}
+
+		return string.Format(
+			CultureInfo.InvariantCulture,
+			"{0:0} B",
+			bytes);
 	}
 }
 

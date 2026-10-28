@@ -20,10 +20,26 @@ public sealed class EditorSession : IDisposable
 	private readonly List<EditorLogEntry> _log = [];
 	private readonly HashSet<Guid> _selection = [];
 	private PlaySession? _play;
+	private readonly Func<long> _allocatedBytes;
+	private long _lastAllocatedBytes;
 	private bool _disposed;
 
-	public EditorSession()
+	/// <summary>
+	/// Creates a session.
+	/// </summary>
+	/// <param name="allocatedBytesProvider">
+	/// Reads the process's cumulative managed allocation counter. A
+	/// caller can supply its own monotonic counter so frame allocation
+	/// accounting is deterministic in tests; the default reads the
+	/// runtime's counter.
+	/// </param>
+	public EditorSession(Func<long>? allocatedBytesProvider = null)
 	{
+		_allocatedBytes = allocatedBytesProvider ??
+			(() => GC.GetTotalAllocatedBytes(precise: false));
+
+		_lastAllocatedBytes = _allocatedBytes();
+
 		Undo.Changed += _ => OnHistoryChanged();
 	}
 
@@ -68,6 +84,12 @@ public sealed class EditorSession : IDisposable
 	public FrameTimeline Frames { get; } = new();
 
 	/// <summary>
+	/// Gets the rolling record of managed bytes allocated between
+	/// editor frames.
+	/// </summary>
+	public MemoryTimeline Allocations { get; } = new();
+
+	/// <summary>
 	/// Records one editor frame interval.
 	/// </summary>
 	/// <param name="deltaSeconds">
@@ -77,6 +99,13 @@ public sealed class EditorSession : IDisposable
 	public void RecordFrame(double deltaSeconds)
 	{
 		Frames.Record(deltaSeconds);
+
+		long total = _allocatedBytes();
+		long sampled = total - _lastAllocatedBytes;
+
+		_lastAllocatedBytes = total;
+
+		Allocations.Record(sampled > 0 ? sampled : 0);
 	}
 
 	public PlaySession? Play => _play;
