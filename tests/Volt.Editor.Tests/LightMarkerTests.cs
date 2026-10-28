@@ -105,6 +105,45 @@ public sealed class LightMarkerTests : IDisposable
 	}
 
 	[Fact]
+	public void ZeroIntensityLightMarker_IsMutedWithoutBeingMarkedOff()
+	{
+		SceneEntity light = _session.CreateDirectionalLight("Sun");
+		LightData data = light.GetComponent<LightData>()!;
+
+		data.Intensity = 0f;
+		_session.ClearSelection();
+
+		SceneViewport viewport = BuildViewport(out UiDrawList drawList);
+		UiTheme theme = _context.Theme;
+
+		Project(viewport, light, out UiPoint center, out UiPoint tip);
+
+		Assert.True(
+			Paints(drawList, MarkerArea(center), theme.Palette.TextDisabled),
+			"A light that emits nothing must be drawn muted.");
+
+		Assert.True(
+			PaintsLine(
+				drawList,
+				center,
+				tip,
+				theme.Palette.TextDisabled.ScaleAlpha(0.9f)),
+			"A zero-intensity light keeps its muted beam.");
+
+		Assert.True(
+			PaintsText(
+				drawList,
+				LabelArea(center),
+				"Sun",
+				theme.Palette.TextDisabled),
+			"The light is still enabled, so its label keeps its name.");
+
+		Assert.False(
+			PaintsText(drawList, LabelArea(center), "Sun (off)"),
+			"Zero intensity is not the same authored state as disabled.");
+	}
+
+	[Fact]
 	public void SelectedLightMarker_UsesAccentColor()
 	{
 		SceneEntity light = _session.CreateDirectionalLight("Sun");

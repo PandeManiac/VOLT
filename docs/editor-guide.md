@@ -232,9 +232,12 @@ ratios without discarding the state inside open panels.
   its world +Z axis, so rotate it to aim it; **Color** and
   **Intensity** are inspector properties. The Scene view draws a sun
   marker at the light's position and a short arrow along its beam, so
-  it stays findable and aimable while it is off or unselected. A scene
-  uses the first enabled directional light in hierarchy order, and
-  falls back to the editor's default key light when it has none.
+  it stays findable and aimable while it is off or unselected. A light
+  with zero intensity is drawn in the muted color but keeps its normal
+  label; disabling it also crosses the marker out and labels it
+  `(off)`. A scene uses the first enabled directional light in
+  hierarchy order, and falls back to the editor's default key light
+  when it has none.
 - **Selection works the way an editor's does.** A click takes one
   object, shift-click adds another, and dragging on empty space with the
   left button draws a box that takes every object its bounds touch
