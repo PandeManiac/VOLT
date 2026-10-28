@@ -599,46 +599,46 @@ public sealed class TreeView : Widget
 				return true;
 
 			case UiKey.Right:
-			{
-				TreeViewItem? item = SelectedItem;
-
-				if (item is null)
 				{
-					return false;
-				}
+					TreeViewItem? item = SelectedItem;
 
-				if (item.HasChildren && !item.IsExpanded)
-				{
-					item.IsExpanded = true;
-					Refresh();
-				}
+					if (item is null)
+					{
+						return false;
+					}
 
-				return true;
-			}
+					if (item.HasChildren && !item.IsExpanded)
+					{
+						item.IsExpanded = true;
+						Refresh();
+					}
+
+					return true;
+				}
 
 			case UiKey.Left:
-			{
-				TreeViewItem? item = SelectedItem;
-
-				if (item is null)
 				{
-					return false;
-				}
+					TreeViewItem? item = SelectedItem;
 
-				if (item.HasChildren && item.IsExpanded)
-				{
-					item.IsExpanded = false;
-					Refresh();
-				}
+					if (item is null)
+					{
+						return false;
+					}
 
-				else if (item.Parent is not null)
-				{
-					SelectSingle(item.Parent);
-					Reveal(item.Parent);
-				}
+					if (item.HasChildren && item.IsExpanded)
+					{
+						item.IsExpanded = false;
+						Refresh();
+					}
 
-				return true;
-			}
+					else if (item.Parent is not null)
+					{
+						SelectSingle(item.Parent);
+						Reveal(item.Parent);
+					}
+
+					return true;
+				}
 
 			case UiKey.Home:
 				SelectIndex(0, key);

@@ -36,7 +36,7 @@ public sealed class EditorPropertyDescriptor
 
 		_writer = property.SetMethod is null
 			? (_, _) => { }
-			: (component, value) => property.SetValue(component, value);
+		: (component, value) => property.SetValue(component, value);
 	}
 
 	private readonly Func<AuthoredComponent, object?> _reader;

@@ -174,8 +174,9 @@ internal static class Program
 
 		host.Run(
 			ui =>
-			{					session.Update(ui.DeltaSeconds);
-					shell.Update(ui.DeltaSeconds, ui.DpiScale);
+			{
+				session.Update(ui.DeltaSeconds);
+				shell.Update(ui.DeltaSeconds, ui.DpiScale);
 
 				frames++;
 

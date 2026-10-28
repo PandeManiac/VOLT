@@ -323,7 +323,7 @@ public class UiBenchmarks
 
 	private List<UiProperty> BuildProperties(bool mutating)
 	{
-		List<UiProperty> properties = [];		for (int index = 0; index < InspectorPropertyCount; index++)
+		List<UiProperty> properties = []; for (int index = 0; index < InspectorPropertyCount; index++)
 		{
 			int stable = index;
 

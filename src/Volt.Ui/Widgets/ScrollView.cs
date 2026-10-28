@@ -123,8 +123,8 @@ public class ScrollView : Widget
 		{
 			float width = float.IsFinite(availableWidth)
 				? MathF.Max(0f, availableWidth - track)
-				: float.PositiveInfinity;				content.Measure(new UiSize(width, float.PositiveInfinity));
-				contentMeasure = content.DesiredSize;
+				: float.PositiveInfinity; content.Measure(new UiSize(width, float.PositiveInfinity));
+			contentMeasure = content.DesiredSize;
 			desiredWidth = contentMeasure.Width + track;
 			desiredHeight = contentMeasure.Height;
 		}
@@ -133,8 +133,8 @@ public class ScrollView : Widget
 		{
 			float height = float.IsFinite(availableHeight)
 				? MathF.Max(0f, availableHeight - track)
-				: float.PositiveInfinity;				content.Measure(new UiSize(float.PositiveInfinity, height));
-				contentMeasure = content.DesiredSize;
+				: float.PositiveInfinity; content.Measure(new UiSize(float.PositiveInfinity, height));
+			contentMeasure = content.DesiredSize;
 			desiredWidth = contentMeasure.Width;
 			desiredHeight = contentMeasure.Height + track;
 		}
@@ -170,12 +170,12 @@ public class ScrollView : Widget
 		{
 			viewportWidth = MathF.Max(0f, contentBounds.Width - track);
 			viewportHeight = contentBounds.Height;
-			contentWidth = viewportWidth;				content.Measure(
+			contentWidth = viewportWidth; content.Measure(
 					new UiSize(contentWidth, float.PositiveInfinity));
 
-				contentHeight = MathF.Max(
-					viewportHeight,
-					content.DesiredSize.Height);
+			contentHeight = MathF.Max(
+				viewportHeight,
+				content.DesiredSize.Height);
 
 			_maxScroll = MathF.Max(0f, contentHeight - viewportHeight);
 			float offset = Math.Clamp(
@@ -183,7 +183,7 @@ public class ScrollView : Widget
 				0f,
 				_maxScroll);
 
-			ScrollOffset = new UiPoint(0f, offset);				ArrangeChildExact(
+			ScrollOffset = new UiPoint(0f, offset); ArrangeChildExact(
 					content,
 					new UiRect(
 						contentBounds.X,
@@ -198,12 +198,12 @@ public class ScrollView : Widget
 			viewportHeight = MathF.Max(
 				0f,
 				contentBounds.Height - track);
-			contentHeight = viewportHeight;				content.Measure(
+			contentHeight = viewportHeight; content.Measure(
 					new UiSize(float.PositiveInfinity, contentHeight));
 
-				contentWidth = MathF.Max(
-					viewportWidth,
-					content.DesiredSize.Width);
+			contentWidth = MathF.Max(
+				viewportWidth,
+				content.DesiredSize.Width);
 
 			_maxScroll = MathF.Max(0f, contentWidth - viewportWidth);
 			float offset = Math.Clamp(
@@ -211,7 +211,7 @@ public class ScrollView : Widget
 				0f,
 				_maxScroll);
 
-			ScrollOffset = new UiPoint(offset, 0f);				ArrangeChildExact(
+			ScrollOffset = new UiPoint(offset, 0f); ArrangeChildExact(
 					content,
 					new UiRect(
 						contentBounds.X - offset,

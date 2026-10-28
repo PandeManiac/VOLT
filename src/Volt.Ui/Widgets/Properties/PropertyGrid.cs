@@ -187,185 +187,185 @@ public sealed class PropertyGrid : ScrollView
 		switch (property)
 		{
 			case BoolProperty boolProperty:
-			{
-				CheckBox check = new(boolProperty.Name);
-				check.CheckedChanged += _ =>
 				{
-					if (!property.IsReadOnly)
+					CheckBox check = new(boolProperty.Name);
+					check.CheckedChanged += _ =>
 					{
-						boolProperty.Set(check.IsChecked);
-					}
-				};
+						if (!property.IsReadOnly)
+						{
+							boolProperty.Set(check.IsChecked);
+						}
+					};
 
-				sync = () => check.IsChecked = boolProperty.Get();
+					sync = () => check.IsChecked = boolProperty.Get();
 
-				return check;
-			}
+					return check;
+				}
 
 			case IntProperty intProperty:
-			{
-				NumericField field = new()
 				{
-					Format = "0",
-					Step = intProperty.Step,
-					Minimum = intProperty.Minimum,
-					Maximum = intProperty.Maximum
-				};
-
-				field.ValueChanged += _ =>
-				{
-					if (!property.IsReadOnly)
+					NumericField field = new()
 					{
-						intProperty.Set((int)MathF.Round(field.Value));
-					}
-				};
+						Format = "0",
+						Step = intProperty.Step,
+						Minimum = intProperty.Minimum,
+						Maximum = intProperty.Maximum
+					};
 
-				sync = () => field.SetValue(intProperty.Get(), notify: false);
+					field.ValueChanged += _ =>
+					{
+						if (!property.IsReadOnly)
+						{
+							intProperty.Set((int)MathF.Round(field.Value));
+						}
+					};
 
-				return field;
-			}
+					sync = () => field.SetValue(intProperty.Get(), notify: false);
+
+					return field;
+				}
 
 			case FloatProperty floatProperty:
-			{
-				NumericField field = new()
 				{
-					Format = floatProperty.Format,
-					Step = floatProperty.Step,
-					Minimum = floatProperty.Minimum,
-					Maximum = floatProperty.Maximum
-				};
-
-				field.ValueChanged += _ =>
-				{
-					if (!property.IsReadOnly)
+					NumericField field = new()
 					{
-						floatProperty.Set(field.Value);
-					}
-				};
+						Format = floatProperty.Format,
+						Step = floatProperty.Step,
+						Minimum = floatProperty.Minimum,
+						Maximum = floatProperty.Maximum
+					};
 
-				sync = () => field.SetValue(
-					floatProperty.Get(),
-					notify: false);
+					field.ValueChanged += _ =>
+					{
+						if (!property.IsReadOnly)
+						{
+							floatProperty.Set(field.Value);
+						}
+					};
 
-				return field;
-			}
+					sync = () => field.SetValue(
+						floatProperty.Get(),
+						notify: false);
+
+					return field;
+				}
 
 			case StringProperty stringProperty:
-			{
-				TextField field = new(stringProperty.Get())
 				{
-					IsReadOnly = property.IsReadOnly
-				};
-
-				field.EditingEnded += _ =>
-				{
-					if (!property.IsReadOnly)
+					TextField field = new(stringProperty.Get())
 					{
-						stringProperty.Set(field.Text);
-					}
-				};
+						IsReadOnly = property.IsReadOnly
+					};
 
-				sync = () => field.Text = stringProperty.Get();
+					field.EditingEnded += _ =>
+					{
+						if (!property.IsReadOnly)
+						{
+							stringProperty.Set(field.Text);
+						}
+					};
 
-				return field;
-			}
+					sync = () => field.Text = stringProperty.Get();
+
+					return field;
+				}
 
 			case EnumProperty enumProperty:
-			{
-				Dropdown dropdown = new();
-				dropdown.SetItems(
-					enumProperty.Options,
-					enumProperty.Get());
-
-				dropdown.SelectionChanged += _ =>
 				{
-					if (!property.IsReadOnly &&
-						dropdown.SelectedIndex >= 0)
+					Dropdown dropdown = new();
+					dropdown.SetItems(
+						enumProperty.Options,
+						enumProperty.Get());
+
+					dropdown.SelectionChanged += _ =>
 					{
-						enumProperty.Set(dropdown.SelectedIndex);
-					}
-				};
+						if (!property.IsReadOnly &&
+							dropdown.SelectedIndex >= 0)
+						{
+							enumProperty.Set(dropdown.SelectedIndex);
+						}
+					};
 
-				sync = () => dropdown.SelectedIndex = enumProperty.Get();
+					sync = () => dropdown.SelectedIndex = enumProperty.Get();
 
-				return dropdown;
-			}
+					return dropdown;
+				}
 
 			case Vector3Property vectorProperty:
-			{
-				Vector3Field field = new();
-				field.SetValue(vectorProperty.Get(), notify: false);
-
-				field.ValueChanged += _ =>
 				{
-					if (!property.IsReadOnly)
+					Vector3Field field = new();
+					field.SetValue(vectorProperty.Get(), notify: false);
+
+					field.ValueChanged += _ =>
 					{
-						vectorProperty.Set(field.Value);
-					}
-				};
+						if (!property.IsReadOnly)
+						{
+							vectorProperty.Set(field.Value);
+						}
+					};
 
-				sync = () => field.SetValue(
-					vectorProperty.Get(),
-					notify: false);
+					sync = () => field.SetValue(
+						vectorProperty.Get(),
+						notify: false);
 
-				return field;
-			}
+					return field;
+				}
 
 			case ColorProperty colorProperty:
-			{
-				ColorField field = new()
 				{
-					Value = colorProperty.Get()
-				};
-
-				field.ValueChanged += _ =>
-				{
-					if (!property.IsReadOnly)
+					ColorField field = new()
 					{
-						colorProperty.Set(field.Value);
-					}
-				};
+						Value = colorProperty.Get()
+					};
 
-				sync = () => field.SetValue(
-					colorProperty.Get(),
-					notify: false);
+					field.ValueChanged += _ =>
+					{
+						if (!property.IsReadOnly)
+						{
+							colorProperty.Set(field.Value);
+						}
+					};
 
-				return field;
-			}
+					sync = () => field.SetValue(
+						colorProperty.Get(),
+						notify: false);
+
+					return field;
+				}
 
 			case AssetProperty assetProperty:
-			{
-				TextField field = new(assetProperty.Get() ?? string.Empty)
 				{
-					Placeholder = "None",
-					IsReadOnly = property.IsReadOnly
-				};
-
-				field.EditingEnded += _ =>
-				{
-					if (!property.IsReadOnly)
+					TextField field = new(assetProperty.Get() ?? string.Empty)
 					{
-						assetProperty.Set(
-							field.Text.Length == 0 ? null : field.Text);
-					}
-				};
+						Placeholder = "None",
+						IsReadOnly = property.IsReadOnly
+					};
 
-				sync = () => field.Text = assetProperty.Get() ?? string.Empty;
+					field.EditingEnded += _ =>
+					{
+						if (!property.IsReadOnly)
+						{
+							assetProperty.Set(
+								field.Text.Length == 0 ? null : field.Text);
+						}
+					};
 
-				return field;
-			}
+					sync = () => field.Text = assetProperty.Get() ?? string.Empty;
+
+					return field;
+				}
 
 			case ReadOnlyTextProperty readOnlyProperty:
-			{
-				Label value = new(readOnlyProperty.Get())
 				{
-					TextColor = Context?.Theme.Palette.TextMuted
-				};
+					Label value = new(readOnlyProperty.Get())
+					{
+						TextColor = Context?.Theme.Palette.TextMuted
+					};
 
-				sync = () => value.Text = readOnlyProperty.Get();
+					sync = () => value.Text = readOnlyProperty.Get();
 
-				return value;
-			}
+					return value;
+				}
 
 			default:
 				throw new NotSupportedException(
