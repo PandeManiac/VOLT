@@ -49,6 +49,7 @@ public sealed class ProjectPanel : Panel
 		new(StringComparer.OrdinalIgnoreCase);
 
 	private string _folder = string.Empty;
+	private bool _folderSelectionActive;
 	private string _selectedId = string.Empty;
 	private bool _selectedIsFolder;
 	private string _signature = string.Empty;
@@ -320,6 +321,7 @@ public sealed class ProjectPanel : Panel
 
 		int separator = _folder.LastIndexOf('/');
 		_folder = separator < 0 ? string.Empty : _folder[..separator];
+		_folderSelectionActive = true;
 		Rebuild(force: true);
 	}
 
@@ -339,6 +341,7 @@ public sealed class ProjectPanel : Panel
 			_tiles.ClearChildren();
 			_tileViews.Clear();
 			_listRows.Clear();
+			_folderSelectionActive = false;
 			_selectedId = string.Empty;
 			_selectedIsFolder = false;
 			_folders.Clear();
@@ -473,19 +476,31 @@ public sealed class ProjectPanel : Panel
 
 		_folders.AddRoot(projectRoot);
 
+		TreeViewItem? selectedFolder = null;
+
+		if (_folder.Length > 0)
+		{
+			nodes.TryGetValue(_folder, out selectedFolder);
+		}
+		else if (_folderSelectionActive)
+		{
+			selectedFolder = projectRoot;
+		}
+
 		if (filter.Length > 0)
 		{
 			_folders.ExpandAll();
-			return;
+		}
+		else if (selectedFolder is not null && selectedFolder != projectRoot)
+		{
+			_folders.Reveal(selectedFolder);
 		}
 
-		foreach (KeyValuePair<string, TreeViewItem> pair in nodes)
+		// Rebuilt rows replace the old items, so restore the highlight
+		// on the fresh node for the folder the browser is showing.
+		if (selectedFolder is not null)
 		{
-			if (string.Equals(pair.Key, _folder, StringComparison.OrdinalIgnoreCase))
-			{
-				_folders.Reveal(pair.Value);
-				break;
-			}
+			_folders.SetSelection([selectedFolder]);
 		}
 	}
 
@@ -767,6 +782,7 @@ public sealed class ProjectPanel : Panel
 		}
 
 		_folder = folder;
+		_folderSelectionActive = true;
 		Rebuild(force: true);
 	}
 
@@ -814,6 +830,7 @@ public sealed class ProjectPanel : Panel
 		if (tag is string folder)
 		{
 			_folder = folder;
+			_folderSelectionActive = true;
 			Rebuild(force: true);
 			return;
 		}

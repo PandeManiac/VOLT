@@ -921,6 +921,12 @@ public sealed class EditorChromeTests : IDisposable
 		folders.SetSelection([scenes]);
 		Paint(0.2);
 
+		TreeViewItem selectedFolder = Assert.IsType<TreeViewItem>(
+			folders.SelectedItem);
+
+		Assert.Equal("Scenes", selectedFolder.Tag);
+		Assert.True(selectedFolder.IsSelected);
+
 		IconTileView main = Descendants(project)
 			.OfType<IconTileView>()
 			.Single(tile => tile.Text == "Main.volt.scene.json");
