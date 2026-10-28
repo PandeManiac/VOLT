@@ -11,14 +11,15 @@ using Volt.Ui.Widgets;
 namespace Volt.Editor.Panels;
 
 /// <summary>
-/// Reports live frame pacing plus the engine counts the editor can
-/// collect without a GPU.
+/// Reports live frame pacing and allocation pressure plus the engine
+/// counts the editor can collect without a GPU.
 /// </summary>
 /// <remarks>
-/// The shell records every frame interval in
-/// <see cref="EditorSession.Frames"/>; this panel samples that window
-/// ten times a second and draws it as a graph. Sampling on a timer
-/// rather than on every frame keeps the labels and the graph from
+/// The shell records every frame interval and allocation delta in
+/// <see cref="EditorSession.Frames"/> and
+/// <see cref="EditorSession.Allocations"/>; this panel samples those
+/// windows ten times a second and draws them. Sampling on a timer
+/// rather than on every frame keeps the labels and graphs from
 /// rebuilding sixty times a second for a display no one can read that
 /// fast.
 /// </remarks>
@@ -28,8 +29,9 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 
 	private readonly EditorSession _session;
 	private readonly Label _frame;
-	private readonly FrameGraphView _graph;
+	private readonly TimelineGraphView _frameGraph;
 	private readonly Label _memory;
+	private readonly TimelineGraphView _allocationGraph;
 	private readonly Label _scene;
 	private readonly Label _runtime;
 	private readonly Label _history;
@@ -59,11 +61,20 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 			Font = Context?.Theme.Fonts.Small
 		};
 
-		_graph = new FrameGraphView();
+		_frameGraph = new TimelineGraphView
+		{
+			BudgetMilliseconds = 1000.0 / 60.0,
+			EmptyText = "Recording frames…"
+		};
 
 		_memory = new Label(string.Empty)
 		{
 			Font = Context?.Theme.Fonts.Small
+		};
+
+		_allocationGraph = new TimelineGraphView
+		{
+			EmptyText = "Recording allocations…"
 		};
 
 		_scene = new Label(string.Empty)
@@ -82,11 +93,11 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 		};
 
 		_note = new Label(
-			"The graph records the editor's own frame intervals over " +
-			"the last 240 frames; the dashed line is a 60 fps budget. " +
-			"Allocations count managed bytes between frames, so a frame " +
-			"that allocates and collects still shows its garbage. GPU " +
-			"pass timings are not captured yet.")
+			"The graphs record the editor's own frame intervals and " +
+			"managed allocations over the last 240 frames; the dashed " +
+			"line is a 60 fps budget. Allocations count bytes allocated " +
+			"between frames, so a frame that allocates and collects still " +
+			"shows its garbage. GPU pass timings are not captured yet.")
 		{
 			Font = Context?.Theme.Fonts.Small,
 			Wrap = UiTextWrap.Wrap,
@@ -103,8 +114,9 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 
 		stack.Add(heading);
 		stack.Add(_frame);
-		stack.Add(_graph);
+		stack.Add(_frameGraph);
 		stack.Add(_memory);
+		stack.Add(_allocationGraph);
 		stack.Add(_scene);
 		stack.Add(_runtime);
 		stack.Add(_history);
@@ -188,7 +200,8 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 		FrameTimeline frames = _session.Frames;
 		MemoryTimeline allocations = _session.Allocations;
 
-		_graph.Capture(frames);
+		_frameGraph.Capture(frames);
+		_allocationGraph.Capture(allocations);
 
 		_frame.Text = frames.IsEmpty
 			? "Frame: waiting for the first frame"
@@ -244,20 +257,22 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 }
 
 /// <summary>
-/// Plots recent frame intervals against a frame budget.
+/// Plots one rolling sample window, optionally against a budget.
 /// </summary>
 /// <remarks>
-/// The graph is deliberately plain: one line per interval, tinted by
-/// whether that interval missed the budget, with the budget drawn as a
-/// reference line. It owns its sample buffer, so sampling it every
-/// tenth of a second allocates nothing.
+/// The graph is deliberately plain: one line per sample, tinted by
+/// whether the sample missed the budget when one is set, with the
+/// budget drawn as a reference line. It owns its sample buffer, so
+/// sampling it every tenth of a second allocates nothing, and it
+/// shares one implementation between frame times and allocations
+/// rather than duplicating the plotting rules.
 /// </remarks>
-internal sealed class FrameGraphView : Widget
+internal sealed class TimelineGraphView : Widget
 {
 	private readonly double[] _samples;
 	private int _count;
 
-	public FrameGraphView(int capacity = FrameTimeline.DefaultCapacity)
+	public TimelineGraphView(int capacity = FrameTimeline.DefaultCapacity)
 	{
 		if (capacity <= 0)
 		{
@@ -270,15 +285,31 @@ internal sealed class FrameGraphView : Widget
 	}
 
 	/// <summary>
-	/// Gets or sets the interval that counts as missing the frame
-	/// budget, in milliseconds.
+	/// Gets or sets the value that counts as missing the budget, in the
+	/// samples' own unit. Null draws no reference line and never warns.
 	/// </summary>
-	public double BudgetMilliseconds { get; set; } = 1000.0 / 60.0;
+	public double? BudgetMilliseconds { get; set; }
 
 	/// <summary>
-	/// Copies the timeline's window into the graph and repaints it.
+	/// Gets or sets the caption shown until two samples exist.
+	/// </summary>
+	public string EmptyText { get; set; } = "Recording…";
+
+	/// <summary>
+	/// Copies the frame window into the graph and repaints it.
 	/// </summary>
 	public void Capture(FrameTimeline timeline)
+	{
+		ArgumentNullException.ThrowIfNull(timeline);
+
+		_count = timeline.CopySamples(_samples);
+		InvalidateVisual();
+	}
+
+	/// <summary>
+	/// Copies the allocation window into the graph and repaints it.
+	/// </summary>
+	public void Capture(MemoryTimeline timeline)
 	{
 		ArgumentNullException.ThrowIfNull(timeline);
 
@@ -318,26 +349,34 @@ internal sealed class FrameGraphView : Widget
 			MathF.Max(1f, bounds.Width - (Inset * 2f)),
 			MathF.Max(1f, bounds.Height - (Inset * 2f)));
 
-		double ceiling = Math.Max(BudgetMilliseconds * 1.5, 1.0);
+		double ceiling = 1.0;
+
+		if (BudgetMilliseconds is double budget)
+		{
+			ceiling = Math.Max(ceiling, budget * 1.5);
+		}
 
 		for (int index = 0; index < _count; index++)
 		{
 			ceiling = Math.Max(ceiling, _samples[index]);
 		}
 
-		float budgetY = plot.Bottom -
-			(float)(BudgetMilliseconds / ceiling) * plot.Height;
+		if (BudgetMilliseconds is double budgetLine)
+		{
+			float budgetY = plot.Bottom -
+				(float)(budgetLine / ceiling) * plot.Height;
 
-		drawList.AddLine(
-			new UiPoint(plot.X, budgetY),
-			new UiPoint(plot.Right, budgetY),
-			1f,
-			theme.Palette.BorderStrong);
+			drawList.AddLine(
+				new UiPoint(plot.X, budgetY),
+				new UiPoint(plot.Right, budgetY),
+				1f,
+				theme.Palette.BorderStrong);
+		}
 
 		if (_count < 2)
 		{
 			UiTextLayoutResult waiting = UiTextLayout.Create(
-				"Recording frames…",
+				EmptyText,
 				theme.Fonts.Small,
 				plot.Width,
 				UiTextWrap.NoWrap,
@@ -358,9 +397,10 @@ internal sealed class FrameGraphView : Widget
 			float previousY = PlotY(_samples[index - 1], ceiling, plot);
 			float currentY = PlotY(_samples[index], ceiling, plot);
 
-			UiColor color = _samples[index] > BudgetMilliseconds
-				? theme.Palette.Warning
-				: theme.Palette.Success;
+			UiColor color = BudgetMilliseconds is double limit &&
+				_samples[index] > limit
+					? theme.Palette.Warning
+					: theme.Palette.Success;
 
 			drawList.AddLine(
 				new UiPoint(plot.X + ((index - 1) * step), previousY),
@@ -370,9 +410,9 @@ internal sealed class FrameGraphView : Widget
 		}
 	}
 
-	private static float PlotY(double milliseconds, double ceiling, UiRect plot)
+	private static float PlotY(double value, double ceiling, UiRect plot)
 	{
-		double normalized = Math.Clamp(milliseconds / ceiling, 0.0, 1.0);
+		double normalized = Math.Clamp(value / ceiling, 0.0, 1.0);
 
 		return plot.Bottom - ((float)normalized * plot.Height);
 	}

@@ -41,6 +41,24 @@ public sealed class MemoryTimelineTests
 	}
 
 	[Fact]
+	public void CopySamples_ReturnsTheWindowOldestFirst()
+	{
+		MemoryTimeline timeline = new(capacity: 3);
+
+		timeline.Record(100);
+		timeline.Record(200);
+		timeline.Record(300);
+		timeline.Record(400);
+
+		double[] samples = new double[4];
+
+		Assert.Equal(3, timeline.CopySamples(samples));
+		Assert.Equal(200.0, samples[0], 6);
+		Assert.Equal(300.0, samples[1], 6);
+		Assert.Equal(400.0, samples[2], 6);
+	}
+
+	[Fact]
 	public void Record_RejectsNegativeAllocations()
 	{
 		MemoryTimeline timeline = new();

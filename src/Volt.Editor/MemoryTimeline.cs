@@ -134,6 +134,35 @@ public sealed class MemoryTimeline
 	}
 
 	/// <summary>
+	/// Copies the window into a span, oldest first.
+	/// </summary>
+	/// <param name="destination">The destination span.</param>
+	/// <returns>
+	/// The number of samples written, which is <see cref="Count"/> clamped
+	/// to the span's length.
+	/// </returns>
+	public int CopySamples(Span<double> destination)
+	{
+		int copied = Math.Min(_count, destination.Length);
+		int start = _count == _samples.Length ? _next : 0;
+
+		// When the window has wrapped, the oldest sample sits at the
+		// write cursor; before that, the samples are already in order.
+		int offset = _count == _samples.Length
+			? 0
+			: _count - copied;
+
+		for (int index = 0; index < copied; index++)
+		{
+			int sample = (start + offset + index) % _samples.Length;
+
+			destination[index] = _samples[sample];
+		}
+
+		return copied;
+	}
+
+	/// <summary>
 	/// Forgets every recorded frame.
 	/// </summary>
 	public void Clear()
