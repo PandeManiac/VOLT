@@ -17,6 +17,8 @@ public sealed class EditorSettingsTests
 		Assert.Equal(1f, settings.InterfaceScale, 3);
 		Assert.Equal(1600, settings.WindowWidth);
 		Assert.Equal(960, settings.WindowHeight);
+		Assert.Null(settings.WindowX);
+		Assert.Null(settings.WindowY);
 	}
 
 	[Theory]
@@ -118,6 +120,25 @@ public sealed class EditorSettingsTests
 	}
 
 	[Fact]
+	public void Normalize_DropsAnIncompleteWindowPosition()
+	{
+		EditorSettings onlyX = new EditorSettings
+		{
+			WindowX = 120
+		}.Normalize();
+
+		EditorSettings onlyY = new EditorSettings
+		{
+			WindowY = -40
+		}.Normalize();
+
+		Assert.Null(onlyX.WindowX);
+		Assert.Null(onlyX.WindowY);
+		Assert.Null(onlyY.WindowX);
+		Assert.Null(onlyY.WindowY);
+	}
+
+	[Fact]
 	public void Deserialize_KeepsWindowDefaultsForFilesWithoutGeometry()
 	{
 		EditorSettings restored = EditorSettings.Deserialize(
@@ -128,6 +149,8 @@ public sealed class EditorSettingsTests
 		Assert.Equal(1.25f, restored.InterfaceScale, 3);
 		Assert.Equal(EditorSettings.DefaultWindowWidth, restored.WindowWidth);
 		Assert.Equal(EditorSettings.DefaultWindowHeight, restored.WindowHeight);
+		Assert.Null(restored.WindowX);
+		Assert.Null(restored.WindowY);
 	}
 
 	[Fact]
@@ -138,7 +161,9 @@ public sealed class EditorSettingsTests
 			TargetFrameRate = 144,
 			InterfaceScale = 1.25f,
 			WindowWidth = 1280,
-			WindowHeight = 720
+			WindowHeight = 720,
+			WindowX = -1200,
+			WindowY = 80
 		};
 
 		EditorSettings restored = EditorSettings.Deserialize(
@@ -148,6 +173,8 @@ public sealed class EditorSettingsTests
 		Assert.Equal(1.25f, restored.InterfaceScale, 3);
 		Assert.Equal(1280, restored.WindowWidth);
 		Assert.Equal(720, restored.WindowHeight);
+		Assert.Equal(-1200, restored.WindowX);
+		Assert.Equal(80, restored.WindowY);
 		Assert.Equal(EditorSettings.CurrentVersion, restored.Version);
 	}
 

@@ -43,7 +43,9 @@ public sealed class EditorPreferencesTests : IDisposable
 			TargetFrameRate = 144,
 			InterfaceScale = 1.25f,
 			WindowWidth = 1280,
-			WindowHeight = 720
+			WindowHeight = 720,
+			WindowX = -120,
+			WindowY = 80
 		});
 
 		_session.CloseProject();
@@ -66,6 +68,8 @@ public sealed class EditorPreferencesTests : IDisposable
 		Assert.Equal(1.25f, shell.UiScale, 3);
 		Assert.Equal(1280, preferences.Current.WindowWidth);
 		Assert.Equal(720, preferences.Current.WindowHeight);
+		Assert.Equal(-120, preferences.Current.WindowX);
+		Assert.Equal(80, preferences.Current.WindowY);
 		Assert.Equal(1, preferences.ProjectRevision);
 	}
 
@@ -127,7 +131,9 @@ public sealed class EditorPreferencesTests : IDisposable
 			TargetFrameRate = 144,
 			InterfaceScale = 1.25f,
 			WindowWidth = 1280,
-			WindowHeight = 720
+			WindowHeight = 720,
+			WindowX = -120,
+			WindowY = 80
 		});
 
 		_session.CloseProject();
@@ -144,7 +150,7 @@ public sealed class EditorPreferencesTests : IDisposable
 		_session.TargetFrameRate = 30;
 		shell.ApplyUiScale(1.5f);
 
-		preferences.Save(1000, 700);
+		preferences.Save(1000, 700, -60, 40);
 
 		EditorSettings stored = EditorPreferences.Load(projectRoot);
 
@@ -152,6 +158,8 @@ public sealed class EditorPreferencesTests : IDisposable
 		Assert.Equal(1.5f, stored.InterfaceScale, 3);
 		Assert.Equal(1000, stored.WindowWidth);
 		Assert.Equal(700, stored.WindowHeight);
+		Assert.Equal(-60, stored.WindowX);
+		Assert.Equal(40, stored.WindowY);
 	}
 
 	private static void WriteSettings(

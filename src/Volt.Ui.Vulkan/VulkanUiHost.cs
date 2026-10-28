@@ -81,6 +81,7 @@ public sealed class VulkanUiHost : IDisposable
 	private float _dpiScale = 1f;
 	private bool _exitRequested;
 	private WindowSize? _pendingWindowSize;
+	private WindowPosition? _pendingWindowPosition;
 	private bool _disposed;
 
 	/// <summary>
@@ -98,7 +99,10 @@ public sealed class VulkanUiHost : IDisposable
 				Size: options.Size,
 				VulkanCompatible: true,
 				Resizable: true,
-				HighPixelDensity: true));
+				HighPixelDensity: true)
+			{
+				Position = options.Position
+			});
 
 		VulkanInstance? instance = null;
 		VulkanSurface? surface = null;
@@ -441,6 +445,21 @@ public sealed class VulkanUiHost : IDisposable
 	}
 
 	/// <summary>
+	/// Queues a window position for the next frame.
+	/// </summary>
+	/// <param name="position">The desired logical desktop position.</param>
+	/// <remarks>
+	/// The position is applied with the queued size before the next
+	/// poll. A position that no longer lands on a display is ignored by
+	/// <see cref="Window.TryRestorePosition"/>.
+	/// </remarks>
+	public void RequestWindowPosition(WindowPosition position)
+	{
+		ThrowIfDisposed();
+		_pendingWindowPosition = position;
+	}
+
+	/// <summary>
 	/// Gets or sets a callback asked before a native window close is
 	/// accepted.
 	/// </summary>
@@ -503,6 +522,12 @@ public sealed class VulkanUiHost : IDisposable
 		{
 			_pendingWindowSize = null;
 			_window.SetSize(pending);
+		}
+
+		if (_pendingWindowPosition is WindowPosition pendingPosition)
+		{
+			_pendingWindowPosition = null;
+			_ = _window.TryRestorePosition(pendingPosition);
 		}
 
 		_window.PollEvents();

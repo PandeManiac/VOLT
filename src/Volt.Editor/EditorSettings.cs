@@ -113,6 +113,18 @@ public sealed class EditorSettings
 	public int WindowHeight { get; set; } = DefaultWindowHeight;
 
 	/// <summary>
+	/// Gets or sets the saved window X position, or null when the window
+	/// manager should choose a position.
+	/// </summary>
+	public int? WindowX { get; set; }
+
+	/// <summary>
+	/// Gets or sets the saved window Y position, or null when the window
+	/// manager should choose a position.
+	/// </summary>
+	public int? WindowY { get; set; }
+
+	/// <summary>
 	/// Gets whether a frame rate is one the editor accepts.
 	/// </summary>
 	public static bool IsValidTargetFrameRate(int frameRate)
@@ -178,6 +190,17 @@ public sealed class EditorSettings
 	/// </summary>
 	public EditorSettings Normalize()
 	{
+		// A position needs both coordinates. A hand-edited file that
+		// supplies only one cannot place a window, so neither is kept.
+		int? windowX = WindowX;
+		int? windowY = WindowY;
+
+		if (windowX is null || windowY is null)
+		{
+			windowX = null;
+			windowY = null;
+		}
+
 		return new EditorSettings
 		{
 			Version = CurrentVersion,
@@ -186,7 +209,9 @@ public sealed class EditorSettings
 				: DefaultTargetFrameRate,
 			InterfaceScale = ClampInterfaceScale(InterfaceScale),
 			WindowWidth = ClampWindowWidth(WindowWidth),
-			WindowHeight = ClampWindowHeight(WindowHeight)
+			WindowHeight = ClampWindowHeight(WindowHeight),
+			WindowX = windowX,
+			WindowY = windowY
 		};
 	}
 

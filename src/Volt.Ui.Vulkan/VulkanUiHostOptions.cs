@@ -19,6 +19,12 @@ public sealed class VulkanUiHostOptions
 	public WindowSize Size { get; init; } = new(1440, 900);
 
 	/// <summary>
+	/// Gets the preferred initial window position, or null to let the
+	/// window manager place it.
+	/// </summary>
+	public WindowPosition? Position { get; init; }
+
+	/// <summary>
 	/// Gets whether Vulkan validation layers are requested.
 	/// </summary>
 	public bool EnableValidation { get; init; }

@@ -130,13 +130,19 @@ internal static class Program
 			width ?? settings.WindowWidth,
 			height ?? settings.WindowHeight);
 
+		Volt.Platform.Windows.WindowPosition? initialWindowPosition =
+			settings.WindowX is int initialX && settings.WindowY is int initialY
+				? new Volt.Platform.Windows.WindowPosition(initialX, initialY)
+				: null;
+
 		using VulkanUiHost host = new(
 			new VulkanUiHostOptions
 			{
 				Title = "VOLT Editor",
 				EnableValidation = validation,
 				Theme = UiTheme.CreateDark(),
-				Size = initialWindowSize
+				Size = initialWindowSize,
+				Position = initialWindowPosition
 			});
 
 		Console.WriteLine($"GPU: {host.DeviceName}");
@@ -211,6 +217,19 @@ internal static class Program
 
 					sizeAtProjectOpen = target;
 					host.RequestWindowSize(target);
+
+					Volt.Platform.Windows.WindowPosition? targetPosition =
+						preferences.Current.WindowX is int targetX &&
+						preferences.Current.WindowY is int targetY
+							? new Volt.Platform.Windows.WindowPosition(
+								targetX,
+								targetY)
+							: null;
+
+					if (targetPosition is Volt.Platform.Windows.WindowPosition position)
+					{
+						host.RequestWindowPosition(position);
+					}
 				}
 
 				session.Update(ui.DeltaSeconds);
@@ -231,6 +250,8 @@ internal static class Program
 		// the size this project was opened at is a user resize worth saving.
 		int savedWidth = preferences.Current.WindowWidth;
 		int savedHeight = preferences.Current.WindowHeight;
+		int? savedX = preferences.Current.WindowX;
+		int? savedY = preferences.Current.WindowY;
 
 		if (!host.Window.IsMaximized)
 		{
@@ -245,10 +266,20 @@ internal static class Program
 				savedWidth = windowSize.Width;
 				savedHeight = windowSize.Height;
 			}
+
+			// A display server that cannot report window positions keeps
+			// the project's previous saved position instead of writing a
+			// made-up one.
+			if (host.Window.TryGetPosition(
+				out Volt.Platform.Windows.WindowPosition windowPosition))
+			{
+				savedX = windowPosition.X;
+				savedY = windowPosition.Y;
+			}
 		}
 
 		SaveWorkspace(session.Project?.RootPath, shell.Layout);
-		preferences.Save(savedWidth, savedHeight);
+		preferences.Save(savedWidth, savedHeight, savedX, savedY);
 
 		Console.WriteLine(
 			$"Presented {host.PresentedFrames} accepted frames.");

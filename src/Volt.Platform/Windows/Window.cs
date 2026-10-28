@@ -133,6 +133,62 @@ public sealed class Window : IDisposable
 	}
 
 	/// <summary>
+	/// Reads the window's current top-left position.
+	/// </summary>
+	/// <param name="position">The current logical desktop position.</param>
+	/// <returns>
+	/// True when the platform could report a position. Some display
+	/// servers do not implement window positioning, in which case the
+	/// caller must keep whatever position it already had.
+	/// </returns>
+	public bool TryGetPosition(out WindowPosition position)
+	{
+		ThrowIfDisposed();
+
+		if (!SDL.GetWindowPosition(_handle, out int x, out int y))
+		{
+			position = default;
+			return false;
+		}
+
+		position = new WindowPosition(x, y);
+		return true;
+	}
+
+	/// <summary>
+	/// Moves the window to a saved position when that position still
+	/// lands on a display.
+	/// </summary>
+	/// <remarks>
+	/// A monitor can be disconnected between sessions. Restoring a
+	/// saved position blindly would then create a window somewhere the
+	/// user cannot reach, so an off-display position is refused and the
+	/// window manager keeps its default placement.
+	/// </remarks>
+	/// <param name="position">The saved logical desktop position.</param>
+	/// <returns>
+	/// True when the position is on a display and the platform moved
+	/// the window there.
+	/// </returns>
+	public bool TryRestorePosition(WindowPosition position)
+	{
+		ThrowIfDisposed();
+
+		SDL.Point point = new()
+		{
+			X = position.X,
+			Y = position.Y
+		};
+
+		if (SDL.GetDisplayForPoint(in point) == 0)
+		{
+			return false;
+		}
+
+		return SDL.SetWindowPosition(_handle, position.X, position.Y);
+	}
+
+	/// <summary>
 	/// Gets whether the window is currently maximized.
 	/// </summary>
 	/// <remarks>
@@ -212,6 +268,11 @@ public sealed class Window : IDisposable
 			{
 				throw new InvalidOperationException(
 					$"SDL could not identify the window: {SDL.GetError()}");
+			}
+
+			if (description.Position is WindowPosition position)
+			{
+				_ = TryRestorePosition(position);
 			}
 
 			_input = new WindowInput(

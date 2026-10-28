@@ -16,6 +16,12 @@ public readonly record struct WindowDescription(
 	bool VulkanCompatible = false)
 {
 	/// <summary>
+	/// Gets the preferred initial top-left position, or null to let the
+	/// window manager place the window.
+	/// </summary>
+	public WindowPosition? Position { get; init; }
+
+	/// <summary>
 	/// Validates the requested window properties.
 	/// </summary>
 	public void Validate()

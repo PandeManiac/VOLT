@@ -105,10 +105,14 @@ internal sealed class EditorPreferences : IDisposable
 	}
 
 	/// <summary>
-	/// Writes the open project's settings, including the window size it
-	/// should restore at the next launch.
+	/// Writes the open project's settings, including the window size and
+	/// position it should restore at the next launch.
 	/// </summary>
-	public void Save(int windowWidth, int windowHeight)
+	public void Save(
+		int windowWidth,
+		int windowHeight,
+		int? windowX = null,
+		int? windowY = null)
 	{
 		if (_session.Project is not { } project)
 		{
@@ -120,7 +124,9 @@ internal sealed class EditorPreferences : IDisposable
 			TargetFrameRate = _session.TargetFrameRate,
 			InterfaceScale = _shell.UiScale,
 			WindowWidth = windowWidth,
-			WindowHeight = windowHeight
+			WindowHeight = windowHeight,
+			WindowX = windowX,
+			WindowY = windowY
 		};
 
 		Write(project.RootPath, settings);
