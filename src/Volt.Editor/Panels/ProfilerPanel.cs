@@ -63,7 +63,6 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 
 		_frameGraph = new TimelineGraphView
 		{
-			BudgetMilliseconds = 1000.0 / 60.0,
 			EmptyText = "Recording frames…"
 		};
 
@@ -95,7 +94,7 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 		_note = new Label(
 			"The graphs record the editor's own frame intervals and " +
 			"managed allocations over the last 240 frames; the dashed " +
-			"line is a 60 fps budget. Allocations count bytes allocated " +
+			"line is the target frame budget. Allocations count bytes allocated " +
 			"between frames, so a frame that allocates and collects still " +
 			"shows its garbage. GPU pass timings are not captured yet.")
 		{
@@ -200,6 +199,7 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 		FrameTimeline frames = _session.Frames;
 		MemoryTimeline allocations = _session.Allocations;
 
+		_frameGraph.BudgetMilliseconds = _session.TargetFrameMilliseconds;
 		_frameGraph.Capture(frames);
 		_allocationGraph.Capture(allocations);
 
@@ -208,11 +208,13 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 			: string.Format(
 				CultureInfo.InvariantCulture,
 				"Frame: {0:0.00} ms avg  ·  {1:0.00} ms min  ·  " +
-				"{2:0.00} ms max  ·  {3:0} fps  ·  {4}/{5} samples",
+				"{2:0.00} ms max  ·  {3:0} fps  ·  target {4} fps  ·  " +
+				"{5}/{6} samples",
 				frames.AverageMilliseconds,
 				frames.MinimumMilliseconds,
 				frames.MaximumMilliseconds,
 				frames.FramesPerSecond,
+				_session.TargetFrameRate,
 				frames.Count,
 				frames.Capacity);
 

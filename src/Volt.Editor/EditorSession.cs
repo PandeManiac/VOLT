@@ -120,6 +120,7 @@ public sealed class EditorSession : IDisposable
 	private bool _localTransform = true;
 	private bool _gridSnapping;
 	private float _snapStep = 0.25f;
+	private int _targetFrameRate = EditorSettings.DefaultTargetFrameRate;
 
 	public EditorTool Tool
 	{
@@ -194,6 +195,40 @@ public sealed class EditorSession : IDisposable
 			SettingsChanged?.Invoke(this);
 		}
 	}
+
+	/// <summary>
+	/// Gets or sets the frame rate the editor aims for, which is the
+	/// budget the profiler graphs against.
+	/// </summary>
+	/// <remarks>
+	/// A rate outside the supported range falls back to the default
+	/// rather than being clamped silently: a hand-edited settings file
+	/// that says zero should behave like one that says nothing.
+	/// </remarks>
+	public int TargetFrameRate
+	{
+		get => _targetFrameRate;
+		set
+		{
+			int next = EditorSettings.IsValidTargetFrameRate(value)
+				? value
+				: EditorSettings.DefaultTargetFrameRate;
+
+			if (next == _targetFrameRate)
+			{
+				return;
+			}
+
+			_targetFrameRate = next;
+			SettingsChanged?.Invoke(this);
+		}
+	}
+
+	/// <summary>
+	/// Gets the frame budget in milliseconds that
+	/// <see cref="TargetFrameRate"/> implies.
+	/// </summary>
+	public double TargetFrameMilliseconds => 1000.0 / _targetFrameRate;
 
 	public string Status { get; private set; } = "Ready";
 

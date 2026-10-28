@@ -38,6 +38,8 @@ public sealed class EditorShell : Panel
 {
 	private static readonly float[] s_uiScales = [0.75f, 1f, 1.25f, 1.5f, 2f];
 
+	private static readonly int[] s_frameRates = [30, 60, 120, 144];
+
 	private readonly EditorSession _session;
 	private readonly IViewportRenderer? _viewportRenderer;
 	private readonly List<IFrameTick> _frameTicks = [];
@@ -1462,7 +1464,7 @@ public sealed class EditorShell : Panel
 		Panel card = new()
 		{
 			Width = UiLength.Points(380f),
-			Height = UiLength.Points(210f),
+			Height = UiLength.Points(330f),
 			HorizontalAlignment = UiAlignment.Center,
 			VerticalAlignment = UiAlignment.Center,
 			DrawBackground = true,
@@ -1515,6 +1517,39 @@ public sealed class EditorShell : Panel
 		}
 
 		content.Add(scales);
+
+		content.Add(new Label("Target frame rate")
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.TextMuted
+		});
+
+		StackPanel rates = new(UiOrientation.Horizontal)
+		{
+			Spacing = 6f
+		};
+
+		foreach (int rate in s_frameRates)
+		{
+			int captured = rate;
+
+			Button button = new($"{captured} fps")
+			{
+				IsSelected = _session.TargetFrameRate == captured,
+				MinHeight = 28f
+			};
+
+			button.Clicked += _ =>
+			{
+				context.CloseModal();
+				_session.TargetFrameRate = captured;
+				_session.SetStatus($"Target frame rate {captured} fps");
+			};
+
+			rates.Add(button);
+		}
+
+		content.Add(rates);
 
 		content.Add(new Label(
 			"Scaling rebuilds panel widgets so text is rasterized at " +

@@ -30,6 +30,7 @@ internal static class Program
 	private const string SnapshotStateArgument = "--snapshot-state";
 	private const string WorkspaceFolderName = ".volt";
 	private const string WorkspaceFileName = "workspace.json";
+	private const string SettingsFileName = "settings.json";
 
 	[STAThread]
 	private static int Main(string[] args)
@@ -121,7 +122,10 @@ internal static class Program
 		}
 
 		string? projectRoot = session.Project?.RootPath;
+		EditorSettings settings = LoadSettings(projectRoot);
 		DockLayout layout = LoadWorkspace(projectRoot);
+
+		session.TargetFrameRate = settings.TargetFrameRate;
 
 		using VulkanUiHost host = new(
 			new VulkanUiHostOptions
@@ -197,6 +201,7 @@ internal static class Program
 			});
 
 		SaveWorkspace(session.Project?.RootPath, shell.Layout);
+		SaveSettings(session.Project?.RootPath, session.TargetFrameRate);
 
 		Console.WriteLine(
 			$"Presented {host.PresentedFrames} accepted frames.");
@@ -452,6 +457,77 @@ internal static class Program
 			projectRoot,
 			WorkspaceFolderName,
 			WorkspaceFileName);
+	}
+
+	private static EditorSettings LoadSettings(string? projectRoot)
+	{
+		if (projectRoot is null)
+		{
+			return new EditorSettings();
+		}
+
+		string path = SettingsPath(projectRoot);
+
+		if (!File.Exists(path))
+		{
+			return new EditorSettings();
+		}
+
+		try
+		{
+			return EditorSettings.Deserialize(File.ReadAllText(path));
+		}
+
+		catch (Exception exception)
+		{
+			Console.Error.WriteLine(
+				$"Ignoring unreadable editor settings: {exception.Message}");
+
+			return new EditorSettings();
+		}
+	}
+
+	private static void SaveSettings(
+		string? projectRoot,
+		int targetFrameRate)
+	{
+		if (projectRoot is null)
+		{
+			return;
+		}
+
+		try
+		{
+			string path = SettingsPath(projectRoot);
+			string directory = Path.GetDirectoryName(path)
+				?? projectRoot;
+
+			Directory.CreateDirectory(directory);
+
+			EditorSettings settings = new()
+			{
+				TargetFrameRate = targetFrameRate
+			};
+
+			string temporary = path + ".tmp";
+
+			File.WriteAllText(temporary, settings.Serialize());
+			File.Move(temporary, path, overwrite: true);
+		}
+
+		catch (Exception exception)
+		{
+			Console.Error.WriteLine(
+				$"Could not save editor settings: {exception.Message}");
+		}
+	}
+
+	private static string SettingsPath(string projectRoot)
+	{
+		return Path.Combine(
+			projectRoot,
+			WorkspaceFolderName,
+			SettingsFileName);
 	}
 
 	private static bool TryParseArguments(

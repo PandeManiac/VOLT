@@ -1,0 +1,130 @@
+using System.Text.Json;
+
+namespace Volt.Editor;
+
+/// <summary>
+/// Settings that belong to the editor rather than to a project or a
+/// scene, persisted with the workspace so they survive a restart.
+/// </summary>
+/// <remarks>
+/// The type is deliberately small and validated on the way in: a
+/// hand-edited or older file must never put the editor into a state
+/// its own controls cannot represent. Unknown JSON members are
+/// ignored, so a file written by a newer build still loads what this
+/// one understands.
+/// </remarks>
+public sealed class EditorSettings
+{
+	/// <summary>
+	/// The format version this build writes and reads.
+	/// </summary>
+	public const int CurrentVersion = 1;
+
+	/// <summary>
+	/// The frame rate the profiler assumes when nothing else is set.
+	/// </summary>
+	public const int DefaultTargetFrameRate = 60;
+
+	/// <summary>
+	/// The lowest target frame rate the editor accepts.
+	/// </summary>
+	public const int MinimumTargetFrameRate = 10;
+
+	/// <summary>
+	/// The highest target frame rate the editor accepts.
+	/// </summary>
+	public const int MaximumTargetFrameRate = 480;
+
+	private static readonly JsonSerializerOptions s_options = new()
+	{
+		PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+		WriteIndented = true
+	};
+
+	/// <summary>
+	/// Gets or sets the persisted format version.
+	/// </summary>
+	public int Version { get; set; } = CurrentVersion;
+
+	/// <summary>
+	/// Gets or sets the frame rate the editor aims for, which is the
+	/// budget the profiler graphs against.
+	/// </summary>
+	public int TargetFrameRate { get; set; } = DefaultTargetFrameRate;
+
+	/// <summary>
+	/// Gets whether a frame rate is one the editor accepts.
+	/// </summary>
+	public static bool IsValidTargetFrameRate(int frameRate)
+	{
+		return frameRate is >= MinimumTargetFrameRate
+			and <= MaximumTargetFrameRate;
+	}
+
+	/// <summary>
+	/// Returns a copy whose values are all representable, falling back
+	/// to defaults rather than trusting a file.
+	/// </summary>
+	public EditorSettings Normalize()
+	{
+		return new EditorSettings
+		{
+			Version = CurrentVersion,
+			TargetFrameRate = IsValidTargetFrameRate(TargetFrameRate)
+				? TargetFrameRate
+				: DefaultTargetFrameRate
+		};
+	}
+
+	/// <summary>
+	/// Serializes the settings as indented camel-case JSON.
+	/// </summary>
+	public string Serialize()
+	{
+		return JsonSerializer.Serialize(Normalize(), s_options);
+	}
+
+	/// <summary>
+	/// Reads settings from JSON.
+	/// </summary>
+	/// <param name="json">The persisted JSON.</param>
+	/// <returns>The normalized settings.</returns>
+	/// <exception cref="InvalidDataException">
+	/// The JSON is malformed, empty, or from an unsupported version.
+	/// </exception>
+	public static EditorSettings Deserialize(string json)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(json);
+
+		EditorSettings? settings;
+
+		try
+		{
+			settings = JsonSerializer.Deserialize<EditorSettings>(
+				json,
+				s_options);
+		}
+
+		catch (JsonException exception)
+		{
+			throw new InvalidDataException(
+				"The editor settings JSON is malformed.",
+				exception);
+		}
+
+		if (settings is null)
+		{
+			throw new InvalidDataException(
+				"The editor settings document is empty.");
+		}
+
+		if (settings.Version != CurrentVersion)
+		{
+			throw new InvalidDataException(
+				$"Unsupported editor settings version {settings.Version}. " +
+				$"This build reads version {CurrentVersion}.");
+		}
+
+		return settings.Normalize();
+	}
+}
