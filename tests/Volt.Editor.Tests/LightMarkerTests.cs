@@ -319,6 +319,90 @@ public sealed class LightMarkerTests : IDisposable
 	}
 
 	[Fact]
+	public void InspectorColorEdit_UpdatesLightingAndMarkerAndUndo()
+	{
+		SceneEntity light = _session.CreateDirectionalLight("Sun");
+		LightData data = light.GetComponent<LightData>()!;
+
+		using UiContext inspectorContext = new();
+		using InspectorPanel inspector = new(_session);
+
+		inspectorContext.Add(inspector);
+		inspectorContext.BeginFrame(
+			0.0,
+			new UiSize(380f, 800f),
+			UiPoint.Zero);
+
+		inspectorContext.Draw();
+
+		ColorField color = Descendants(inspector)
+			.OfType<ColorField>()
+			.Single();
+
+		TextField hex = Descendants(color)
+			.OfType<TextField>()
+			.Single();
+
+		Assert.Equal("#FFFFFF", hex.Text);
+
+		int history = _session.Undo.UndoCount;
+
+		Click(inspectorContext, hex.GlobalVisualBounds.Center);
+		Assert.True(inspectorContext.KeyDown(
+			UiKey.A,
+			UiKeyModifiers.Control));
+
+		inspectorContext.TextInput("#00FF00");
+
+		Assert.True(inspectorContext.KeyDown(UiKey.Enter));
+
+		Assert.Equal(new Vector4(0f, 1f, 0f, 1f), data.Color);
+		Assert.Equal(history + 1, _session.Undo.UndoCount);
+		Assert.Equal(
+			new Vector3(0f, 1f, 0f),
+			ViewportMath.ResolveLight(_session.Scene!).DiffuseColor);
+
+		// Clear the selection so the marker uses its authored tint
+		// rather than the selection accent.
+		_session.ClearSelection();
+
+		UiColor green = new(89, 255, 89);
+		SceneViewport viewport = BuildViewport(out UiDrawList drawList);
+
+		Project(viewport, light, out UiPoint center, out _);
+
+		Assert.True(
+			Paints(drawList, MarkerArea(center), green),
+			"The marker must use the new light color.");
+
+		Assert.True(
+			PaintsText(drawList, LabelArea(center), "Sun", green),
+			"The label must use the new light color.");
+
+		_session.UndoLast();
+
+		Assert.Equal(Vector4.One, data.Color);
+		Assert.Equal(
+			Vector3.One,
+			ViewportMath.ResolveLight(_session.Scene!).DiffuseColor);
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(960f, 600f),
+			UiPoint.Zero);
+
+		drawList = _context.Draw();
+
+		Assert.True(
+			Paints(drawList, MarkerArea(center), UiColor.White),
+			"Undo must restore the original marker color.");
+
+		Assert.True(
+			PaintsText(drawList, LabelArea(center), "Sun", UiColor.White),
+			"Undo must restore the original label color.");
+	}
+
+	[Fact]
 	public void SelectedLightMarker_UsesAccentColor()
 	{
 		SceneEntity light = _session.CreateDirectionalLight("Sun");
