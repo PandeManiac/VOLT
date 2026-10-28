@@ -51,6 +51,10 @@ public sealed class ProjectPanel : Panel
 
 	private string _folder = string.Empty;
 	private bool _folderSelectionActive;
+	private readonly HashSet<string> _collapsedFolders =
+		new(StringComparer.OrdinalIgnoreCase);
+	private bool _folderFilterActive;
+	private bool _skipFolderCapture;
 	private string _selectedId = string.Empty;
 	private bool _selectedIsFolder;
 	private string _signature = string.Empty;
@@ -340,6 +344,9 @@ public sealed class ProjectPanel : Panel
 			_openProject = project;
 			_folder = string.Empty;
 			_folderSelectionActive = false;
+			_collapsedFolders.Clear();
+			_folderFilterActive = false;
+			_skipFolderCapture = true;
 			_search.Text = string.Empty;
 			_selectedId = string.Empty;
 			_selectedIsFolder = false;
@@ -426,6 +433,17 @@ public sealed class ProjectPanel : Panel
 		IReadOnlyList<ProjectAsset> assets,
 		string filter)
 	{
+		if (_skipFolderCapture)
+		{
+			_skipFolderCapture = false;
+		}
+		else if (!_folderFilterActive && filter.Length == 0)
+		{
+			CaptureCollapsedFolders();
+		}
+
+		_folderFilterActive = filter.Length > 0;
+
 		_folders.Clear();
 
 		SortedDictionary<string, TreeViewItem> nodes =
@@ -456,7 +474,8 @@ public sealed class ProjectPanel : Panel
 						segments[index],
 						path)
 					{
-						IsExpanded = true,
+						IsExpanded = filter.Length > 0 ||
+							!_collapsedFolders.Contains(path),
 						Icon = UiIcon.Folder
 					};
 
@@ -479,7 +498,8 @@ public sealed class ProjectPanel : Panel
 			_session.Project?.Name ?? "Project",
 			string.Empty)
 		{
-			IsExpanded = true,
+			IsExpanded = filter.Length > 0 ||
+				!_collapsedFolders.Contains(string.Empty),
 			Icon = UiIcon.Project
 		};
 
@@ -520,6 +540,34 @@ public sealed class ProjectPanel : Panel
 		if (selectedFolder is not null)
 		{
 			_folders.SetSelection([selectedFolder]);
+		}
+	}
+
+	private void CaptureCollapsedFolders()
+	{
+		foreach (TreeViewItem root in _folders.Roots)
+		{
+			CaptureCollapsedFolder(root);
+		}
+	}
+
+	private void CaptureCollapsedFolder(TreeViewItem item)
+	{
+		if (item.Tag is string path)
+		{
+			if (item.IsExpanded)
+			{
+				_collapsedFolders.Remove(path);
+			}
+			else
+			{
+				_collapsedFolders.Add(path);
+			}
+		}
+
+		foreach (TreeViewItem child in item.Children)
+		{
+			CaptureCollapsedFolder(child);
 		}
 	}
 

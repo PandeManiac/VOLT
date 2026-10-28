@@ -290,8 +290,9 @@ ratios without discarding the state inside open panels.
   action opens the scene and moves the browser to the scene's folder
   so the new tile is visible. Grid and list modes share the selected
   asset, so switching views keeps the same item highlighted. The
-  folder tree keeps the current folder selected as it rebuilds, and
-  the selected item's details survive a refresh. Opening another
+  folder tree keeps the current folder selected and its collapsed
+  branches collapsed as it rebuilds, and the selected item's details
+  survive a refresh. Opening another
   project returns the browser to that project's root and clears its
   search filter. Scene shortcuts such as Delete and F2 stand down while
   the browser has keyboard focus.

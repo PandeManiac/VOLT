@@ -1079,6 +1079,46 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_KeepsFolderExpansionAcrossRebuilds()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		Assert.NotNull(_session.CreateScene(
+			"Scenes/Props/Prop.volt.scene.json",
+			"Prop"));
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		Assert.True(scenes.IsExpanded);
+
+		scenes.IsExpanded = false;
+		folders.Refresh();
+		Paint(0.2);
+
+		_session.SaveScene();
+		Paint(0.3);
+
+		TreeViewItem rebuilt = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		Assert.False(rebuilt.IsExpanded);
+	}
+
+	[Fact]
 	public void ProjectBrowser_SelectionFollowsAssetsBetweenGridAndList()
 	{
 		const string Main = "Scenes/Main.volt.scene.json";
