@@ -416,6 +416,71 @@ public sealed class EditorSession : IDisposable
 	}
 
 	/// <summary>
+	/// Deletes several project assets in one project change.
+	/// </summary>
+	/// <returns>The number of distinct assets that were removed.</returns>
+	/// <remarks>
+	/// The open scene is checked before anything is removed. The project
+	/// then validates every path before deleting, so a protected or
+	/// missing asset refuses the whole selection instead of leaving a
+	/// partial deletion.
+	/// </remarks>
+	public int DeleteAssets(IEnumerable<string> assetIds)
+	{
+		ThrowIfDisposed();
+		ArgumentNullException.ThrowIfNull(assetIds);
+
+		EditorProject project = RequireProject();
+		List<string> ids = [];
+		HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+
+		foreach (string assetId in assetIds)
+		{
+			string id = ProjectAssetCatalog.NormalizeId(assetId);
+
+			if (!seen.Add(id))
+			{
+				continue;
+			}
+
+			if (ScenePath is string current &&
+				string.Equals(current, id, StringComparison.OrdinalIgnoreCase))
+			{
+				throw new InvalidOperationException(
+					"Close the scene before deleting its file.");
+			}
+
+			ids.Add(id);
+		}
+
+		if (ids.Count == 0)
+		{
+			return 0;
+		}
+
+		bool wasDirty = IsSceneDirty;
+
+		project.DeleteAssets(ids);
+
+		int changed = 0;
+
+		foreach (string id in ids)
+		{
+			changed += Scene?.ReplaceAssetReference(id, string.Empty) ?? 0;
+		}
+
+		if (changed > 0 && !wasDirty && Scene is not null &&
+			ScenePath is not null)
+		{
+			project.SaveScene(Scene, ScenePath);
+			IsSceneDirty = false;
+		}
+
+		ProjectChanged?.Invoke(this);
+		return ids.Count;
+	}
+
+	/// <summary>
 	/// Deletes a project asset, refusing to remove the scene that is
 	/// currently open.
 	/// </summary>

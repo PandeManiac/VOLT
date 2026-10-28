@@ -1528,6 +1528,249 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_CtrlClickSelectsMultipleAssetsAndDeletesThem()
+	{
+		const string Main = "Scenes/Main.volt.scene.json";
+		const string Prop = "Scenes/Prop.volt.scene.json";
+		const string Extra = "Scenes/Extra.volt.scene.json";
+
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+		Assert.NotNull(_session.CreateScene(Prop, "Prop"));
+		Assert.NotNull(_session.CreateScene(Extra, "Extra"));
+		Assert.True(_session.OpenScene(Main));
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView prop = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Prop.volt.scene.json");
+
+		IconTileView extra = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Extra.volt.scene.json");
+
+		Click(prop);
+		Paint(0.25);
+
+		UiPoint center = extra.GlobalVisualBounds.Center;
+
+		_context.PointerDown(
+			UiMouseButton.Left,
+			center,
+			UiKeyModifiers.Control);
+
+		_context.PointerUp(UiMouseButton.Left, center);
+		Paint(0.3);
+
+		Assert.True(prop.IsSelected);
+		Assert.True(extra.IsSelected);
+		Assert.Equal(
+			2,
+			Descendants(project)
+				.OfType<IconTileView>()
+				.Count(tile => tile.IsSelected));
+
+		Assert.Contains(
+			Descendants(project).OfType<Label>(),
+			label => label.Text == "2 assets selected");
+
+		Assert.True(_context.KeyDown(UiKey.Delete));
+		Paint(0.35);
+
+		Assert.NotNull(_context.Modal);
+
+		Button delete = Descendants(_context.Modal!)
+			.OfType<Button>()
+			.Single(button => button.Text == "Delete 2");
+
+		Click(delete);
+		Paint(0.4);
+
+		Assert.False(File.Exists(_session.Project!.ResolvePath(Prop)));
+		Assert.False(File.Exists(_session.Project.ResolvePath(Extra)));
+		Assert.True(File.Exists(_session.Project.ResolvePath(Main)));
+		Assert.Null(_context.Modal);
+		Assert.DoesNotContain(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.IsSelected);
+	}
+
+	[Fact]
+	public void ProjectBrowser_ShiftArrowExtendsTheTileSelection()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		string assets = _session.Project!.AssetsPath;
+
+		for (int index = 0; index < 4; index++)
+		{
+			File.WriteAllText(
+				Path.Combine(assets, $"Asset{index:00}.mat"),
+				"material");
+		}
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem assetsFolder = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Assets");
+
+		folders.SetSelection([assetsFolder]);
+		Paint(0.2);
+
+		IconTileView first = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Asset00.mat");
+
+		IconTileView second = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Asset01.mat");
+
+		IconTileView third = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Asset02.mat");
+
+		IconTileView fourth = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Asset03.mat");
+
+		Click(first);
+		Paint(0.25);
+
+		Assert.True(_context.KeyDown(
+			UiKey.Right,
+			UiKeyModifiers.Shift));
+
+		Paint(0.3);
+		Assert.True(_context.KeyDown(
+			UiKey.Right,
+			UiKeyModifiers.Shift));
+
+		Paint(0.35);
+
+		Assert.True(first.IsSelected);
+		Assert.True(second.IsSelected);
+		Assert.True(third.IsSelected);
+		Assert.False(fourth.IsSelected);
+		Assert.Same(third, _context.FocusedWidget);
+
+		Assert.Contains(
+			Descendants(project).OfType<Label>(),
+			label => label.Text == "3 assets selected");
+
+		Assert.True(_context.KeyDown(UiKey.Left));
+		Paint(0.4);
+
+		Assert.Same(second, _context.FocusedWidget);
+		Assert.True(second.IsSelected);
+		Assert.False(first.IsSelected);
+		Assert.False(third.IsSelected);
+	}
+
+	[Fact]
+	public void ProjectBrowser_ShiftArrowExtendsTheListSelection()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		string assets = _session.Project!.AssetsPath;
+
+		for (int index = 0; index < 4; index++)
+		{
+			File.WriteAllText(
+				Path.Combine(assets, $"Asset{index:00}.mat"),
+				"material");
+		}
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem assetsFolder = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Assets");
+
+		folders.SetSelection([assetsFolder]);
+		Paint(0.2);
+
+		IconButton listMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as a list");
+
+		Click(listMode);
+		Paint(0.3);
+
+		TreeView list = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(root => root.Tag is ProjectAsset));
+
+		list.SetSelection([list.Roots[0]]);
+		Assert.True(list.Focus());
+		Assert.Same(list, _context.FocusedWidget);
+		Paint(0.35);
+
+		Assert.True(_context.KeyDown(
+			UiKey.Down,
+			UiKeyModifiers.Shift));
+
+		Paint(0.4);
+		Assert.Equal(2, list.SelectedItems.Count);
+		Assert.True(_context.KeyDown(
+			UiKey.Down,
+			UiKeyModifiers.Shift));
+
+		Paint(0.45);
+
+		Assert.Equal(3, list.SelectedItems.Count);
+		Assert.Equal(
+			3,
+			Descendants(project)
+				.OfType<IconTileView>()
+				.Count(tile => tile.IsSelected));
+
+		Assert.Contains(
+			Descendants(project).OfType<Label>(),
+			label => label.Text == "3 assets selected");
+	}
+
+	[Fact]
 	public void ProjectBrowser_ContextMenuDuplicatesAScene()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);

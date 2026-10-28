@@ -281,4 +281,39 @@ public sealed class EditorProjectTests : IDisposable
 			string.Empty,
 			reloadedCube.GetComponent<MeshRendererData>()!.Mesh);
 	}
+
+	[Fact]
+	public void DeleteAssets_ValidatesTheWholeSelectionBeforeDeleting()
+	{
+		EditorProject project = EditorProject.Create(_root, "Delete many");
+		project.CreateScene("Scenes/Old.volt.scene.json", "Old");
+		project.CreateScene("Scenes/Other.volt.scene.json", "Other");
+
+		Assert.Throws<InvalidOperationException>(() =>
+			project.DeleteAssets(
+			[
+				"Scenes/Old.volt.scene.json",
+				project.StartupScenePath
+			]));
+
+		Assert.True(File.Exists(project.ResolvePath(
+			"Scenes/Old.volt.scene.json")));
+		Assert.True(File.Exists(project.ResolvePath(
+			project.StartupScenePath)));
+
+		project.DeleteAssets(
+		[
+			"Scenes/Old.volt.scene.json",
+			"Scenes/Other.volt.scene.json"
+		]);
+
+		Assert.False(File.Exists(project.ResolvePath(
+			"Scenes/Old.volt.scene.json")));
+		Assert.False(File.Exists(project.ResolvePath(
+			"Scenes/Other.volt.scene.json")));
+		Assert.False(project.AssetCatalog.FileExists(
+			"Scenes/Old.volt.scene.json"));
+		Assert.False(project.AssetCatalog.FileExists(
+			"Scenes/Other.volt.scene.json"));
+	}
 }

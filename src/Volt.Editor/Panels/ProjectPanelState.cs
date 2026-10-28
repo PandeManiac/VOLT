@@ -18,6 +18,8 @@ internal sealed class ProjectPanelState
 
 	public bool SelectedIsFolder { get; init; }
 
+	public IReadOnlyList<string> SelectedAssetIds { get; init; } = [];
+
 	public string Search { get; init; } = string.Empty;
 
 	public IReadOnlyList<string> CollapsedFolders { get; init; } = [];

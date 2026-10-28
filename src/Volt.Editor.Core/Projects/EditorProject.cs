@@ -345,6 +345,62 @@ public sealed class EditorProject
 	}
 
 	/// <summary>
+	/// Deletes several asset files from the project.
+	/// </summary>
+	/// <remarks>
+	/// Every path is validated before the first file is removed, so a
+	/// protected startup scene or a missing asset refuses the whole
+	/// operation rather than leaving a partial deletion behind.
+	/// </remarks>
+	public void DeleteAssets(IEnumerable<string> relativePaths)
+	{
+		ArgumentNullException.ThrowIfNull(relativePaths);
+
+		List<string> ids = [];
+		HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+		string startupId = ProjectAssetCatalog.NormalizeId(StartupScenePath);
+
+		foreach (string relativePath in relativePaths)
+		{
+			string id = ProjectAssetCatalog.NormalizeId(relativePath);
+
+			if (!seen.Add(id))
+			{
+				continue;
+			}
+
+			if (string.Equals(startupId, id, StringComparison.OrdinalIgnoreCase))
+			{
+				throw new InvalidOperationException(
+					"The startup scene cannot be deleted. " +
+					"Choose another startup scene first.");
+			}
+
+			string source = ResolvePath(relativePath);
+
+			if (!File.Exists(source))
+			{
+				throw new FileNotFoundException(
+					$"The asset '{relativePath}' does not exist.",
+					source);
+			}
+
+			ids.Add(id);
+		}
+
+		foreach (string id in ids)
+		{
+			File.Delete(ResolvePath(id));
+			ReplaceReferencesInScenes(id, string.Empty);
+		}
+
+		if (ids.Count > 0)
+		{
+			AssetCatalog.Refresh();
+		}
+	}
+
+	/// <summary>
 	/// Deletes an asset file from the project.
 	/// </summary>
 	/// <remarks>

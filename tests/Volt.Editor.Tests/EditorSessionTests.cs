@@ -199,6 +199,52 @@ public sealed class EditorSessionTests : IDisposable
 	}
 
 	[Fact]
+	public void DeleteAssets_ClearsReferencesAndProtectsTheOpenScene()
+	{
+		_session.NewProject(
+			Path.Combine(_root, "ManyAssets"),
+			"Many Assets");
+
+		string first = "Assets/Meshes/first.mesh";
+		string second = "Assets/Meshes/second.mesh";
+
+		Directory.CreateDirectory(
+			Path.Combine(_session.Project!.AssetsPath, "Meshes"));
+		File.WriteAllText(_session.Project.ResolvePath(first), "mesh");
+		File.WriteAllText(_session.Project.ResolvePath(second), "mesh");
+		_session.Project.AssetCatalog.Refresh();
+
+		SceneEntity cube = _session.Scene!.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+		MeshRendererData renderer = cube.GetComponent<MeshRendererData>()!;
+		renderer.Mesh = first;
+		_session.SaveScene();
+
+		Assert.Throws<InvalidOperationException>(() =>
+			_session.DeleteAssets([_session.ScenePath!, second]));
+
+		Assert.True(File.Exists(_session.Project.ResolvePath(first)));
+		Assert.True(File.Exists(_session.Project.ResolvePath(second)));
+		Assert.Equal(first, renderer.Mesh);
+
+		int deleted = _session.DeleteAssets([first, second]);
+
+		Assert.Equal(2, deleted);
+		Assert.False(File.Exists(_session.Project.ResolvePath(first)));
+		Assert.False(File.Exists(_session.Project.ResolvePath(second)));
+		Assert.Equal(string.Empty, renderer.Mesh);
+		Assert.False(_session.IsSceneDirty);
+
+		SceneDocument reloaded = _session.Project.LoadStartupScene();
+		SceneEntity reloadedCube = reloaded.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+
+		Assert.Equal(
+			string.Empty,
+			reloadedCube.GetComponent<MeshRendererData>()!.Mesh);
+	}
+
+	[Fact]
 	public void Reparent_RejectsHierarchyCycles()
 	{
 		_session.NewProject(

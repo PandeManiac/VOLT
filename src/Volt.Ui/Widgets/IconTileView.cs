@@ -49,6 +49,12 @@ public sealed class IconTileView : Widget
 
 	public event Action<IconTileView>? Activated;
 
+	/// <summary>
+	/// Raised for a left press, with the modifiers that chose the
+	/// selection gesture.
+	/// </summary>
+	public event Action<IconTileView, UiKeyModifiers>? SelectionRequested;
+
 	public event Action<IconTileView, UiPoint>? ContextMenuRequested;
 
 	public UiIcon Icon { get; set; }
@@ -198,6 +204,11 @@ public sealed class IconTileView : Widget
 			Focus();
 			ContextMenuRequested?.Invoke(this, pointer.GlobalPosition);
 			return true;
+		}
+
+		if (pointer.Button == UiMouseButton.Left)
+		{
+			SelectionRequested?.Invoke(this, pointer.Modifiers);
 		}
 
 		return base.OnPointerDown(pointer);
