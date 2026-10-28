@@ -528,6 +528,39 @@ public sealed class EditorChromeTests : IDisposable
 		Assert.False(_session.IsSceneDirty);
 	}
 
+	[Fact]
+	public void WindowClose_CommitsTheFocusedTextFieldBeforePrompting()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneDocument scene = _session.Scene!;
+		SceneEntity cube = scene.Entities.First(
+			entity => entity.GetComponent<MeshRendererData>() is not null);
+
+		_session.Select(cube.Id);
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.Text == cube.Name);
+
+		name.Focus();
+		name.SetSelection(0, name.Text.Length);
+		_context.TextInput("Renamed");
+
+		Assert.False(shell.ConfirmWindowClose());
+		Assert.Equal("Renamed", cube.Name);
+		Assert.True(_session.IsSceneDirty);
+		Assert.NotNull(_context.Modal);
+	}
+
 	private EditorShell BuildShell(float width, float height)
 	{
 		EditorShell shell = new(_session);

@@ -1322,12 +1322,16 @@ public sealed class EditorShell : Panel
 	/// </remarks>
 	private void SaveSceneWithPendingEdits()
 	{
+		CommitFocusedText();
+		_session.SaveScene();
+	}
+
+	private void CommitFocusedText()
+	{
 		if (Context?.FocusedWidget is TextField field)
 		{
 			field.Commit();
 		}
-
-		_session.SaveScene();
 	}
 
 	/// <summary>
@@ -1550,6 +1554,8 @@ public sealed class EditorShell : Panel
 	/// </returns>
 	public bool ConfirmWindowClose()
 	{
+		CommitFocusedText();
+
 		if (!_session.IsSceneDirty || _session.Scene is null)
 		{
 			return true;
@@ -1562,6 +1568,8 @@ public sealed class EditorShell : Panel
 	private bool GuardUnsavedChanges(Action continuation)
 	{
 		ArgumentNullException.ThrowIfNull(continuation);
+
+		CommitFocusedText();
 
 		if (!_session.IsSceneDirty || _session.Scene is null)
 		{
