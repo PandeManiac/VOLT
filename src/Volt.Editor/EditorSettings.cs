@@ -50,6 +50,35 @@ public sealed class EditorSettings
 	/// </summary>
 	public const float MaximumInterfaceScale = 2f;
 
+	/// <summary>
+	/// The window width a workspace opens at when none is saved.
+	/// </summary>
+	public const int DefaultWindowWidth = 1600;
+
+	/// <summary>
+	/// The window height a workspace opens at when none is saved.
+	/// </summary>
+	public const int DefaultWindowHeight = 960;
+
+	/// <summary>
+	/// The narrowest window width the editor restores.
+	/// </summary>
+	public const int MinimumWindowWidth = 640;
+
+	/// <summary>
+	/// The shortest window height the editor restores.
+	/// </summary>
+	public const int MinimumWindowHeight = 480;
+
+	/// <summary>
+	/// The largest window dimension the editor persists.
+	/// </summary>
+	/// <remarks>
+	/// This is a sanity bound for hand-edited files, not a display
+	/// limit: the window manager still decides what fits.
+	/// </remarks>
+	public const int MaximumWindowDimension = 8192;
+
 	private static readonly JsonSerializerOptions s_options = new()
 	{
 		PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -72,6 +101,16 @@ public sealed class EditorSettings
 	/// which is the same setting the Preferences modal offers.
 	/// </summary>
 	public float InterfaceScale { get; set; } = DefaultInterfaceScale;
+
+	/// <summary>
+	/// Gets or sets the logical width the editor window reopens at.
+	/// </summary>
+	public int WindowWidth { get; set; } = DefaultWindowWidth;
+
+	/// <summary>
+	/// Gets or sets the logical height the editor window reopens at.
+	/// </summary>
+	public int WindowHeight { get; set; } = DefaultWindowHeight;
 
 	/// <summary>
 	/// Gets whether a frame rate is one the editor accepts.
@@ -112,6 +151,28 @@ public sealed class EditorSettings
 	}
 
 	/// <summary>
+	/// Brings a typed window width into the supported range.
+	/// </summary>
+	public static int ClampWindowWidth(int width)
+	{
+		return Math.Clamp(
+			width,
+			MinimumWindowWidth,
+			MaximumWindowDimension);
+	}
+
+	/// <summary>
+	/// Brings a typed window height into the supported range.
+	/// </summary>
+	public static int ClampWindowHeight(int height)
+	{
+		return Math.Clamp(
+			height,
+			MinimumWindowHeight,
+			MaximumWindowDimension);
+	}
+
+	/// <summary>
 	/// Returns a copy whose values are all representable, falling back
 	/// to defaults rather than trusting a file.
 	/// </summary>
@@ -123,7 +184,9 @@ public sealed class EditorSettings
 			TargetFrameRate = IsValidTargetFrameRate(TargetFrameRate)
 				? TargetFrameRate
 				: DefaultTargetFrameRate,
-			InterfaceScale = ClampInterfaceScale(InterfaceScale)
+			InterfaceScale = ClampInterfaceScale(InterfaceScale),
+			WindowWidth = ClampWindowWidth(WindowWidth),
+			WindowHeight = ClampWindowHeight(WindowHeight)
 		};
 	}
 

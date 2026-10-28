@@ -138,7 +138,10 @@ Panels are real `DockHost` panels. Drag splitters to resize, drop a
 panel onto another tab group to combine them, and use **Window** to
 close or reopen panels. The layout is serialized to
 `<project>/.volt/workspace.json` when the editor closes and restored
-the next time that project is opened.
+the next time that project is opened. The editor window's size is saved
+with the other editor settings and reopened at that size, clamped to a
+usable minimum; a window closed maximized keeps its previous restore size
+instead of reopening a normal window at screen size.
 
 ## Interface design
 

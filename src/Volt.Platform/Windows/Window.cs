@@ -90,6 +90,25 @@ public sealed class Window : IDisposable
 	}
 
 	/// <summary>
+	/// Gets whether the window is currently maximized.
+	/// </summary>
+	/// <remarks>
+	/// A maximized window reports the maximized bounds as its size, so
+	/// an application that restores window geometry keeps the previous
+	/// size instead of reopening a normal window at screen size.
+	/// </remarks>
+	public bool IsMaximized
+	{
+		get
+		{
+			ThrowIfDisposed();
+
+			return (SDL.GetWindowFlags(_handle) &
+				SDL.WindowFlags.Maximized) != 0;
+		}
+	}
+
+	/// <summary>
 	/// Gets this window's keyboard and mouse input.
 	/// </summary>
 	/// <remarks>

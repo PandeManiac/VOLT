@@ -15,6 +15,8 @@ public sealed class EditorSettingsTests
 		Assert.Equal(EditorSettings.CurrentVersion, settings.Version);
 		Assert.Equal(60, settings.TargetFrameRate);
 		Assert.Equal(1f, settings.InterfaceScale, 3);
+		Assert.Equal(1600, settings.WindowWidth);
+		Assert.Equal(960, settings.WindowHeight);
 	}
 
 	[Theory]
@@ -81,13 +83,62 @@ public sealed class EditorSettingsTests
 			3);
 	}
 
+	[Theory]
+	[InlineData(0, 0, 640, 480)]
+	[InlineData(-100, -100, 640, 480)]
+	[InlineData(640, 480, 640, 480)]
+	[InlineData(1280, 720, 1280, 720)]
+	[InlineData(99999, 99999, 8192, 8192)]
+	public void Clamp_BringsWindowDimensionsIntoTheSupportedRange(
+		int width,
+		int height,
+		int expectedWidth,
+		int expectedHeight)
+	{
+		Assert.Equal(
+			expectedWidth,
+			EditorSettings.ClampWindowWidth(width));
+
+		Assert.Equal(
+			expectedHeight,
+			EditorSettings.ClampWindowHeight(height));
+	}
+
+	[Fact]
+	public void Normalize_ClampsUnrepresentableWindowDimensions()
+	{
+		EditorSettings normalized = new EditorSettings
+		{
+			WindowWidth = 100,
+			WindowHeight = int.MaxValue
+		}.Normalize();
+
+		Assert.Equal(EditorSettings.MinimumWindowWidth, normalized.WindowWidth);
+		Assert.Equal(EditorSettings.MaximumWindowDimension, normalized.WindowHeight);
+	}
+
+	[Fact]
+	public void Deserialize_KeepsWindowDefaultsForFilesWithoutGeometry()
+	{
+		EditorSettings restored = EditorSettings.Deserialize(
+			"{ \"version\": 1, \"targetFrameRate\": 144, " +
+			"\"interfaceScale\": 1.25 }");
+
+		Assert.Equal(144, restored.TargetFrameRate);
+		Assert.Equal(1.25f, restored.InterfaceScale, 3);
+		Assert.Equal(EditorSettings.DefaultWindowWidth, restored.WindowWidth);
+		Assert.Equal(EditorSettings.DefaultWindowHeight, restored.WindowHeight);
+	}
+
 	[Fact]
 	public void Serialize_RoundTripsThroughDeserialize()
 	{
 		EditorSettings settings = new()
 		{
 			TargetFrameRate = 144,
-			InterfaceScale = 1.25f
+			InterfaceScale = 1.25f,
+			WindowWidth = 1280,
+			WindowHeight = 720
 		};
 
 		EditorSettings restored = EditorSettings.Deserialize(
@@ -95,6 +146,8 @@ public sealed class EditorSettingsTests
 
 		Assert.Equal(144, restored.TargetFrameRate);
 		Assert.Equal(1.25f, restored.InterfaceScale, 3);
+		Assert.Equal(1280, restored.WindowWidth);
+		Assert.Equal(720, restored.WindowHeight);
 		Assert.Equal(EditorSettings.CurrentVersion, restored.Version);
 	}
 

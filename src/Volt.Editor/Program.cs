@@ -134,8 +134,8 @@ internal static class Program
 				EnableValidation = validation,
 				Theme = UiTheme.CreateDark(),
 				Size = new Volt.Platform.Windows.WindowSize(
-					width ?? 1600,
-					height ?? 960)
+					width ?? settings.WindowWidth,
+					height ?? settings.WindowHeight)
 			});
 
 		Console.WriteLine($"GPU: {host.DeviceName}");
@@ -199,11 +199,31 @@ internal static class Program
 				}
 			});
 
+		// A maximized or minimized window does not report a useful restore
+		// size: the first would reopen a normal window at screen size, and
+		// the second may report no drawable area. Keep the saved size in
+		// both cases instead of overwriting it with a transient one.
+		int savedWidth = settings.WindowWidth;
+		int savedHeight = settings.WindowHeight;
+
+		if (!host.Window.IsMaximized)
+		{
+			Volt.Platform.Windows.WindowSize windowSize = host.Window.Size;
+
+			if (windowSize.IsPositive)
+			{
+				savedWidth = windowSize.Width;
+				savedHeight = windowSize.Height;
+			}
+		}
+
 		SaveWorkspace(session.Project?.RootPath, shell.Layout);
 		SaveSettings(
 			session.Project?.RootPath,
 			session.TargetFrameRate,
-			shell.UiScale);
+			shell.UiScale,
+			savedWidth,
+			savedHeight);
 
 		Console.WriteLine(
 			$"Presented {host.PresentedFrames} accepted frames.");
@@ -492,7 +512,9 @@ internal static class Program
 	private static void SaveSettings(
 		string? projectRoot,
 		int targetFrameRate,
-		float interfaceScale)
+		float interfaceScale,
+		int windowWidth,
+		int windowHeight)
 	{
 		if (projectRoot is null)
 		{
@@ -510,7 +532,9 @@ internal static class Program
 			EditorSettings settings = new()
 			{
 				TargetFrameRate = targetFrameRate,
-				InterfaceScale = interfaceScale
+				InterfaceScale = interfaceScale,
+				WindowWidth = windowWidth,
+				WindowHeight = windowHeight
 			};
 
 			string temporary = path + ".tmp";
