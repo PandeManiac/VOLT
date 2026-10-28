@@ -249,7 +249,9 @@ public sealed class VulkanUiHost : IDisposable
 	/// renders into its own offscreen image should keep one image per
 	/// slot: the image a frame samples is then written by the same
 	/// submission that samples it, and the other slot cannot still be
-	/// reading it. The value only advances when a frame is submitted.
+	/// reading it. The value is published before the frame paints, so a
+/// viewport prepares the target that frame records into, and it only
+/// advances when a frame is submitted.
 	/// </remarks>
 	public int CurrentFrameSlot { get; private set; }
 
@@ -504,6 +506,14 @@ public sealed class VulkanUiHost : IDisposable
 		}
 
 		LogicalSize = surface;
+
+		// The slot is published before the UI paints, not while
+		// presenting. A viewport prepares and paints the target named by
+		// the current slot during Draw, and the frame afterwards records
+		// into that same target. Publishing it only in Present would
+		// leave the freshly painted target unrecorded and sampled while
+		// it is still Undefined.
+		CurrentFrameSlot = _frameSlot % PixelSlots;
 
 		InputSnapshot input = _window.Input.Snapshot;
 
