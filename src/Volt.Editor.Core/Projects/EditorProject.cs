@@ -217,6 +217,58 @@ public sealed class EditorProject
 		return scene;
 	}
 
+	/// <summary>
+	/// Copies an asset to a numbered sibling in the same folder.
+	/// </summary>
+	/// <remarks>
+	/// The copy never overwrites an existing file. Scene assets keep
+	/// their compound extension, so <c>Main.volt.scene.json</c> becomes
+	/// <c>Main 1.volt.scene.json</c> instead of being split at the first
+	/// dot.
+	/// </remarks>
+	/// <returns>The project-relative identity of the copy.</returns>
+	public string DuplicateAsset(string relativePath)
+	{
+		string source = ResolvePath(relativePath);
+
+		if (!File.Exists(source))
+		{
+			throw new FileNotFoundException(
+				$"The asset '{relativePath}' does not exist.",
+				source);
+		}
+
+		string directory = Path.GetDirectoryName(source)!;
+		string fileName = Path.GetFileName(source);
+		string extension = fileName.EndsWith(
+			SceneSerializer.FileExtension,
+			StringComparison.OrdinalIgnoreCase)
+			? SceneSerializer.FileExtension
+			: Path.GetExtension(fileName);
+		string stem = fileName[..^extension.Length];
+		string relativeDirectory = Path.GetRelativePath(RootPath, directory);
+
+		int index = 1;
+		string relativeCopy;
+		string destination;
+
+		do
+		{
+			string copyName = $"{stem} {index}{extension}";
+			relativeCopy = relativeDirectory == "."
+				? copyName
+				: Path.Combine(relativeDirectory, copyName);
+			destination = ResolvePath(relativeCopy);
+			index++;
+		}
+		while (File.Exists(destination) || Directory.Exists(destination));
+
+		File.Copy(source, destination, overwrite: false);
+		AssetCatalog.Refresh();
+
+		return ProjectAssetCatalog.NormalizeId(relativeCopy);
+	}
+
 	public IReadOnlyList<string> EnumerateScenePaths()
 	{
 		if (!Directory.Exists(ScenesPath))

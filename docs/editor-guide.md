@@ -296,8 +296,11 @@ ratios without discarding the state inside open panels.
   selected item into view, and changing the interface scale preserves
   the browser's folder, view, search, and selection. Opening another
   project returns the browser to that project's root and clears its
-  search filter. Scene shortcuts such as Delete and F2 stand down while
-  the browser has keyboard focus.
+  search filter. Right-click an asset for **Open** or **Duplicate**;
+  duplicating writes a numbered sibling such as
+  `Main 1.volt.scene.json`, selects it, and never overwrites an existing
+  file. Scene shortcuts such as Delete and F2 stand down while the
+  browser has keyboard focus.
 - **Console** records editor actions and errors.
 - **Profiler** reports frame timing and runtime counts while the
   editor is running.

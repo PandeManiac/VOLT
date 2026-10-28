@@ -49,6 +49,8 @@ public sealed class IconTileView : Widget
 
 	public event Action<IconTileView>? Activated;
 
+	public event Action<IconTileView, UiPoint>? ContextMenuRequested;
+
 	public UiIcon Icon { get; set; }
 
 	public object? Tag { get; set; }
@@ -187,6 +189,18 @@ public sealed class IconTileView : Widget
 		{
 			drawList.PopClip();
 		}
+	}
+
+	protected internal override bool OnPointerDown(UiPointerEvent pointer)
+	{
+		if (pointer.Button == UiMouseButton.Right)
+		{
+			Focus();
+			ContextMenuRequested?.Invoke(this, pointer.GlobalPosition);
+			return true;
+		}
+
+		return base.OnPointerDown(pointer);
 	}
 
 	protected internal override void OnClick(int clickCount)

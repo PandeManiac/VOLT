@@ -110,4 +110,23 @@ public sealed class EditorProjectTests : IDisposable
 		Assert.Equal(scene.Id, restored.Id);
 		Assert.Equal(1, restored.EntityCount);
 	}
+
+	[Fact]
+	public void DuplicateAsset_UsesNumberedSiblingsWithoutOverwriting()
+	{
+		EditorProject project = EditorProject.Create(_root, "Duplicates");
+		project.CreateScene("Scenes/Level.volt.scene.json", "Level");
+
+		string first = project.DuplicateAsset("Scenes/Level.volt.scene.json");
+		string second = project.DuplicateAsset("Scenes/Level.volt.scene.json");
+
+		Assert.Equal("Scenes/Level 1.volt.scene.json", first);
+		Assert.Equal("Scenes/Level 2.volt.scene.json", second);
+		Assert.True(File.Exists(project.ResolvePath(first)));
+		Assert.True(File.Exists(project.ResolvePath(second)));
+		Assert.True(project.AssetCatalog.FileExists(first));
+		Assert.True(project.AssetCatalog.FileExists(second));
+		Assert.True(File.Exists(project.ResolvePath(
+			"Scenes/Level.volt.scene.json")));
+	}
 }

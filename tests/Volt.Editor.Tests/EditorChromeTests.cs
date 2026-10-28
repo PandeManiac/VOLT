@@ -1352,6 +1352,122 @@ public sealed class EditorChromeTests : IDisposable
 		Assert.False(mainTile.IsSelected);
 	}
 
+	[Fact]
+	public void ProjectBrowser_ContextMenuDuplicatesAScene()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.15);
+
+		IconButton listMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as a list");
+
+		Click(listMode);
+		Paint(0.2);
+
+		TreeView list = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(root => root.Tag is ProjectAsset));
+
+		UiRect content = list.GlobalContentBounds;
+		UiPoint row = new(content.X + 40f, content.Y + 5f);
+
+		_context.PointerDown(UiMouseButton.Right, row);
+
+		Assert.IsType<MenuPopup>(_context.ActivePopup);
+
+		// The popup has Open and Duplicate. The first Down highlights
+		// Open and the second highlights Duplicate; Enter runs it.
+		_context.KeyDown(UiKey.Down);
+		_context.KeyDown(UiKey.Down);
+		_context.KeyDown(UiKey.Enter);
+		Paint(0.3);
+
+		const string Copy = "Scenes/Main 1.volt.scene.json";
+
+		Assert.True(File.Exists(_session.Project!.ResolvePath(Copy)));
+		Assert.True(_session.Project.AssetCatalog.FileExists(Copy));
+
+		TreeView rebuilt = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(root => root.Tag is ProjectAsset));
+
+		ProjectAsset selected = Assert.IsType<ProjectAsset>(
+			rebuilt.SelectedItem?.Tag);
+
+		Assert.Equal(Copy, selected.Id);
+	}
+
+	[Fact]
+	public void ProjectBrowser_TileContextMenuDuplicatesAScene()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView main = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Main.volt.scene.json");
+
+		UiPoint center = main.GlobalVisualBounds.Center;
+
+		_context.PointerDown(UiMouseButton.Right, center);
+
+		Assert.IsType<MenuPopup>(_context.ActivePopup);
+
+		_context.KeyDown(UiKey.Down);
+		_context.KeyDown(UiKey.Down);
+		_context.KeyDown(UiKey.Enter);
+		Paint(0.3);
+
+		const string Copy = "Scenes/Main 1.volt.scene.json";
+
+		Assert.True(File.Exists(_session.Project!.ResolvePath(Copy)));
+
+		IconTileView duplicated = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Main 1.volt.scene.json");
+
+		Assert.True(duplicated.IsSelected);
+	}
+
 	private void Click(Widget widget)
 	{
 		UiPoint center = widget.GlobalVisualBounds.Center;

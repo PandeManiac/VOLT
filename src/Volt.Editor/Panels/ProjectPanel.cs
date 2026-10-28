@@ -140,6 +140,7 @@ public sealed class ProjectPanel : Panel
 
 		_list.SelectionChanged += OnListSelectionChanged;
 		_list.ItemActivated += OnListActivated;
+		_list.ContextMenuRequested += OnListContextMenuRequested;
 
 		_listScroll = new ScrollView
 		{
@@ -772,6 +773,7 @@ public sealed class ProjectPanel : Panel
 
 			tile.Activated += OnTileActivated;
 			tile.Clicked += OnTileClicked;
+			tile.ContextMenuRequested += OnTileContextMenuRequested;
 
 			_tileViews.Add(tile);
 			_tiles.Add(tile);
@@ -802,6 +804,7 @@ public sealed class ProjectPanel : Panel
 
 			tile.Activated += OnTileActivated;
 			tile.Clicked += OnTileClicked;
+			tile.ContextMenuRequested += OnTileContextMenuRequested;
 
 			_tileViews.Add(tile);
 			_tiles.Add(tile);
@@ -912,6 +915,73 @@ public sealed class ProjectPanel : Panel
 	{
 		int slash = id.LastIndexOf('/');
 		return slash < 0 ? string.Empty : id[..slash];
+	}
+
+	private void OnTileContextMenuRequested(
+		IconTileView tile,
+		UiPoint position)
+	{
+		if (tile.Tag is not ProjectAsset asset)
+		{
+			return;
+		}
+
+		_selectedId = asset.Id;
+		_selectedIsFolder = false;
+		SyncSelection(updateDetails: true);
+		ShowAssetContextMenu(asset, position);
+	}
+
+	private void OnListContextMenuRequested(
+		TreeView tree,
+		TreeViewItem item,
+		UiPoint position)
+	{
+		if (item.Tag is ProjectAsset asset)
+		{
+			ShowAssetContextMenu(asset, position);
+		}
+	}
+
+	private void ShowAssetContextMenu(ProjectAsset asset, UiPoint position)
+	{
+		MenuItem open = new("Open", () => OpenTag(asset))
+		{
+			IsEnabled = asset.Kind == ProjectAssetKind.Scene
+		};
+
+		MenuItem duplicate = new("Duplicate", () => DuplicateAsset(asset));
+
+		MenuPopup menu = new([open, duplicate]);
+
+		Context?.ShowPopup(
+			menu,
+			new UiRect(position.X, position.Y, 0f, 0f));
+	}
+
+	private void DuplicateAsset(ProjectAsset asset)
+	{
+		if (_session.Project is not EditorProject project)
+		{
+			return;
+		}
+
+		try
+		{
+			string copyId = project.DuplicateAsset(asset.Id);
+
+			_selectedId = copyId;
+			_selectedIsFolder = false;
+			Rebuild(force: true);
+			_revealSelectionPending = true;
+			_session.SetStatus($"Duplicated {asset.FileName}");
+		}
+
+		catch (Exception exception)
+		{
+			_session.Log(exception.Message, EditorLogLevel.Error);
+			_session.SetStatus(exception.Message);
+		}
 	}
 
 	private void OnTileClicked(IconTileView tile)
