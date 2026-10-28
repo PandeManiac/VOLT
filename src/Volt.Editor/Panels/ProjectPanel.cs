@@ -61,6 +61,7 @@ public sealed class ProjectPanel : Panel
 	private bool _gridMode = true;
 	private bool _updating;
 	private bool _syncingSelection;
+	private bool _revealSelectionPending;
 	private bool _disposed;
 
 	public ProjectPanel(EditorSession session)
@@ -248,6 +249,75 @@ public sealed class ProjectPanel : Panel
 		_listScroll.IsVisible = !grid;
 		_emptyHost.IsVisible = IsEmpty();
 		SyncSelection(updateDetails: false);
+		_revealSelectionPending = true;
+	}
+
+	protected override void ArrangeContent(UiRect contentBounds)
+	{
+		base.ArrangeContent(contentBounds);
+
+		if (_revealSelectionPending)
+		{
+			_revealSelectionPending = false;
+			RevealSelection();
+		}
+	}
+
+	private void RevealSelection()
+	{
+		if (_selectedId.Length == 0)
+		{
+			return;
+		}
+
+		if (!_gridMode)
+		{
+			if (_listRows.TryGetValue(
+				SelectionKey(_selectedId, _selectedIsFolder),
+				out TreeViewItem? row))
+			{
+				_list.Reveal(row);
+			}
+
+			return;
+		}
+
+		IconTileView? selected = null;
+
+		foreach (IconTileView tile in _tileViews)
+		{
+			if (IsSelectedTag(tile.Tag))
+			{
+				selected = tile;
+				break;
+			}
+		}
+
+		if (selected is null)
+		{
+			return;
+		}
+
+		UiRect viewport = _tileScroll.GlobalContentBounds;
+		UiRect bounds = selected.GlobalVisualBounds;
+
+		if (viewport.IsEmpty || bounds.IsEmpty)
+		{
+			return;
+		}
+
+		float offset = _tileScroll.ScrollOffset.Y;
+
+		if (bounds.Y < viewport.Y)
+		{
+			offset -= viewport.Y - bounds.Y;
+		}
+		else if (bounds.Bottom > viewport.Bottom)
+		{
+			offset += bounds.Bottom - viewport.Bottom;
+		}
+
+		_tileScroll.SetScrollOffset(offset);
 	}
 
 	private bool IsEmpty()
@@ -308,6 +378,7 @@ public sealed class ProjectPanel : Panel
 				_selectedId = ProjectAssetCatalog.NormalizeId(relative);
 				_selectedIsFolder = false;
 				Rebuild(force: true);
+				_revealSelectionPending = true;
 			}
 		}
 

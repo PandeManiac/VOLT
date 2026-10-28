@@ -1119,6 +1119,81 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_RevealsSelectionWhenSwitchingViews()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		string assets = _session.Project!.AssetsPath;
+
+		for (int index = 0; index < 60; index++)
+		{
+			File.WriteAllText(
+				Path.Combine(assets, $"Asset{index:00}.mat"),
+				"material");
+		}
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem assetsFolder = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Assets");
+
+		folders.SetSelection([assetsFolder]);
+		Paint(0.2);
+
+		IconButton listMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as a list");
+
+		Click(listMode);
+		Paint(0.3);
+
+		TreeView list = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(root => root.Tag is ProjectAsset));
+
+		Assert.True(list.Roots.Count >= 60);
+
+		list.SetSelection([list.Roots[^1]]);
+		Paint(0.4);
+
+		IconButton gridMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as tiles");
+
+		Click(gridMode);
+		Paint(0.5);
+		Paint(0.6);
+
+		ScrollView tiles = Descendants(project)
+			.OfType<ScrollView>()
+			.Single(view => view.Content is TileWrapPanel);
+
+		IconTileView selected = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.IsSelected);
+
+		UiRect viewport = tiles.GlobalContentBounds;
+		UiRect bounds = selected.GlobalVisualBounds;
+
+		Assert.True(
+			bounds.Y >= viewport.Y - 0.5f &&
+				bounds.Bottom <= viewport.Bottom + 0.5f,
+			"The selected tile must be scrolled into the grid viewport.");
+	}
+
+	[Fact]
 	public void ProjectBrowser_SelectionFollowsAssetsBetweenGridAndList()
 	{
 		const string Main = "Scenes/Main.volt.scene.json";
