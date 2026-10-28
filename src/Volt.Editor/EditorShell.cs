@@ -212,6 +212,7 @@ public sealed class EditorShell : Panel
 	public void Update(double deltaSeconds, float dpiScale = 1f)
 	{
 		_session.Update(deltaSeconds);
+		_session.RecordFrame(deltaSeconds);
 
 		for (int index = _frameTicks.Count - 1;
 			index >= 0;

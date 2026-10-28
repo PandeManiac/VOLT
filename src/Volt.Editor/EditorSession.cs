@@ -61,6 +61,24 @@ public sealed class EditorSession : IDisposable
 
 	public UndoStack Undo { get; } = new();
 
+	/// <summary>
+	/// Gets the rolling record of editor frame intervals the profiler
+	/// reads.
+	/// </summary>
+	public FrameTimeline Frames { get; } = new();
+
+	/// <summary>
+	/// Records one editor frame interval.
+	/// </summary>
+	/// <param name="deltaSeconds">
+	/// The real interval in seconds. Values that are not finite and
+	/// positive are ignored.
+	/// </param>
+	public void RecordFrame(double deltaSeconds)
+	{
+		Frames.Record(deltaSeconds);
+	}
+
 	public PlaySession? Play => _play;
 
 	public RuntimeInputState Input { get; } = new();
