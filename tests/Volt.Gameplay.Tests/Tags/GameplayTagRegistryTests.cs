@@ -236,6 +236,13 @@ public sealed class GameplayTagRegistryTests
 	[Fact]
 	public void EnumerateTags_YieldsResolvableTags()
 	{
+		// The shared registry does not seed itself: touching a schema
+		// tag runs the static initializer that registers the built-in
+		// tags. Without this the test only passes when another test
+		// happened to initialize the schema first, which made it fail
+		// when run on its own.
+		_ = TagSchema.StatusStunned;
+
 		int seen = 0;
 
 		foreach (GameplayTag tag in Registry.EnumerateTags())
