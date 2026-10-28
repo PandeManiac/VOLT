@@ -370,12 +370,12 @@ public sealed class EditorShell : Panel
 
 		_projectPath = new TextField(_defaultProjectPath)
 		{
-			Height = UiLength.Points(28f)
+			Height = UiLength.Points(32f)
 		};
 
 		_projectName = new TextField("Sample Game")
 		{
-			Height = UiLength.Points(28f)
+			Height = UiLength.Points(32f)
 		};
 
 		_startError = new Label(string.Empty)
@@ -958,8 +958,8 @@ public sealed class EditorShell : Panel
 
 		Panel card = new()
 		{
-			Width = UiLength.Points(500f),
-			Height = UiLength.Points(380f),
+			Width = UiLength.Points(520f),
+			Height = UiLength.Points(404f),
 			HorizontalAlignment = UiAlignment.Center,
 			VerticalAlignment = UiAlignment.Center,
 			DrawBackground = true,
@@ -1004,7 +1004,7 @@ public sealed class EditorShell : Panel
 		titles.Add(new Label(
 			"A native C# game engine and editor built on Volt.Ui and Vulkan.")
 		{
-			Font = _theme.Fonts.Small,
+			Font = _theme.Fonts.Body,
 			TextColor = _theme.Palette.TextMuted,
 			Wrap = UiTextWrap.Wrap
 		});
@@ -1014,13 +1014,13 @@ public sealed class EditorShell : Panel
 		content.Add(new Separator());
 		content.Add(new Label("Project folder")
 		{
-			Font = _theme.Fonts.Small,
+			Font = _theme.Fonts.Body,
 			TextColor = _theme.Palette.TextMuted
 		});
 		content.Add(projectPath);
 		content.Add(new Label("Project name")
 		{
-			Font = _theme.Fonts.Small,
+			Font = _theme.Fonts.Body,
 			TextColor = _theme.Palette.TextMuted
 		});
 		content.Add(projectName);
@@ -1055,7 +1055,7 @@ public sealed class EditorShell : Panel
 			"and an editable spin behaviour.")
 		{
 			Font = _theme.Fonts.Small,
-			TextColor = _theme.Palette.TextDisabled,
+			TextColor = _theme.Palette.TextMuted,
 			Wrap = UiTextWrap.Wrap
 		});
 
