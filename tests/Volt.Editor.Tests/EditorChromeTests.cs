@@ -432,6 +432,49 @@ public sealed class EditorChromeTests : IDisposable
 		}
 	}
 
+	[Fact]
+	public void ToolHotkeys_DoNotFireWhileATextFieldIsFocused()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneDocument scene = _session.Scene!;
+		SceneEntity cube = scene.Entities.First(
+			entity => entity.GetComponent<MeshRendererData>() is not null);
+
+		_session.Tool = EditorTool.Select;
+		_session.Select(cube.Id);
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.Text == cube.Name);
+
+		name.Focus();
+		name.SetSelection(name.Text.Length, name.Text.Length);
+
+		_context.KeyDown(UiKey.W);
+		Assert.Equal(EditorTool.Select, _session.Tool);
+
+		_context.TextInput("W");
+
+		Assert.Equal($"{cube.Name}W", name.Text);
+
+		// The shortcut still works once the field no longer owns the
+		// keyboard.
+		_context.ClearFocus();
+		_session.Tool = EditorTool.Select;
+
+		Assert.True(_context.KeyDown(UiKey.W));
+		Assert.Equal(EditorTool.Translate, _session.Tool);
+	}
+
 	private EditorShell BuildShell(float width, float height)
 	{
 		EditorShell shell = new(_session);

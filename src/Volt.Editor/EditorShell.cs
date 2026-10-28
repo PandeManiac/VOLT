@@ -1294,7 +1294,10 @@ public sealed class EditorShell : Panel
 
 	private bool CanUseToolHotkey()
 	{
-		return !_session.ViewportNavigating;
+		// A tool hotkey must never steal a letter from a field the user
+		// is typing in. Viewport navigation owns the same letters too.
+		return !_session.ViewportNavigating &&
+			Context?.FocusedWidget is not TextField;
 	}
 
 	/// <summary>
