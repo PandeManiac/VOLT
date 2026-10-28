@@ -274,6 +274,28 @@ public sealed class EditorShell : Panel
 	}
 
 	/// <summary>
+	/// Restores the editor's own settings to their defaults.
+	/// </summary>
+	/// <remarks>
+	/// This touches only editor preferences: the open project, the
+	/// scene, the selection, and the undo history are authored state and
+	/// stay exactly as they were. Resetting the interface scale rebuilds
+	/// the chrome, which the preferences modal accounts for by closing
+	/// itself before calling this.
+	/// </remarks>
+	internal void ResetEditorSettings()
+	{
+		_session.TargetFrameRate = EditorSettings.DefaultTargetFrameRate;
+
+		if (MathF.Abs(_uiScale - 1f) > 0.001f)
+		{
+			ApplyUiScale(1f);
+		}
+
+		_session.SetStatus("Editor settings reset to defaults");
+	}
+
+	/// <summary>
 	/// Restores the default workspace arrangement.
 	/// </summary>
 	public void ResetLayout()
@@ -1462,7 +1484,7 @@ public sealed class EditorShell : Panel
 		Panel card = new()
 		{
 			Width = UiLength.Points(380f),
-			Height = UiLength.Points(370f),
+			Height = UiLength.Points(410f),
 			HorizontalAlignment = UiAlignment.Center,
 			VerticalAlignment = UiAlignment.Center,
 			DrawBackground = true,
@@ -1579,6 +1601,23 @@ public sealed class EditorShell : Panel
 			Wrap = UiTextWrap.Wrap,
 			FlexGrow = 1f
 		});
+
+		Button reset = new("Reset to Defaults")
+		{
+			HorizontalAlignment = UiAlignment.Start,
+			MinHeight = 28f,
+			IsEnabled = _session.TargetFrameRate !=
+					EditorSettings.DefaultTargetFrameRate ||
+				MathF.Abs(_uiScale - 1f) > 0.001f
+		};
+
+		reset.Clicked += _ =>
+		{
+			context.CloseModal();
+			ResetEditorSettings();
+		};
+
+		content.Add(reset);
 
 		Button close = new("Close")
 		{
