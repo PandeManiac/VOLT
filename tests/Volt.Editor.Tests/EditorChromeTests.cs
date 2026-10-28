@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Text;
+using Volt.Editor.Core.Projects;
 using Volt.Editor.Core.Scenes;
 using Volt.Editor.Panels;
 using Volt.Ui;
@@ -887,6 +888,103 @@ public sealed class EditorChromeTests : IDisposable
 		Assert.Contains(
 			Descendants(project).OfType<IconTileView>(),
 			tile => tile.Text == "Scene1.volt.scene.json");
+	}
+
+	[Fact]
+	public void ProjectBrowser_SelectionFollowsAssetsBetweenGridAndList()
+	{
+		const string Main = "Scenes/Main.volt.scene.json";
+		const string Second = "Scenes/Second.volt.scene.json";
+
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+		Assert.NotNull(_session.CreateScene(Second, "Second"));
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		Assert.Single(folders.Roots);
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView main = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Main.volt.scene.json");
+
+		Click(main);
+		Paint(0.3);
+
+		Assert.True(main.IsSelected);
+
+		IconButton listMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as a list");
+
+		Click(listMode);
+		Paint(0.4);
+
+		TreeView list = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(root => root.Tag is ProjectAsset));
+
+		ProjectAsset selected = Assert.IsType<ProjectAsset>(list.SelectedItem?.Tag);
+
+		Assert.Equal(Main, selected.Id);
+
+		TreeViewItem second = list.Roots.Single(
+			root => root.Tag is ProjectAsset asset && asset.Id == Second);
+
+		list.SetSelection([second]);
+
+		IconButton gridMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as tiles");
+
+		Click(gridMode);
+		Paint(0.5);
+
+		IconTileView secondTile = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Second.volt.scene.json");
+
+		IconTileView mainTile = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Main.volt.scene.json");
+
+		Assert.True(secondTile.IsSelected);
+		Assert.False(mainTile.IsSelected);
+	}
+
+	private void Click(Widget widget)
+	{
+		UiPoint center = widget.GlobalVisualBounds.Center;
+
+		_context.PointerDown(UiMouseButton.Left, center);
+		_context.PointerUp(UiMouseButton.Left, center);
+	}
+
+	private void Paint(double time)
+	{
+		_context.BeginFrame(
+			time,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
 	}
 
 	private EditorShell BuildShell(float width, float height)

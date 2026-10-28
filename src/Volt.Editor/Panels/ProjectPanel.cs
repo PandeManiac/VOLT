@@ -45,12 +45,16 @@ public sealed class ProjectPanel : Panel
 	private readonly IconButton _upButton;
 
 	private readonly List<IconTileView> _tileViews = [];
+	private readonly Dictionary<string, TreeViewItem> _listRows =
+		new(StringComparer.OrdinalIgnoreCase);
 
 	private string _folder = string.Empty;
-	private string _selectedAssetId = string.Empty;
+	private string _selectedId = string.Empty;
+	private bool _selectedIsFolder;
 	private string _signature = string.Empty;
 	private bool _gridMode = true;
 	private bool _updating;
+	private bool _syncingSelection;
 	private bool _disposed;
 
 	public ProjectPanel(EditorSession session)
@@ -237,6 +241,7 @@ public sealed class ProjectPanel : Panel
 		_tileScroll.IsVisible = grid;
 		_listScroll.IsVisible = !grid;
 		_emptyHost.IsVisible = IsEmpty();
+		SyncSelection(updateDetails: false);
 	}
 
 	private bool IsEmpty()
@@ -294,6 +299,8 @@ public sealed class ProjectPanel : Panel
 				// the panel still shows the old folder. Move to the new
 				// scene's folder and rebuild again so its tile is visible.
 				_folder = ParentFolder(relative);
+				_selectedId = ProjectAssetCatalog.NormalizeId(relative);
+				_selectedIsFolder = false;
 				Rebuild(force: true);
 			}
 		}
@@ -331,6 +338,9 @@ public sealed class ProjectPanel : Panel
 			_updating = true;
 			_tiles.ClearChildren();
 			_tileViews.Clear();
+			_listRows.Clear();
+			_selectedId = string.Empty;
+			_selectedIsFolder = false;
 			_folders.Clear();
 			_list.Clear();
 			_breadcrumb.Text = "No project open";
@@ -430,12 +440,9 @@ public sealed class ProjectPanel : Panel
 
 					nodes[path] = node;
 
-					if (parent is null)
-					{
-						_folders.AddRoot(node);
-					}
-
-					else
+					// Top-level folders are attached under the project root
+					// below, once that root exists.
+					if (parent is not null)
 					{
 						parent.AddChild(node);
 					}
@@ -453,16 +460,6 @@ public sealed class ProjectPanel : Panel
 			IsExpanded = true,
 			Icon = UiIcon.Project
 		};
-
-		foreach (KeyValuePair<string, TreeViewItem> pair in nodes)
-		{
-			if (pair.Key.Contains('/'))
-			{
-				continue;
-			}
-
-			pair.Value.RemoveFromParent();
-		}
 
 		foreach (KeyValuePair<string, TreeViewItem> pair in nodes)
 		{
@@ -505,6 +502,7 @@ public sealed class ProjectPanel : Panel
 		}
 
 		_tileViews.Clear();
+		_listRows.Clear();
 		_list.Clear();
 
 		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
@@ -598,6 +596,7 @@ public sealed class ProjectPanel : Panel
 				IconColor = theme.Palette.Warning
 			};
 
+			_listRows[FolderKey(folder.Key)] = row;
 			_list.AddRoot(row);
 		}
 
@@ -615,14 +614,6 @@ public sealed class ProjectPanel : Panel
 			tile.Activated += OnTileActivated;
 			tile.Clicked += OnTileClicked;
 
-			if (string.Equals(
-				asset.Id,
-				_selectedAssetId,
-				StringComparison.OrdinalIgnoreCase))
-			{
-				tile.IsSelected = true;
-			}
-
 			_tileViews.Add(tile);
 			_tiles.Add(tile);
 
@@ -635,11 +626,97 @@ public sealed class ProjectPanel : Panel
 				IconColor = EditorIcons.AssetColor(asset.Kind, theme.Palette)
 			};
 
+			_listRows[AssetKey(asset.Id)] = row;
 			_list.AddRoot(row);
 		}
 
 		_tiles.InvalidateMeasure();
 		_list.Refresh();
+		SyncSelection(updateDetails: false);
+	}
+
+	private static string AssetKey(string id)
+	{
+		return "asset:" + id;
+	}
+
+	private static string FolderKey(string id)
+	{
+		return "folder:" + id;
+	}
+
+	private static string SelectionKey(string id, bool isFolder)
+	{
+		return isFolder ? FolderKey(id) : AssetKey(id);
+	}
+
+	private void SyncSelection(bool updateDetails)
+	{
+		if (_syncingSelection)
+		{
+			return;
+		}
+
+		_syncingSelection = true;
+
+		try
+		{
+			foreach (IconTileView tile in _tileViews)
+			{
+				tile.IsSelected = IsSelectedTag(tile.Tag);
+			}
+
+			List<TreeViewItem> selected = [];
+
+			if (_selectedId.Length > 0 &&
+				_listRows.TryGetValue(
+					SelectionKey(_selectedId, _selectedIsFolder),
+					out TreeViewItem? row))
+			{
+				selected.Add(row);
+			}
+
+			_list.SetSelection(selected);
+		}
+
+		finally
+		{
+			_syncingSelection = false;
+		}
+
+		if (updateDetails)
+		{
+			UpdateDetails();
+		}
+	}
+
+	private bool IsSelectedTag(object? tag)
+	{
+		if (_selectedId.Length == 0)
+		{
+			return false;
+		}
+
+		return _selectedIsFolder
+			? tag is string folder &&
+				string.Equals(folder, _selectedId, StringComparison.OrdinalIgnoreCase)
+			: tag is ProjectAsset asset &&
+				string.Equals(asset.Id, _selectedId, StringComparison.OrdinalIgnoreCase);
+	}
+
+	private void UpdateDetails()
+	{
+		if (_selectedIsFolder)
+		{
+			_details.Text = $"Folder  ·  {_selectedId}";
+			return;
+		}
+
+		ProjectAsset? asset = _session.Project?.AssetCatalog.Find(_selectedId);
+
+		_details.Text = asset is null
+			? string.Empty
+			: $"{asset.Kind}  ·  {asset.Id}  ·  {FormatSize(asset.Length)}";
 	}
 
 	private static string ParentFolder(string id)
@@ -650,23 +727,24 @@ public sealed class ProjectPanel : Panel
 
 	private void OnTileClicked(IconTileView tile)
 	{
-		foreach (IconTileView view in _tileViews)
-		{
-			view.IsSelected = ReferenceEquals(view, tile);
-		}
-
 		if (tile.Tag is ProjectAsset asset)
 		{
-			_selectedAssetId = asset.Id;
-
-			_details.Text =
-				$"{asset.Kind}  ·  {asset.Id}  ·  {FormatSize(asset.Length)}";
+			_selectedId = asset.Id;
+			_selectedIsFolder = false;
 		}
 
 		else if (tile.Tag is string folder)
 		{
-			_details.Text = $"Folder  ·  {folder}";
+			_selectedId = folder;
+			_selectedIsFolder = true;
 		}
+
+		else
+		{
+			return;
+		}
+
+		SyncSelection(updateDetails: true);
 	}
 
 	private void OnTileActivated(IconTileView tile)
@@ -701,13 +779,29 @@ public sealed class ProjectPanel : Panel
 			return;
 		}
 
+		if (_syncingSelection)
+		{
+			return;
+		}
+
 		if (selection[^1].Tag is ProjectAsset asset)
 		{
-			_selectedAssetId = asset.Id;
-
-			_details.Text =
-				$"{asset.Kind}  ·  {asset.Id}  ·  {FormatSize(asset.Length)}";
+			_selectedId = asset.Id;
+			_selectedIsFolder = false;
 		}
+
+		else if (selection[^1].Tag is string folder)
+		{
+			_selectedId = folder;
+			_selectedIsFolder = true;
+		}
+
+		else
+		{
+			return;
+		}
+
+		SyncSelection(updateDetails: true);
 	}
 
 	private void OnListActivated(TreeView tree, TreeViewItem item)

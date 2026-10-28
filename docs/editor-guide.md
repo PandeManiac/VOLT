@@ -288,7 +288,8 @@ ratios without discarding the state inside open panels.
 - **Project** browses the project folder through the asset catalog and
   can assign asset references in the inspector. Its **New Scene**
   action opens the scene and moves the browser to the scene's folder
-  so the new tile is visible.
+  so the new tile is visible. Grid and list modes share the selected
+  asset, so switching views keeps the same item highlighted.
 - **Console** records editor actions and errors.
 - **Profiler** reports frame timing and runtime counts while the
   editor is running.
