@@ -761,6 +761,95 @@ public sealed class EditorChromeTests : IDisposable
 		Assert.True(name.HasSelection);
 	}
 
+	[Fact]
+	public void EscapeRestoresTheNameWithoutDirtyingTheScene()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneDocument scene = _session.Scene!;
+		SceneEntity cube = scene.Entities.First(
+			entity => entity.GetComponent<MeshRendererData>() is not null);
+		string original = cube.Name;
+
+		_session.Select(cube.Id);
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		Assert.True(_context.KeyDown(UiKey.F2));
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.HasFocus);
+
+		_context.TextInput("Renamed");
+
+		Assert.Equal("Renamed", name.Text);
+
+		_context.KeyDown(UiKey.Escape);
+
+		Assert.Equal(original, name.Text);
+		Assert.Equal(original, cube.Name);
+		Assert.False(_session.IsSceneDirty);
+	}
+
+	[Fact]
+	public void RenameReopensAClosedInspectorAndFocusesIt()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneDocument scene = _session.Scene!;
+		SceneEntity cube = scene.Entities.First(
+			entity => entity.GetComponent<MeshRendererData>() is not null);
+
+		_session.Select(cube.Id);
+
+		shell.Layout.ClosePanel("inspector");
+		shell.Dock.Refresh();
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		Assert.False(shell.Layout.IsOpen("inspector"));
+		Assert.DoesNotContain(
+			Descendants(shell),
+			widget => widget is InspectorPanel);
+
+		Assert.True(_context.KeyDown(UiKey.F2));
+
+		_context.BeginFrame(
+			0.2,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+		shell.Update(1.0 / 60.0);
+
+		Assert.True(shell.Layout.IsOpen("inspector"));
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.HasFocus);
+
+		Assert.Same(name, _context.FocusedWidget);
+		Assert.True(name.HasSelection);
+		Assert.Equal(cube.Name, name.Text);
+	}
+
 	private EditorShell BuildShell(float width, float height)
 	{
 		EditorShell shell = new(_session);
