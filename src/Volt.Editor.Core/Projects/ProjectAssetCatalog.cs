@@ -37,6 +37,8 @@ public sealed class ProjectAssetCatalog
 
 	private readonly List<ProjectAsset> _assets = [];
 
+	private readonly List<string> _folders = [];
+
 	public ProjectAssetCatalog(string projectRoot)
 	{
 		ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
@@ -47,16 +49,24 @@ public sealed class ProjectAssetCatalog
 
 	public IReadOnlyList<ProjectAsset> Assets => _assets;
 
+	/// <summary>
+	/// Gets the project-relative folders beneath Assets and Scenes,
+	/// including folders that contain no files.
+	/// </summary>
+	public IReadOnlyList<string> Folders => _folders;
+
 	public void Refresh()
 	{
 		_byId.Clear();
 		_assets.Clear();
+		_folders.Clear();
 
 		ScanDirectory("Assets");
 		ScanDirectory("Scenes");
 
 		_assets.Sort((left, right) =>
 			string.Compare(left.Id, right.Id, StringComparison.OrdinalIgnoreCase));
+		_folders.Sort(StringComparer.OrdinalIgnoreCase);
 	}
 
 	public ProjectAsset? Find(string id)
@@ -90,6 +100,38 @@ public sealed class ProjectAssetCatalog
 		if (!Directory.Exists(directory))
 		{
 			return;
+		}
+
+		_folders.Add(NormalizeId(relativeDirectory));
+
+		string[] directories;
+
+		try
+		{
+			directories = Directory.GetDirectories(
+				directory,
+				"*",
+				SearchOption.AllDirectories);
+		}
+
+		catch (Exception exception)
+			when (exception is IOException or UnauthorizedAccessException)
+		{
+			directories = [];
+		}
+
+		foreach (string child in directories)
+		{
+			string relative = Path.GetRelativePath(ProjectRoot, child);
+			string id = NormalizeId(relative);
+
+			if (id.StartsWith("../", StringComparison.Ordinal) ||
+				Path.IsPathRooted(id))
+			{
+				continue;
+			}
+
+			_folders.Add(id);
 		}
 
 		IEnumerable<string> files;

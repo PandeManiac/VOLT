@@ -95,6 +95,51 @@ public sealed class EditorProjectTests : IDisposable
 	}
 
 	[Fact]
+	public void CreateFolder_CreatesAnEmptyFolderAndCatalogReportsIt()
+	{
+		EditorProject project = EditorProject.Create(_root, "Folders");
+
+		string folder = project.CreateFolder("Assets/Materials");
+
+		Assert.Equal("Assets/Materials", folder);
+		Assert.True(Directory.Exists(project.ResolvePath(folder)));
+		Assert.Empty(Directory.EnumerateFiles(
+			project.ResolvePath(folder),
+			"*",
+			SearchOption.AllDirectories));
+		Assert.Contains("Assets", project.AssetCatalog.Folders);
+		Assert.Contains("Scenes", project.AssetCatalog.Folders);
+		Assert.Contains(folder, project.AssetCatalog.Folders);
+
+		project.AssetCatalog.Refresh();
+
+		Assert.Contains(folder, project.AssetCatalog.Folders);
+	}
+
+	[Fact]
+	public void CreateFolder_RejectsProtectedRootsAndMissingParents()
+	{
+		EditorProject project = EditorProject.Create(_root, "Folder guards");
+		project.CreateFolder("Assets/Materials");
+
+		Assert.Throws<IOException>(() =>
+			project.CreateFolder("Assets/Materials"));
+		Assert.Throws<ArgumentException>(() =>
+			project.CreateFolder("Tools/Generated"));
+		Assert.Throws<ArgumentException>(() =>
+			project.CreateFolder("Assets/../Escape"));
+		Assert.Throws<ArgumentException>(() =>
+			project.CreateFolder("Assets/"));
+		Assert.Throws<DirectoryNotFoundException>(() =>
+			project.CreateFolder("Assets/Missing/Child"));
+
+		Assert.False(Directory.Exists(Path.Combine(
+			project.RootPath,
+			"Tools",
+			"Generated")));
+	}
+
+	[Fact]
 	public void SaveScene_WritesVersionedSceneAndReportsPath()
 	{
 		EditorProject project = EditorProject.Create(_root, "Scenes");
