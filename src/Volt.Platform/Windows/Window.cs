@@ -104,6 +104,35 @@ public sealed class Window : IDisposable
 	}
 
 	/// <summary>
+	/// Resizes the client area in logical window coordinates.
+	/// </summary>
+	/// <param name="size">The new size; both dimensions must be positive.</param>
+	/// <exception cref="ArgumentOutOfRangeException">
+	/// A dimension is not positive.
+	/// </exception>
+	/// <exception cref="InvalidOperationException">
+	/// The platform could not resize the window.
+	/// </exception>
+	public void SetSize(WindowSize size)
+	{
+		ThrowIfDisposed();
+
+		if (!size.IsPositive)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(size),
+				size,
+				"Window dimensions must be positive.");
+		}
+
+		if (!SDL.SetWindowSize(_handle, size.Width, size.Height))
+		{
+			throw new InvalidOperationException(
+				$"SDL could not resize the window: {SDL.GetError()}");
+		}
+	}
+
+	/// <summary>
 	/// Gets whether the window is currently maximized.
 	/// </summary>
 	/// <remarks>

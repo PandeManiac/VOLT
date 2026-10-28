@@ -80,6 +80,7 @@ public sealed class VulkanUiHost : IDisposable
 	private int _frameSlot;
 	private float _dpiScale = 1f;
 	private bool _exitRequested;
+	private WindowSize? _pendingWindowSize;
 	private bool _disposed;
 
 	/// <summary>
@@ -415,6 +416,31 @@ public sealed class VulkanUiHost : IDisposable
 	}
 
 	/// <summary>
+	/// Queues a logical window resize for the next frame.
+	/// </summary>
+	/// <param name="size">The new client-area size.</param>
+	/// <remarks>
+	/// The host applies the resize before it polls the next frame, so
+	/// the surface, swapchain, and layout all see the new size in the
+	/// same frame. Resizing immediately from an input handler would
+	/// invalidate sizes the current frame is still using.
+	/// </remarks>
+	public void RequestWindowSize(WindowSize size)
+	{
+		ThrowIfDisposed();
+
+		if (!size.IsPositive)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(size),
+				size,
+				"Window dimensions must be positive.");
+		}
+
+		_pendingWindowSize = size;
+	}
+
+	/// <summary>
 	/// Gets or sets a callback asked before a native window close is
 	/// accepted.
 	/// </summary>
@@ -472,6 +498,12 @@ public sealed class VulkanUiHost : IDisposable
 	{
 		ArgumentNullException.ThrowIfNull(update);
 		ThrowIfDisposed();
+
+		if (_pendingWindowSize is WindowSize pending)
+		{
+			_pendingWindowSize = null;
+			_window.SetSize(pending);
+		}
 
 		_window.PollEvents();
 		DrainWindowEvents();

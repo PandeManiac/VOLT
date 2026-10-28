@@ -204,7 +204,13 @@ internal static class Program
 				if (preferences.ProjectRevision != projectRevision)
 				{
 					projectRevision = preferences.ProjectRevision;
-					sizeAtProjectOpen = host.Window.Size;
+
+					Volt.Platform.Windows.WindowSize target = new(
+						preferences.Current.WindowWidth,
+						preferences.Current.WindowHeight);
+
+					sizeAtProjectOpen = target;
+					host.RequestWindowSize(target);
 				}
 
 				session.Update(ui.DeltaSeconds);
@@ -221,9 +227,8 @@ internal static class Program
 		// A maximized or minimized window does not report a useful restore
 		// size: the first would reopen a normal window at screen size, and
 		// the second may report no drawable area. Keep the project's saved
-		// size in both cases. The same applies when the window still has
-		// the size it was created with, because a project opened from the
-		// start screen could not be resized to its own saved size mid-run.
+		// size in both cases. In a normal window, a size that differs from
+		// the size this project was opened at is a user resize worth saving.
 		int savedWidth = preferences.Current.WindowWidth;
 		int savedHeight = preferences.Current.WindowHeight;
 

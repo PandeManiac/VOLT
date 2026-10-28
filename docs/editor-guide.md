@@ -142,9 +142,9 @@ the next time that project is opened. The editor window's size is saved
 with the other editor settings and reopened at that size, clamped to a
 usable minimum; a window closed maximized keeps its previous restore size
 instead of reopening a normal window at screen size. Opening a project
-from the start screen adopts that project's saved target frame rate and
-interface scale, and the settings saved on exit belong to the project
-that is open rather than the one the editor started with.
+from the start screen adopts that project's saved target frame rate,
+interface scale, and window size, and the settings saved on exit belong
+to the project that is open rather than the one the editor started with.
 
 ## Interface design
 
