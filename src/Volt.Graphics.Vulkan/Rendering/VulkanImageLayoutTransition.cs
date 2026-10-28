@@ -20,6 +20,11 @@ namespace Volt.Graphics.Vulkan.Rendering;
 /// <see cref="PipelineStageFlags.TopOfPipeBit"/> with no access mask.
 /// </description></item>
 /// <item><description>
+/// <see cref="ImageLayout.Undefined"/> to a readable layout: an image
+/// that was never written discards its contents, so the source side is
+/// <see cref="PipelineStageFlags.TopOfPipeBit"/> with no access mask.
+/// </description></item>
+/// <item><description>
 /// <see cref="ImageLayout.ColorAttachmentOptimal"/> to
 /// <see cref="ImageLayout.ShaderReadOnlyOptimal"/>: the colour write
 /// must be visible to the sampling fragment stage.
@@ -175,6 +180,20 @@ public static class VulkanImageLayoutTransition
 				PipelineStageFlags.EarlyFragmentTestsBit |
 					PipelineStageFlags.LateFragmentTestsBit,
 				AccessFlags.DepthStencilAttachmentWriteBit);
+		}
+
+		if (oldLayout == ImageLayout.Undefined &&
+			newLayout == ImageLayout.ShaderReadOnlyOptimal)
+		{
+			// Sampling an image that was created but never written is
+			// legal: Undefined as the source layout discards whatever the
+			// image contained. The source side is unordered, so nothing
+			// has to complete before the transition.
+			return (
+				PipelineStageFlags.TopOfPipeBit,
+				AccessFlags.None,
+				PipelineStageFlags.FragmentShaderBit,
+				AccessFlags.ShaderReadBit);
 		}
 
 		if (oldLayout == ImageLayout.ColorAttachmentOptimal &&
