@@ -64,15 +64,8 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 	private readonly Format _depthFormat;
 	private readonly RenderPass _renderPass;
 
-	private Image _colorImage;
-	private DeviceMemory _colorMemory;
-	private ImageView _colorView;
+	private AttachmentSet _attachments;
 	private ImageLayout _colorLayout = ImageLayout.Undefined;
-
-	private VulkanDepthAttachment? _depth;
-
-	private Framebuffer _framebuffer;
-	private Extent2D _extent;
 	private bool _disposed;
 
 	/// <summary>
@@ -83,7 +76,7 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 		get
 		{
 			ThrowIfDisposed();
-			return _extent;
+			return _attachments.Extent;
 		}
 	}
 
@@ -142,7 +135,7 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 		get
 		{
 			ThrowIfDisposed();
-			return _framebuffer;
+			return _attachments.Framebuffer;
 		}
 	}
 
@@ -154,7 +147,7 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 		get
 		{
 			ThrowIfDisposed();
-			return _colorImage;
+			return _attachments.ColorImage;
 		}
 	}
 
@@ -166,7 +159,7 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 		get
 		{
 			ThrowIfDisposed();
-			return _colorView;
+			return _attachments.ColorView;
 		}
 	}
 
@@ -226,7 +219,6 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 		_device = device;
 		_physicalDevice = physicalDevice;
 		_api = instance.Api;
-		_extent = extent;
 
 		_colorFormat = SelectSupportedColorFormat(
 			instance,
@@ -236,32 +228,25 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 			instance,
 			physicalDevice);
 
-		RenderPass renderPass = default;
-
-		try
-		{
-			renderPass = CreateRenderPass(
+		// The render pass must exist before the framebuffer that names
+		// it. Passing the handle into attachment creation is what keeps
+		// that order, because a field read would still be the default
+		// handle here.
+		_renderPass = CreateRenderPassThenAttachments(
+			() => CreateRenderPass(
 				_api,
 				device.Handle,
 				_colorFormat,
-				_depthFormat);
-
-			CreateAttachments();
-		}
-
-		catch
-		{
-			if (renderPass.Handle != 0)
+				_depthFormat),
+			renderPass =>
 			{
-				_api.DestroyRenderPass(device.Handle, renderPass, null);
-			}
-
-			DestroyAttachments();
-
-			throw;
-		}
-
-		_renderPass = renderPass;
+				_attachments = CreateAttachmentSet(renderPass, extent);
+			},
+			renderPass => _api.DestroyRenderPass(
+				device.Handle,
+				renderPass,
+				null),
+			() => DestroyAttachmentSet(ref _attachments));
 	}
 
 	/// <summary>
@@ -458,11 +443,11 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 		{
 			SType = StructureType.RenderPassBeginInfo,
 			RenderPass = _renderPass,
-			Framebuffer = _framebuffer,
+			Framebuffer = _attachments.Framebuffer,
 			RenderArea = new Rect2D
 			{
 				Offset = new Offset2D(0, 0),
-				Extent = _extent
+				Extent = _attachments.Extent
 			},
 			ClearValueCount = 2,
 			PClearValues = clearValues
@@ -503,20 +488,23 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 		ThrowIfDisposed();
 		ValidateExtent(extent);
 
-		if (extent.Width == _extent.Width &&
-			extent.Height == _extent.Height)
+		if (extent.Width == _attachments.Extent.Width &&
+			extent.Height == _attachments.Extent.Height)
 		{
 			return;
 		}
 
 		_device.WaitIdle();
 
-		DestroyAttachments();
+		// The replacement set is created before the previous one is
+		// released. A failed resize therefore leaves the target valid
+		// at its old extent instead of half-destroyed.
+		ReplaceAttachments(
+			ref _attachments,
+			() => CreateAttachmentSet(_renderPass, extent),
+			previous => DestroyAttachmentSet(ref previous));
 
-		_extent = extent;
 		_colorLayout = ImageLayout.Undefined;
-
-		CreateAttachments();
 	}
 
 	/// <summary>
@@ -547,7 +535,7 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 			// remaining native resources from being released.
 		}
 
-		DestroyAttachments();
+		DestroyAttachmentSet(ref _attachments);
 
 		if (_renderPass.Handle != 0)
 		{
@@ -567,7 +555,7 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 		VulkanImageLayoutTransition.Record(
 			_instance,
 			commandBuffer,
-			_colorImage,
+			_attachments.ColorImage,
 			_colorLayout,
 			target,
 			ImageAspectFlags.ColorBit);
@@ -577,52 +565,72 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 		return true;
 	}
 
-	private void CreateAttachments()
+	private AttachmentSet CreateAttachmentSet(
+		RenderPass renderPass,
+		Extent2D extent)
 	{
-		CreateColorImage();
-
-		_depth = new VulkanDepthAttachment(
-			_instance,
-			_device,
-			_physicalDevice,
-			_extent,
-			_depthFormat);
-
-		ImageView* attachments = stackalloc ImageView[2];
-
-		attachments[0] = _colorView;
-		attachments[1] = _depth.View;
-
-		FramebufferCreateInfo description = new()
+		AttachmentSet set = new()
 		{
-			SType = StructureType.FramebufferCreateInfo,
-			RenderPass = _renderPass,
-			AttachmentCount = 2,
-			PAttachments = attachments,
-			Width = _extent.Width,
-			Height = _extent.Height,
-			Layers = 1
+			Extent = extent
 		};
 
-		EnsureSuccess(
-			_api.CreateFramebuffer(
-				_device.Handle,
-				&description,
-				null,
-				out _framebuffer),
-			"Create offscreen framebuffer");
+		try
+		{
+			CreateColorImage(ref set);
+
+			set.Depth = new VulkanDepthAttachment(
+				_instance,
+				_device,
+				_physicalDevice,
+				extent,
+				_depthFormat);
+
+			ImageView* attachments = stackalloc ImageView[2];
+
+			attachments[0] = set.ColorView;
+			attachments[1] = set.Depth.View;
+
+			FramebufferCreateInfo description = new()
+			{
+				SType = StructureType.FramebufferCreateInfo,
+				RenderPass = renderPass,
+				AttachmentCount = 2,
+				PAttachments = attachments,
+				Width = extent.Width,
+				Height = extent.Height,
+				Layers = 1
+			};
+
+			EnsureSuccess(
+				_api.CreateFramebuffer(
+					_device.Handle,
+					&description,
+					null,
+					out set.Framebuffer),
+				"Create offscreen framebuffer");
+		}
+
+		catch
+		{
+			DestroyAttachmentSet(ref set);
+			throw;
+		}
+
+		return set;
 	}
 
-	private void CreateColorImage()
+	private void CreateColorImage(ref AttachmentSet set)
 	{
+		Extent2D extent = set.Extent;
+
 		ImageCreateInfo imageInfo = new()
 		{
 			SType = StructureType.ImageCreateInfo,
 			ImageType = ImageType.Type2D,
 			Format = _colorFormat,
 			Extent = new Extent3D(
-				_extent.Width,
-				_extent.Height,
+				extent.Width,
+				extent.Height,
 				1),
 			MipLevels = 1,
 			ArrayLayers = 1,
@@ -639,12 +647,12 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 				_device.Handle,
 				&imageInfo,
 				null,
-				out _colorImage),
+				out set.ColorImage),
 			"Create offscreen colour image");
 
 		_api.GetImageMemoryRequirements(
 			_device.Handle,
-			_colorImage,
+			set.ColorImage,
 			out MemoryRequirements requirements);
 
 		ReadOnlySpan<MemoryPropertyFlags> memoryTypes =
@@ -675,14 +683,14 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 				_device.Handle,
 				&allocate,
 				null,
-				out _colorMemory),
+				out set.ColorMemory),
 			"Allocate offscreen colour memory");
 
 		EnsureSuccess(
 			_api.BindImageMemory(
 				_device.Handle,
-				_colorImage,
-				_colorMemory,
+				set.ColorImage,
+				set.ColorMemory,
 				0),
 			"Bind offscreen colour memory");
 
@@ -692,7 +700,7 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 		ImageViewCreateInfo viewInfo = new()
 		{
 			SType = StructureType.ImageViewCreateInfo,
-			Image = _colorImage,
+			Image = set.ColorImage,
 			ViewType = ImageViewType.Type2DArray,
 			Format = _colorFormat,
 			SubresourceRange = new ImageSubresourceRange(
@@ -708,56 +716,127 @@ public sealed unsafe class VulkanOffscreenRenderTarget :
 				_device.Handle,
 				&viewInfo,
 				null,
-				out _colorView),
+				out set.ColorView),
 			"Create offscreen colour view");
 	}
 
-	private void DestroyAttachments()
+	private void DestroyAttachmentSet(ref AttachmentSet set)
 	{
-		if (_framebuffer.Handle != 0)
+		if (set.Framebuffer.Handle != 0)
 		{
 			_api.DestroyFramebuffer(
 				_device.Handle,
-				_framebuffer,
+				set.Framebuffer,
 				null);
-
-			_framebuffer = default;
 		}
 
 		// The depth attachment is referenced by the framebuffer, so it
 		// is released after it.
-		_depth?.Dispose();
-		_depth = null;
+		set.Depth?.Dispose();
 
-		if (_colorView.Handle != 0)
+		if (set.ColorView.Handle != 0)
 		{
 			_api.DestroyImageView(
 				_device.Handle,
-				_colorView,
+				set.ColorView,
 				null);
-
-			_colorView = default;
 		}
 
-		if (_colorImage.Handle != 0)
+		if (set.ColorImage.Handle != 0)
 		{
 			_api.DestroyImage(
 				_device.Handle,
-				_colorImage,
+				set.ColorImage,
 				null);
-
-			_colorImage = default;
 		}
 
-		if (_colorMemory.Handle != 0)
+		if (set.ColorMemory.Handle != 0)
 		{
 			_api.FreeMemory(
 				_device.Handle,
-				_colorMemory,
+				set.ColorMemory,
 				null);
-
-			_colorMemory = default;
 		}
+
+		set = default;
+	}
+
+	/// <summary>
+	/// Creates a render pass and then the attachments that name it,
+	/// releasing both if either step fails.
+	/// </summary>
+	/// <remarks>
+	/// This exists so the ownership order is explicit and testable
+	/// without a device. A framebuffer records its render pass at
+	/// creation time, so attachment creation must receive the handle that
+	/// was just created rather than read an unassigned field.
+	/// </remarks>
+	internal static RenderPass CreateRenderPassThenAttachments(
+		Func<RenderPass> createRenderPass,
+		Action<RenderPass> createAttachments,
+		Action<RenderPass> destroyRenderPass,
+		Action destroyAttachments)
+	{
+		ArgumentNullException.ThrowIfNull(createRenderPass);
+		ArgumentNullException.ThrowIfNull(createAttachments);
+		ArgumentNullException.ThrowIfNull(destroyRenderPass);
+		ArgumentNullException.ThrowIfNull(destroyAttachments);
+
+		RenderPass renderPass = createRenderPass();
+
+		try
+		{
+			createAttachments(renderPass);
+		}
+
+		catch
+		{
+			// Attachments may reference the pass, so they go first.
+			destroyAttachments();
+			destroyRenderPass(renderPass);
+
+			throw;
+		}
+
+		return renderPass;
+	}
+
+	/// <summary>
+	/// Swaps in a freshly created attachment set, releasing the previous
+	/// one only after the replacement exists.
+	/// </summary>
+	/// <remarks>
+	/// A resize that fails to allocate must not destroy the attachments
+	/// the target is still using, so the new set is created first.
+	/// </remarks>
+	internal static void ReplaceAttachments<T>(
+		ref T current,
+		Func<T> create,
+		Action<T> destroy)
+	{
+		ArgumentNullException.ThrowIfNull(create);
+		ArgumentNullException.ThrowIfNull(destroy);
+
+		T replacement = create();
+		T previous = current;
+
+		current = replacement;
+
+		destroy(previous);
+	}
+
+	/// <summary>
+	/// The colour attachment, depth attachment, and framebuffer created
+	/// for one extent.
+	/// </summary>
+	private struct AttachmentSet
+	{
+		public Extent2D Extent;
+		public Image ColorImage;
+		public DeviceMemory ColorMemory;
+		public ImageView ColorView;
+		public VulkanDepthAttachment? Depth;
+		public Framebuffer Framebuffer;
 	}
 
 	private static RenderPass CreateRenderPass(
