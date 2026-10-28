@@ -299,14 +299,16 @@ ratios without discarding the state inside open panels.
   search filter. Right-click an asset for **Open**, **Rename…**,
   **Duplicate**, or **Delete**. Renaming keeps the file extension; the
   open scene keeps saving to its new name, and renaming the startup
-  scene updates the project manifest. Asset references stored in
-  scenes are not rewritten by a rename, so update those fields after
-  renaming a mesh, material, or texture. Duplicating writes a numbered
-  sibling such as `Main 1.volt.scene.json`, selects it, and never
-  overwrites an existing file. Deleting asks for confirmation and is
-  refused for the open or startup scene, since either would leave the
-  editor or project pointing at a missing file. Scene shortcuts such
-  as Delete and F2 stand down while the browser has keyboard focus.
+  scene updates the project manifest. Renaming rewrites matching asset
+  paths in every scene component, including unknown component data, so
+  mesh, material, and texture references follow the file. Deleting
+  clears those references instead of leaving them dangling.
+  Duplicating writes a numbered sibling such as
+  `Main 1.volt.scene.json`, selects it, and never overwrites an existing
+  file. Deleting asks for confirmation and is refused for the open or
+  startup scene, since either would leave the editor or project pointing
+  at a missing file. Scene shortcuts such as Delete and F2 stand down
+  while the browser has keyboard focus.
 - **Console** records editor actions and errors.
 - **Profiler** reports frame timing and runtime counts while the
   editor is running.

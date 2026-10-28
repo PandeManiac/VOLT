@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
 namespace Volt.Editor.Core.Scenes;
 
 public enum SceneChangeKind
@@ -191,6 +194,118 @@ public sealed class SceneDocument
 			id));
 
 		return true;
+	}
+
+	/// <summary>
+	/// Rewrites every asset-path component property that equals
+	/// <paramref name="oldId"/>, including fields in unknown components.
+	/// </summary>
+	/// <param name="newId">
+	/// The replacement path, or an empty string to clear the reference.
+	/// </param>
+	/// <returns>The number of fields that changed.</returns>
+	public int ReplaceAssetReference(string oldId, string newId)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(oldId);
+		ArgumentNullException.ThrowIfNull(newId);
+
+		if (string.Equals(oldId, newId, StringComparison.Ordinal))
+		{
+			return 0;
+		}
+
+		int total = 0;
+
+		foreach (SceneEntity entity in _entities)
+		{
+			int changed = 0;
+
+			foreach (AuthoredComponent component in entity.Components)
+			{
+				if (component is UnknownComponentData unknown)
+				{
+					changed += ReplaceUnknownReference(
+						unknown,
+						oldId,
+						newId);
+
+					continue;
+				}
+
+				if (!ComponentCatalog.Default.TryGet(
+					component.GetType(),
+					out EditorComponentDescriptor descriptor))
+				{
+					continue;
+				}
+
+				foreach (EditorPropertyDescriptor property in
+					descriptor.Properties)
+				{
+					if (property.Kind != EditorPropertyKind.Asset ||
+						property.ValueType != typeof(string) ||
+						property.IsReadOnly)
+					{
+						continue;
+					}
+
+					if (property.GetValue(component) is string current &&
+						string.Equals(
+							current,
+							oldId,
+							StringComparison.OrdinalIgnoreCase))
+					{
+						property.SetValue(component, newId);
+						changed++;
+					}
+				}
+			}
+
+			if (changed > 0)
+			{
+				total += changed;
+				Changed?.Invoke(this, new SceneChange(
+					SceneChangeKind.ComponentChanged,
+					entity.Id));
+			}
+		}
+
+		return total;
+	}
+
+	private static int ReplaceUnknownReference(
+		UnknownComponentData unknown,
+		string oldId,
+		string newId)
+	{
+		if (unknown.Data.ValueKind is not (
+			JsonValueKind.Object or JsonValueKind.Array))
+		{
+			return 0;
+		}
+
+		JsonNode? data = JsonNode.Parse(unknown.Data.GetRawText());
+
+		if (data is null)
+		{
+			return 0;
+		}
+
+		int changed = SceneAssetReferences.ReplaceInNode(
+			data,
+			oldId,
+			newId);
+
+		if (changed == 0)
+		{
+			return 0;
+		}
+
+		using JsonDocument document = JsonDocument.Parse(
+			data.ToJsonString(SceneSerializer.Options));
+
+		unknown.ReplaceData(document.RootElement);
+		return changed;
 	}
 
 	public bool CanReparent(Guid id, Guid? newParentId)

@@ -166,6 +166,17 @@ public static class SceneSerializer
 		ArgumentException.ThrowIfNullOrWhiteSpace(path);
 		ArgumentNullException.ThrowIfNull(scene);
 
+		WriteAtomically(Path.GetFullPath(path), Serialize(scene));
+	}
+
+	/// <summary>
+	/// Writes text to a sibling temporary file and moves it into place.
+	/// </summary>
+	internal static void WriteAtomically(string path, string contents)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(path);
+		ArgumentNullException.ThrowIfNull(contents);
+
 		string fullPath = Path.GetFullPath(path);
 		string? directory = Path.GetDirectoryName(fullPath);
 
@@ -179,7 +190,7 @@ public static class SceneSerializer
 
 		try
 		{
-			File.WriteAllText(temporaryPath, Serialize(scene));
+			File.WriteAllText(temporaryPath, contents);
 			File.Move(temporaryPath, fullPath, overwrite: true);
 		}
 

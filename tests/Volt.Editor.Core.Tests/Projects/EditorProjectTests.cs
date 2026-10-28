@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Volt.Editor.Core.Projects;
 using Volt.Editor.Core.Scenes;
 
@@ -205,5 +206,79 @@ public sealed class EditorProjectTests : IDisposable
 			project.DeleteAsset(project.StartupScenePath));
 		Assert.True(File.Exists(project.ResolvePath(
 			project.StartupScenePath)));
+	}
+
+	[Fact]
+	public void RenameAsset_RewritesSceneReferences()
+	{
+		EditorProject project = EditorProject.Create(_root, "References");
+		string meshId = "Assets/Meshes/cube.mesh";
+		Directory.CreateDirectory(
+			Path.Combine(project.AssetsPath, "Meshes"));
+		File.WriteAllText(project.ResolvePath(meshId), "mesh");
+
+		SceneDocument scene = project.LoadStartupScene();
+		SceneEntity cube = scene.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+		MeshRendererData renderer = cube.GetComponent<MeshRendererData>()!;
+		renderer.Mesh = meshId;
+
+		using JsonDocument payload = JsonDocument.Parse(
+			"""{"mesh":"Assets/Meshes/cube.mesh","label":"keep"}""");
+
+		cube.AddComponent(new UnknownComponentData(
+			"future.renderer",
+			payload.RootElement));
+
+		project.SaveScene(scene, project.StartupScenePath);
+
+		string renamed = project.RenameAsset(meshId, "box");
+
+		Assert.Equal("Assets/Meshes/box.mesh", renamed);
+
+		SceneDocument reloaded = project.LoadStartupScene();
+		SceneEntity reloadedCube = reloaded.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+
+		Assert.Equal(
+			renamed,
+			reloadedCube.GetComponent<MeshRendererData>()!.Mesh);
+
+		UnknownComponentData unknown = Assert.IsType<UnknownComponentData>(
+			reloadedCube.Components.Single(
+				component => component is UnknownComponentData));
+
+		Assert.Equal(
+			renamed,
+			unknown.Data.GetProperty("mesh").GetString());
+		Assert.Equal("keep", unknown.Data.GetProperty("label").GetString());
+	}
+
+	[Fact]
+	public void DeleteAsset_ClearsSceneReferences()
+	{
+		EditorProject project = EditorProject.Create(_root, "Delete references");
+		string meshId = "Assets/Meshes/cube.mesh";
+		Directory.CreateDirectory(
+			Path.Combine(project.AssetsPath, "Meshes"));
+		File.WriteAllText(project.ResolvePath(meshId), "mesh");
+
+		SceneDocument scene = project.LoadStartupScene();
+		SceneEntity cube = scene.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+		cube.GetComponent<MeshRendererData>()!.Mesh = meshId;
+		project.SaveScene(scene, project.StartupScenePath);
+
+		project.DeleteAsset(meshId);
+
+		Assert.False(File.Exists(project.ResolvePath(meshId)));
+
+		SceneDocument reloaded = project.LoadStartupScene();
+		SceneEntity reloadedCube = reloaded.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+
+		Assert.Equal(
+			string.Empty,
+			reloadedCube.GetComponent<MeshRendererData>()!.Mesh);
 	}
 }

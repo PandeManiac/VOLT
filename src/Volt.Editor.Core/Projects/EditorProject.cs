@@ -330,15 +330,18 @@ public sealed class EditorProject
 
 		File.Move(source, destination);
 
+		string renamedId = ProjectAssetCatalog.NormalizeId(renamed);
+
 		if (startupScene)
 		{
-			StartupScenePath = ProjectAssetCatalog.NormalizeId(renamed);
+			StartupScenePath = renamedId;
 			SaveManifest();
 		}
 
+		ReplaceReferencesInScenes(id, renamedId);
 		AssetCatalog.Refresh();
 
-		return ProjectAssetCatalog.NormalizeId(renamed);
+		return renamedId;
 	}
 
 	/// <summary>
@@ -374,6 +377,7 @@ public sealed class EditorProject
 		}
 
 		File.Delete(source);
+		ReplaceReferencesInScenes(id, string.Empty);
 		AssetCatalog.Refresh();
 	}
 
@@ -397,6 +401,40 @@ public sealed class EditorProject
 
 		result.Sort(StringComparer.OrdinalIgnoreCase);
 		return result;
+	}
+
+	private int ReplaceReferencesInScenes(string oldId, string newId)
+	{
+		int changed = 0;
+
+		foreach (string path in EnumerateSceneFiles())
+		{
+			changed += SceneAssetReferences.ReplaceInFile(
+				path,
+				oldId,
+				newId);
+		}
+
+		return changed;
+	}
+
+	private IEnumerable<string> EnumerateSceneFiles()
+	{
+		foreach (string directory in new[] { AssetsPath, ScenesPath })
+		{
+			if (!Directory.Exists(directory))
+			{
+				continue;
+			}
+
+			foreach (string path in Directory.EnumerateFiles(
+				directory,
+				"*" + SceneSerializer.FileExtension,
+				SearchOption.AllDirectories))
+			{
+				yield return path;
+			}
+		}
 	}
 
 	/// <summary>

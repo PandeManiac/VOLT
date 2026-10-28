@@ -393,12 +393,22 @@ public sealed class EditorSession : IDisposable
 		EditorProject project = RequireProject();
 		bool openScene = ScenePath is string current &&
 			string.Equals(current, assetId, StringComparison.OrdinalIgnoreCase);
+		bool wasDirty = IsSceneDirty;
 
 		string renamed = project.RenameAsset(assetId, newName);
 
 		if (openScene)
 		{
 			ScenePath = renamed;
+		}
+
+		int changed = Scene?.ReplaceAssetReference(assetId, renamed) ?? 0;
+
+		if (changed > 0 && !wasDirty && Scene is not null &&
+			ScenePath is not null)
+		{
+			project.SaveScene(Scene, ScenePath);
+			IsSceneDirty = false;
 		}
 
 		ProjectChanged?.Invoke(this);
@@ -414,6 +424,7 @@ public sealed class EditorSession : IDisposable
 		ThrowIfDisposed();
 
 		EditorProject project = RequireProject();
+		bool wasDirty = IsSceneDirty;
 
 		if (ScenePath is string current &&
 			string.Equals(current, assetId, StringComparison.OrdinalIgnoreCase))
@@ -423,6 +434,18 @@ public sealed class EditorSession : IDisposable
 		}
 
 		project.DeleteAsset(assetId);
+
+		int changed = Scene?.ReplaceAssetReference(
+			assetId,
+			string.Empty) ?? 0;
+
+		if (changed > 0 && !wasDirty && Scene is not null &&
+			ScenePath is not null)
+		{
+			project.SaveScene(Scene, ScenePath);
+			IsSceneDirty = false;
+		}
+
 		ProjectChanged?.Invoke(this);
 	}
 

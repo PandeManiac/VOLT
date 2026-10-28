@@ -1049,17 +1049,6 @@ public sealed class ProjectPanel : Panel
 			Wrap = UiTextWrap.Wrap
 		});
 
-		if (asset.Kind != ProjectAssetKind.Scene)
-		{
-			content.Add(new Label(
-				"References to this asset in scenes are not updated.")
-			{
-				Font = theme.Fonts.Small,
-				TextColor = theme.Palette.Warning,
-				Wrap = UiTextWrap.Wrap
-			});
-		}
-
 		Label error = new(string.Empty)
 		{
 			Font = theme.Fonts.Small,
@@ -1160,8 +1149,8 @@ public sealed class ProjectPanel : Panel
 
 		content.Add(new Label(asset.Kind == ProjectAssetKind.Scene
 			? "This removes the scene file and cannot be undone."
-			: "This cannot be undone. Scenes that reference this " +
-				"asset will lose the reference.")
+			: "This cannot be undone. References to this asset in " +
+				"scenes will be cleared.")
 		{
 			Font = theme.Fonts.Small,
 			TextColor = theme.Palette.TextDisabled,

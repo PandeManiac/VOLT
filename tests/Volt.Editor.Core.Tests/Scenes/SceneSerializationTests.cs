@@ -125,6 +125,54 @@ public sealed class SceneSerializationTests
 	}
 
 	[Fact]
+	public void ReplaceAssetReference_UpdatesKnownAndUnknownComponentData()
+	{
+		SceneDocument scene = new("References");
+		SceneEntity entity = scene.CreateEntity("Entity");
+
+		MeshRendererData renderer = new()
+		{
+			Mesh = "Assets/cube.mesh",
+			Material = "Assets/red.material"
+		};
+
+		entity.AddComponent(renderer);
+
+		using JsonDocument payload = JsonDocument.Parse(
+			"""{"mesh":"Assets/cube.mesh","label":"keep"}""");
+
+		entity.AddComponent(new UnknownComponentData(
+			"future.renderer",
+			payload.RootElement));
+
+		int changed = scene.ReplaceAssetReference(
+			"Assets/cube.mesh",
+			"Assets/box.mesh");
+
+		Assert.Equal(2, changed);
+		Assert.Equal("Assets/box.mesh", renderer.Mesh);
+		Assert.Equal("Assets/red.material", renderer.Material);
+
+		UnknownComponentData unknown = Assert.IsType<UnknownComponentData>(
+			entity.Components[1]);
+
+		Assert.Equal(
+			"Assets/box.mesh",
+			unknown.Data.GetProperty("mesh").GetString());
+		Assert.Equal("keep", unknown.Data.GetProperty("label").GetString());
+
+		int cleared = scene.ReplaceAssetReference(
+			"Assets/box.mesh",
+			string.Empty);
+
+		Assert.Equal(2, cleared);
+		Assert.Equal(string.Empty, renderer.Mesh);
+		Assert.Equal(
+			string.Empty,
+			unknown.Data.GetProperty("mesh").GetString());
+	}
+
+	[Fact]
 	public void Save_ReplacesAtomicallyAndLeavesNoTemporaryFile()
 	{
 		string directory = Path.Combine(

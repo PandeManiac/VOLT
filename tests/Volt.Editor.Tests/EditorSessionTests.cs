@@ -151,6 +151,54 @@ public sealed class EditorSessionTests : IDisposable
 	}
 
 	[Fact]
+	public void AssetRenameAndDelete_UpdateTheOpenScene()
+	{
+		_session.NewProject(
+			Path.Combine(_root, "Assets"),
+			"Assets");
+
+		string meshId = "Assets/Meshes/cube.mesh";
+
+		Directory.CreateDirectory(
+			Path.Combine(_session.Project!.AssetsPath, "Meshes"));
+		File.WriteAllText(_session.Project.ResolvePath(meshId), "mesh");
+		_session.Project.AssetCatalog.Refresh();
+
+		SceneEntity cube = _session.Scene!.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+		MeshRendererData renderer = cube.GetComponent<MeshRendererData>()!;
+		renderer.Mesh = meshId;
+		_session.SaveScene();
+
+		string renamed = _session.RenameAsset(meshId, "box");
+
+		Assert.Equal("Assets/Meshes/box.mesh", renamed);
+		Assert.Equal(renamed, renderer.Mesh);
+		Assert.False(_session.IsSceneDirty);
+
+		SceneDocument reloaded = _session.Project.LoadStartupScene();
+		SceneEntity reloadedCube = reloaded.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+
+		Assert.Equal(
+			renamed,
+			reloadedCube.GetComponent<MeshRendererData>()!.Mesh);
+
+		_session.DeleteAsset(renamed);
+
+		Assert.Equal(string.Empty, renderer.Mesh);
+		Assert.False(_session.IsSceneDirty);
+
+		SceneDocument afterDelete = _session.Project.LoadStartupScene();
+		SceneEntity afterDeleteCube = afterDelete.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+
+		Assert.Equal(
+			string.Empty,
+			afterDeleteCube.GetComponent<MeshRendererData>()!.Mesh);
+	}
+
+	[Fact]
 	public void Reparent_RejectsHierarchyCycles()
 	{
 		_session.NewProject(
