@@ -403,6 +403,50 @@ public sealed class LightMarkerTests : IDisposable
 	}
 
 	[Fact]
+	public void InspectorColorEdit_RejectsInvalidHexWithoutAnUndoStep()
+	{
+		SceneEntity light = _session.CreateDirectionalLight("Sun");
+		LightData data = light.GetComponent<LightData>()!;
+
+		using UiContext inspectorContext = new();
+		using InspectorPanel inspector = new(_session);
+
+		inspectorContext.Add(inspector);
+		inspectorContext.BeginFrame(
+			0.0,
+			new UiSize(380f, 800f),
+			UiPoint.Zero);
+
+		inspectorContext.Draw();
+
+		ColorField color = Descendants(inspector)
+			.OfType<ColorField>()
+			.Single();
+
+		TextField hex = Descendants(color)
+			.OfType<TextField>()
+			.Single();
+
+		int history = _session.Undo.UndoCount;
+
+		Click(inspectorContext, hex.GlobalVisualBounds.Center);
+		Assert.True(inspectorContext.KeyDown(
+			UiKey.A,
+			UiKeyModifiers.Control));
+
+		inspectorContext.TextInput("#GGGGGG");
+
+		Assert.True(inspectorContext.KeyDown(UiKey.Enter));
+
+		Assert.Equal(Vector4.One, data.Color);
+		Assert.Equal(history, _session.Undo.UndoCount);
+		Assert.Equal("#FFFFFF", hex.Text);
+		Assert.Equal(
+			Vector3.One,
+			ViewportMath.ResolveLight(_session.Scene!).DiffuseColor);
+	}
+
+	[Fact]
 	public void SelectedLightMarker_UsesAccentColor()
 	{
 		SceneEntity light = _session.CreateDirectionalLight("Sun");
