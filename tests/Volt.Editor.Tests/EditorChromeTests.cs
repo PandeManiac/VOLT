@@ -1395,8 +1395,9 @@ public sealed class EditorChromeTests : IDisposable
 
 		Assert.IsType<MenuPopup>(_context.ActivePopup);
 
-		// The popup has Open and Duplicate. The first Down highlights
-		// Open and the second highlights Duplicate; Enter runs it.
+		// The popup has Open, Rename, and Duplicate. Three Downs
+		// highlight Duplicate; Enter runs it.
+		_context.KeyDown(UiKey.Down);
 		_context.KeyDown(UiKey.Down);
 		_context.KeyDown(UiKey.Down);
 		_context.KeyDown(UiKey.Enter);
@@ -1452,6 +1453,8 @@ public sealed class EditorChromeTests : IDisposable
 
 		Assert.IsType<MenuPopup>(_context.ActivePopup);
 
+		// Open, Rename, Duplicate.
+		_context.KeyDown(UiKey.Down);
 		_context.KeyDown(UiKey.Down);
 		_context.KeyDown(UiKey.Down);
 		_context.KeyDown(UiKey.Enter);
@@ -1466,6 +1469,162 @@ public sealed class EditorChromeTests : IDisposable
 			.Single(tile => tile.Text == "Main 1.volt.scene.json");
 
 		Assert.True(duplicated.IsSelected);
+	}
+
+	[Fact]
+	public void ProjectBrowser_ContextMenuRenamesTheOpenScene()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.15);
+
+		IconButton listMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as a list");
+
+		Click(listMode);
+		Paint(0.2);
+
+		TreeView list = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(root => root.Tag is ProjectAsset));
+
+		UiRect content = list.GlobalContentBounds;
+		UiPoint row = new(content.X + 40f, content.Y + 5f);
+
+		_context.PointerDown(UiMouseButton.Right, row);
+
+		Assert.IsType<MenuPopup>(_context.ActivePopup);
+
+		// Open, Rename: the second Down highlights Rename.
+		_context.KeyDown(UiKey.Down);
+		_context.KeyDown(UiKey.Down);
+		_context.KeyDown(UiKey.Enter);
+		Paint(0.3);
+
+		TextField name = Assert.IsType<TextField>(_context.FocusedWidget);
+
+		Assert.Equal("Main", name.Text);
+		Assert.True(name.HasSelection);
+
+		_context.TextInput("Start");
+		Paint(0.35);
+
+		Button rename = Descendants(_context.Modal!)
+			.OfType<Button>()
+			.Single(button => button.Text == "Rename");
+
+		Click(rename);
+		Paint(0.4);
+
+		const string Renamed = "Scenes/Start.volt.scene.json";
+
+		Assert.False(File.Exists(_session.Project!.ResolvePath(
+			"Scenes/Main.volt.scene.json")));
+		Assert.True(File.Exists(_session.Project.ResolvePath(Renamed)));
+		Assert.Equal(Renamed, _session.ScenePath);
+		Assert.Null(_context.Modal);
+
+		TreeView rebuilt = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(root => root.Tag is ProjectAsset));
+
+		ProjectAsset selected = Assert.IsType<ProjectAsset>(
+			rebuilt.SelectedItem?.Tag);
+
+		Assert.Equal(Renamed, selected.Id);
+	}
+
+	[Fact]
+	public void ProjectBrowser_ContextMenuDeletesAClosedScene()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+		Assert.NotNull(_session.CreateScene(
+			"Scenes/Prop.volt.scene.json",
+			"Prop"));
+		Assert.True(_session.OpenScene("Scenes/Main.volt.scene.json"));
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView prop = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Prop.volt.scene.json");
+
+		UiPoint center = prop.GlobalVisualBounds.Center;
+
+		_context.PointerDown(UiMouseButton.Right, center);
+
+		Assert.IsType<MenuPopup>(_context.ActivePopup);
+
+		// Open, Rename, Duplicate, and Delete; the separator is skipped.
+		for (int index = 0; index < 4; index++)
+		{
+			_context.KeyDown(UiKey.Down);
+		}
+
+		_context.KeyDown(UiKey.Enter);
+		Paint(0.3);
+
+		Button delete = Descendants(_context.Modal!)
+			.OfType<Button>()
+			.Single(button => button.Text == "Delete");
+
+		Click(delete);
+		Paint(0.4);
+
+		const string Deleted = "Scenes/Prop.volt.scene.json";
+
+		Assert.False(File.Exists(_session.Project!.ResolvePath(Deleted)));
+		Assert.False(_session.Project.AssetCatalog.FileExists(Deleted));
+		Assert.Null(_context.Modal);
+		Assert.Equal(
+			"Scenes/Main.volt.scene.json",
+			_session.ScenePath);
+
+		Assert.DoesNotContain(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.IsSelected);
+
+		Assert.Throws<InvalidOperationException>(() =>
+			_session.DeleteAsset("Scenes/Main.volt.scene.json"));
+		Assert.True(File.Exists(_session.Project.ResolvePath(
+			"Scenes/Main.volt.scene.json")));
 	}
 
 	private void Click(Widget widget)

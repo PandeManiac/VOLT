@@ -382,6 +382,50 @@ public sealed class EditorSession : IDisposable
 		Log($"Saved scene '{scene.Name}'.");
 	}
 
+	/// <summary>
+	/// Renames a project asset and keeps the open scene's save path in
+	/// step when that asset is the open scene.
+	/// </summary>
+	public string RenameAsset(string assetId, string newName)
+	{
+		ThrowIfDisposed();
+
+		EditorProject project = RequireProject();
+		bool openScene = ScenePath is string current &&
+			string.Equals(current, assetId, StringComparison.OrdinalIgnoreCase);
+
+		string renamed = project.RenameAsset(assetId, newName);
+
+		if (openScene)
+		{
+			ScenePath = renamed;
+		}
+
+		ProjectChanged?.Invoke(this);
+		return renamed;
+	}
+
+	/// <summary>
+	/// Deletes a project asset, refusing to remove the scene that is
+	/// currently open.
+	/// </summary>
+	public void DeleteAsset(string assetId)
+	{
+		ThrowIfDisposed();
+
+		EditorProject project = RequireProject();
+
+		if (ScenePath is string current &&
+			string.Equals(current, assetId, StringComparison.OrdinalIgnoreCase))
+		{
+			throw new InvalidOperationException(
+				"Close the scene before deleting its file.");
+		}
+
+		project.DeleteAsset(assetId);
+		ProjectChanged?.Invoke(this);
+	}
+
 	public void SetStartupScene()
 	{
 		EditorProject project = RequireProject();

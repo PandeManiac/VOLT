@@ -1,10 +1,12 @@
 using System.Globalization;
 using Volt.Editor.Core.Projects;
+using Volt.Editor.Core.Scenes;
 using Volt.Ui;
 using Volt.Ui.Input;
 using Volt.Ui.Layout;
 using Volt.Ui.Rendering;
 using Volt.Ui.Styling;
+using Volt.Ui.Text;
 using Volt.Ui.Widgets;
 
 namespace Volt.Editor.Panels;
@@ -945,14 +947,36 @@ public sealed class ProjectPanel : Panel
 
 	private void ShowAssetContextMenu(ProjectAsset asset, UiPoint position)
 	{
+		bool openScene = _session.ScenePath is string current &&
+			string.Equals(current, asset.Id, StringComparison.OrdinalIgnoreCase);
+		bool startupScene = _session.Project is EditorProject project &&
+			string.Equals(
+				ProjectAssetCatalog.NormalizeId(project.StartupScenePath),
+				asset.Id,
+				StringComparison.OrdinalIgnoreCase);
+
 		MenuItem open = new("Open", () => OpenTag(asset))
 		{
 			IsEnabled = asset.Kind == ProjectAssetKind.Scene
 		};
 
+		MenuItem rename = new("Rename…", () => ShowRenameAssetDialog(asset));
+
 		MenuItem duplicate = new("Duplicate", () => DuplicateAsset(asset));
 
-		MenuPopup menu = new([open, duplicate]);
+		MenuItem delete = new("Delete", () => ShowDeleteAssetDialog(asset))
+		{
+			IsEnabled = !openScene && !startupScene
+		};
+
+		MenuPopup menu = new(
+		[
+			open,
+			rename,
+			duplicate,
+			MenuItem.Separator,
+			delete
+		]);
 
 		Context?.ShowPopup(
 			menu,
@@ -982,6 +1006,277 @@ public sealed class ProjectPanel : Panel
 			_session.Log(exception.Message, EditorLogLevel.Error);
 			_session.SetStatus(exception.Message);
 		}
+	}
+
+	private void ShowRenameAssetDialog(ProjectAsset asset)
+	{
+		if (Context is not UiContext context)
+		{
+			return;
+		}
+
+		UiTheme theme = context.Theme;
+		Panel scrim = CreateAssetDialog(
+			theme,
+			"Rename asset",
+			400f,
+			out StackPanel content);
+
+		content.Add(new Label($"Rename \"{asset.FileName}\".")
+		{
+			Font = theme.Fonts.Body,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		string extension = AssetExtension(asset.FileName);
+
+		TextField name = new(AssetStem(asset.FileName))
+		{
+			Height = UiLength.Points(28f),
+			Placeholder = "Asset name",
+			MaximumLength = 120,
+			TooltipText = "New file name without the extension"
+		};
+
+		content.Add(name);
+
+		content.Add(new Label(extension.Length > 0
+			? $"The {extension} extension is kept."
+			: "The new name will not add an extension.")
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.TextDisabled,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		if (asset.Kind != ProjectAssetKind.Scene)
+		{
+			content.Add(new Label(
+				"References to this asset in scenes are not updated.")
+			{
+				Font = theme.Fonts.Small,
+				TextColor = theme.Palette.Warning,
+				Wrap = UiTextWrap.Wrap
+			});
+		}
+
+		Label error = new(string.Empty)
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.Danger,
+			Wrap = UiTextWrap.Wrap
+		};
+
+		content.Add(error);
+
+		StackPanel buttons = new(UiOrientation.Horizontal)
+		{
+			Spacing = 6f
+		};
+
+		Button rename = new("Rename")
+		{
+			IsPrimary = true,
+			MinHeight = 28f
+		};
+
+		Button cancel = new("Cancel")
+		{
+			MinHeight = 28f
+		};
+
+		cancel.Clicked += _ => context.CloseModal();
+
+		rename.Clicked += _ =>
+		{
+			try
+			{
+				string renamed = _session.RenameAsset(asset.Id, name.Text);
+
+				_selectedId = renamed;
+				_selectedIsFolder = false;
+				Rebuild(force: true);
+				_revealSelectionPending = true;
+				context.CloseModal();
+				_session.SetStatus(
+					$"Renamed {asset.FileName} to {Path.GetFileName(renamed)}");
+			}
+
+			catch (Exception exception)
+			{
+				error.Text = exception.Message;
+			}
+		};
+
+		buttons.Add(rename);
+		buttons.Add(cancel);
+		content.Add(buttons);
+
+		context.ShowModal(scrim);
+		name.Focus();
+		name.SelectAll();
+	}
+
+	private void ShowDeleteAssetDialog(ProjectAsset asset)
+	{
+		if (Context is not UiContext context)
+		{
+			return;
+		}
+
+		bool openScene = _session.ScenePath is string current &&
+			string.Equals(current, asset.Id, StringComparison.OrdinalIgnoreCase);
+		bool startupScene = _session.Project is EditorProject project &&
+			string.Equals(
+				ProjectAssetCatalog.NormalizeId(project.StartupScenePath),
+				asset.Id,
+				StringComparison.OrdinalIgnoreCase);
+
+		if (openScene)
+		{
+			_session.SetStatus("Close the scene before deleting its file");
+			return;
+		}
+
+		if (startupScene)
+		{
+			_session.SetStatus(
+				"The startup scene cannot be deleted");
+			return;
+		}
+
+		UiTheme theme = context.Theme;
+		Panel scrim = CreateAssetDialog(
+			theme,
+			"Delete asset",
+			420f,
+			out StackPanel content);
+
+		content.Add(new Label($"Delete \"{asset.FileName}\"?")
+		{
+			Font = theme.Fonts.Body,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		content.Add(new Label(asset.Kind == ProjectAssetKind.Scene
+			? "This removes the scene file and cannot be undone."
+			: "This cannot be undone. Scenes that reference this " +
+				"asset will lose the reference.")
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.TextDisabled,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		Label error = new(string.Empty)
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.Danger,
+			Wrap = UiTextWrap.Wrap
+		};
+
+		content.Add(error);
+
+		StackPanel buttons = new(UiOrientation.Horizontal)
+		{
+			Spacing = 6f
+		};
+
+		Button delete = new("Delete")
+		{
+			IsPrimary = true,
+			MinHeight = 28f
+		};
+
+		Button cancel = new("Cancel")
+		{
+			MinHeight = 28f
+		};
+
+		cancel.Clicked += _ => context.CloseModal();
+
+		delete.Clicked += _ =>
+		{
+			try
+			{
+				_session.DeleteAsset(asset.Id);
+
+				_selectedId = string.Empty;
+				_selectedIsFolder = false;
+				Rebuild(force: true);
+				context.CloseModal();
+				_session.SetStatus($"Deleted {asset.FileName}");
+			}
+
+			catch (Exception exception)
+			{
+				error.Text = exception.Message;
+			}
+		};
+
+		buttons.Add(delete);
+		buttons.Add(cancel);
+		content.Add(buttons);
+
+		context.ShowModal(scrim);
+	}
+
+	private static Panel CreateAssetDialog(
+		UiTheme theme,
+		string title,
+		float width,
+		out StackPanel content)
+	{
+		Panel scrim = new()
+		{
+			Background = UiColor.FromArgb(0xAA0B0E13),
+			DrawBorder = false
+		};
+
+		Panel card = new()
+		{
+			Width = UiLength.Points(width),
+			Height = UiLength.Auto,
+			HorizontalAlignment = UiAlignment.Center,
+			VerticalAlignment = UiAlignment.Center,
+			DrawBackground = true,
+			Background = theme.Palette.SurfaceRaised,
+			DrawBorder = true,
+			BorderColor = theme.Palette.BorderStrong,
+			Padding = new UiThickness(20f)
+		};
+
+		content = new StackPanel
+		{
+			Spacing = 10f
+		};
+
+		content.Add(new Label(title)
+		{
+			Font = theme.Fonts.Heading
+		});
+
+		content.Add(new Separator());
+
+		card.Add(content);
+		scrim.Add(card);
+
+		return scrim;
+	}
+
+	private static string AssetExtension(string fileName)
+	{
+		return fileName.EndsWith(
+			SceneSerializer.FileExtension,
+			StringComparison.OrdinalIgnoreCase)
+			? SceneSerializer.FileExtension
+			: Path.GetExtension(fileName);
+	}
+
+	private static string AssetStem(string fileName)
+	{
+		string extension = AssetExtension(fileName);
+		return fileName[..^extension.Length];
 	}
 
 	private void OnTileClicked(IconTileView tile)

@@ -129,4 +129,81 @@ public sealed class EditorProjectTests : IDisposable
 		Assert.True(File.Exists(project.ResolvePath(
 			"Scenes/Level.volt.scene.json")));
 	}
+
+	[Fact]
+	public void RenameAsset_MovesTheFileAndUpdatesTheStartupPath()
+	{
+		EditorProject project = EditorProject.Create(_root, "Rename");
+
+		string renamed = project.RenameAsset(
+			"Scenes/Main.volt.scene.json",
+			"Start");
+
+		Assert.Equal("Scenes/Start.volt.scene.json", renamed);
+		Assert.False(File.Exists(project.ResolvePath(
+			"Scenes/Main.volt.scene.json")));
+		Assert.True(File.Exists(project.ResolvePath(renamed)));
+		Assert.Equal(renamed, project.StartupScenePath);
+		Assert.True(project.AssetCatalog.FileExists(renamed));
+
+		EditorProject reopened = EditorProject.Open(_root);
+
+		Assert.Equal(renamed, reopened.StartupScenePath);
+		Assert.NotNull(reopened.LoadStartupScene());
+	}
+
+	[Fact]
+	public void RenameAsset_RejectsInvalidNamesAndExistingFiles()
+	{
+		EditorProject project = EditorProject.Create(_root, "Rename guards");
+		project.CreateScene("Scenes/Other.volt.scene.json", "Other");
+
+		Assert.Throws<IOException>(() => project.RenameAsset(
+			"Scenes/Main.volt.scene.json",
+			"Other"));
+		Assert.Throws<ArgumentException>(() => project.RenameAsset(
+			"Scenes/Main.volt.scene.json",
+			"../Escape"));
+		Assert.Throws<ArgumentException>(() => project.RenameAsset(
+			"Scenes/Main.volt.scene.json",
+			"Main.volt.scene.json"));
+
+		Assert.True(File.Exists(project.ResolvePath(
+			"Scenes/Main.volt.scene.json")));
+	}
+
+	[Fact]
+	public void RenameAsset_HandlesFilesWithoutAnExtension()
+	{
+		EditorProject project = EditorProject.Create(_root, "Extensionless");
+		File.WriteAllText(
+			Path.Combine(project.AssetsPath, "README"),
+			"notes");
+		project.AssetCatalog.Refresh();
+
+		string renamed = project.RenameAsset("Assets/README", "NOTES");
+
+		Assert.Equal("Assets/NOTES", renamed);
+		Assert.False(File.Exists(project.ResolvePath("Assets/README")));
+		Assert.True(File.Exists(project.ResolvePath(renamed)));
+	}
+
+	[Fact]
+	public void DeleteAsset_RemovesAFileButProtectsTheStartupScene()
+	{
+		EditorProject project = EditorProject.Create(_root, "Delete");
+		project.CreateScene("Scenes/Old.volt.scene.json", "Old");
+
+		project.DeleteAsset("Scenes/Old.volt.scene.json");
+
+		Assert.False(File.Exists(project.ResolvePath(
+			"Scenes/Old.volt.scene.json")));
+		Assert.False(project.AssetCatalog.FileExists(
+			"Scenes/Old.volt.scene.json"));
+
+		Assert.Throws<InvalidOperationException>(() =>
+			project.DeleteAsset(project.StartupScenePath));
+		Assert.True(File.Exists(project.ResolvePath(
+			project.StartupScenePath)));
+	}
 }

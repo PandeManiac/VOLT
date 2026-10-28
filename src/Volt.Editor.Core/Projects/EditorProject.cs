@@ -239,13 +239,8 @@ public sealed class EditorProject
 		}
 
 		string directory = Path.GetDirectoryName(source)!;
-		string fileName = Path.GetFileName(source);
-		string extension = fileName.EndsWith(
-			SceneSerializer.FileExtension,
-			StringComparison.OrdinalIgnoreCase)
-			? SceneSerializer.FileExtension
-			: Path.GetExtension(fileName);
-		string stem = fileName[..^extension.Length];
+		(string stem, string extension) = SplitAssetName(
+			Path.GetFileName(source));
 		string relativeDirectory = Path.GetRelativePath(RootPath, directory);
 
 		int index = 1;
@@ -267,6 +262,119 @@ public sealed class EditorProject
 		AssetCatalog.Refresh();
 
 		return ProjectAssetCatalog.NormalizeId(relativeCopy);
+	}
+
+	/// <summary>
+	/// Renames an asset in place while keeping its file extension.
+	/// </summary>
+	/// <param name="relativePath">The current project-relative asset path.</param>
+	/// <param name="newName">
+	/// The new file name without its extension. Path separators and
+	/// reserved filename characters are rejected.
+	/// </param>
+	/// <returns>The project-relative identity of the renamed asset.</returns>
+	/// <remarks>
+	/// Renaming the startup scene updates the manifest, so reopening
+	/// the project still finds a startup scene. The scene's authored
+	/// name is intentionally unchanged: this operation renames the file,
+	/// not the document inside it.
+	/// </remarks>
+	public string RenameAsset(string relativePath, string newName)
+	{
+		string source = ResolvePath(relativePath);
+
+		if (!File.Exists(source))
+		{
+			throw new FileNotFoundException(
+				$"The asset '{relativePath}' does not exist.",
+				source);
+		}
+
+		string trimmed = (newName ?? string.Empty).Trim();
+		ValidateAssetName(trimmed, nameof(newName));
+
+		(string stem, string extension) = SplitAssetName(
+			Path.GetFileName(source));
+
+		if (string.Equals(trimmed, stem, StringComparison.Ordinal))
+		{
+			return ProjectAssetCatalog.NormalizeId(relativePath);
+		}
+
+		if (extension.Length > 0 &&
+			trimmed.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+		{
+			throw new ArgumentException(
+				"Enter the name without the file extension.",
+				nameof(newName));
+		}
+
+		string directory = Path.GetDirectoryName(source)!;
+		string relativeDirectory = Path.GetRelativePath(RootPath, directory);
+		string renamed = relativeDirectory == "."
+			? trimmed + extension
+			: Path.Combine(relativeDirectory, trimmed + extension);
+		string destination = ResolvePath(renamed);
+
+		if (File.Exists(destination) || Directory.Exists(destination))
+		{
+			throw new IOException(
+				$"An asset already exists at '{renamed}'.");
+		}
+
+		string id = ProjectAssetCatalog.NormalizeId(relativePath);
+		bool startupScene = string.Equals(
+			ProjectAssetCatalog.NormalizeId(StartupScenePath),
+			id,
+			StringComparison.OrdinalIgnoreCase);
+
+		File.Move(source, destination);
+
+		if (startupScene)
+		{
+			StartupScenePath = ProjectAssetCatalog.NormalizeId(renamed);
+			SaveManifest();
+		}
+
+		AssetCatalog.Refresh();
+
+		return ProjectAssetCatalog.NormalizeId(renamed);
+	}
+
+	/// <summary>
+	/// Deletes an asset file from the project.
+	/// </summary>
+	/// <remarks>
+	/// The startup scene is protected: deleting it would leave the
+	/// manifest pointing at a missing scene. Choose another startup
+	/// scene first. The editor separately protects the scene that is
+	/// currently open.
+	/// </remarks>
+	public void DeleteAsset(string relativePath)
+	{
+		string id = ProjectAssetCatalog.NormalizeId(relativePath);
+
+		if (string.Equals(
+			ProjectAssetCatalog.NormalizeId(StartupScenePath),
+			id,
+			StringComparison.OrdinalIgnoreCase))
+		{
+			throw new InvalidOperationException(
+				"The startup scene cannot be deleted. " +
+				"Choose another startup scene first.");
+		}
+
+		string source = ResolvePath(relativePath);
+
+		if (!File.Exists(source))
+		{
+			throw new FileNotFoundException(
+				$"The asset '{relativePath}' does not exist.",
+				source);
+		}
+
+		File.Delete(source);
+		AssetCatalog.Refresh();
 	}
 
 	public IReadOnlyList<string> EnumerateScenePaths()
@@ -369,6 +477,57 @@ public sealed class EditorProject
 		});
 
 		return scene;
+	}
+
+	private static (string Stem, string Extension) SplitAssetName(
+		string fileName)
+	{
+		string extension = fileName.EndsWith(
+			SceneSerializer.FileExtension,
+			StringComparison.OrdinalIgnoreCase)
+			? SceneSerializer.FileExtension
+			: Path.GetExtension(fileName);
+
+		return (fileName[..^extension.Length], extension);
+	}
+
+	private static void ValidateAssetName(
+		string name,
+		string parameterName)
+	{
+		if (name.Length == 0)
+		{
+			throw new ArgumentException(
+				"An asset name is required.",
+				parameterName);
+		}
+
+		if (name is "." or "..")
+		{
+			throw new ArgumentException(
+				"The name must be more than a relative path segment.",
+				parameterName);
+		}
+
+		foreach (char character in name)
+		{
+			if (character is '/' or '\\' or ':' or '*' or '?' or '"' or
+				'<' or '>' or '|' ||
+				char.IsControl(character))
+			{
+				throw new ArgumentException(
+					"The name may not contain path separators or " +
+					"reserved filename characters.",
+					parameterName);
+			}
+		}
+
+		if (name.EndsWith('.'))
+		{
+			throw new ArgumentException(
+				"The name may not end with a period.",
+				parameterName);
+		}
 	}
 
 	private static void AtomicWrite(string path, string contents)
