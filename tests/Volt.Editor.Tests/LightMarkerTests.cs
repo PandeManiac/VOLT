@@ -224,6 +224,101 @@ public sealed class LightMarkerTests : IDisposable
 	}
 
 	[Fact]
+	public void InspectorIntensityEdit_UpdatesLightingAndMarkerAndUndo()
+	{
+		SceneEntity light = _session.CreateDirectionalLight("Sun");
+		LightData data = light.GetComponent<LightData>()!;
+
+		data.Intensity = 2f;
+
+		using UiContext inspectorContext = new();
+		using InspectorPanel inspector = new(_session);
+
+		inspectorContext.Add(inspector);
+		inspectorContext.BeginFrame(
+			0.0,
+			new UiSize(380f, 800f),
+			UiPoint.Zero);
+
+		inspectorContext.Draw();
+
+		Label label = Descendants(inspector)
+			.OfType<Label>()
+			.Single(candidate => candidate.Text == "Intensity");
+
+		NumericField field = label.Parent!
+			.Children
+			.OfType<NumericField>()
+			.Single();
+
+		Assert.Equal(2f, field.Value, 3);
+
+		int history = _session.Undo.UndoCount;
+
+		Click(inspectorContext, field.GlobalVisualBounds.Center);
+		Assert.True(inspectorContext.KeyDown(
+			UiKey.A,
+			UiKeyModifiers.Control));
+
+		inspectorContext.TextInput("0");
+
+		Assert.True(inspectorContext.KeyDown(UiKey.Enter));
+
+		Assert.Equal(0f, data.Intensity);
+		Assert.Equal(history + 1, _session.Undo.UndoCount);
+		Assert.Equal(
+			Vector3.Zero,
+			ViewportMath.ResolveLight(_session.Scene!).DiffuseColor);
+
+		// The light is no longer selected, so its zero-intensity
+		// marker must show the muted state seen by an author.
+		_session.ClearSelection();
+
+		UiTheme theme = _context.Theme;
+		SceneViewport viewport = BuildViewport(out UiDrawList drawList);
+
+		Project(viewport, light, out UiPoint center, out _);
+
+		Assert.True(
+			Paints(drawList, MarkerArea(center), theme.Palette.TextDisabled),
+			"Setting intensity to zero must mute the marker.");
+
+		Assert.True(
+			PaintsText(
+				drawList,
+				LabelArea(center),
+				"Sun",
+				theme.Palette.TextDisabled),
+			"The light is still enabled, so its label keeps its name.");
+
+		Assert.False(
+			PaintsText(drawList, LabelArea(center), "Sun (off)"),
+			"Zero intensity is not the same as disabling the light.");
+
+		_session.UndoLast();
+
+		Assert.Equal(2f, data.Intensity, 3);
+		Assert.Equal(
+			new Vector3(2f, 2f, 2f),
+			ViewportMath.ResolveLight(_session.Scene!).DiffuseColor);
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(960f, 600f),
+			UiPoint.Zero);
+
+		drawList = _context.Draw();
+
+		Assert.True(
+			Paints(drawList, MarkerArea(center), UiColor.White),
+			"Undo must restore the light's normal marker color.");
+
+		Assert.True(
+			PaintsText(drawList, LabelArea(center), "Sun", UiColor.White),
+			"Undo must restore the light's normal label color.");
+	}
+
+	[Fact]
 	public void SelectedLightMarker_UsesAccentColor()
 	{
 		SceneEntity light = _session.CreateDirectionalLight("Sun");
