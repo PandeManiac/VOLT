@@ -1,9 +1,13 @@
 using System.Numerics;
 using Volt.Editor.Core.Scenes;
+using Volt.Editor.Panels;
+using Volt.Editor.Rendering;
 using Volt.Editor.Viewport;
 using Volt.Ui;
+using Volt.Ui.Input;
 using Volt.Ui.Rendering;
 using Volt.Ui.Styling;
+using Volt.Ui.Widgets;
 
 namespace Volt.Editor.Tests;
 
@@ -144,6 +148,82 @@ public sealed class LightMarkerTests : IDisposable
 	}
 
 	[Fact]
+	public void InspectorEnabledToggle_UpdatesLightMarkerAndUndo()
+	{
+		SceneEntity light = _session.CreateDirectionalLight("Sun");
+		LightData data = light.GetComponent<LightData>()!;
+
+		data.Color = new Vector4(1f, 0f, 0f, 1f);
+		data.Intensity = 2f;
+
+		using UiContext inspectorContext = new();
+		using InspectorPanel inspector = new(_session);
+
+		inspectorContext.Add(inspector);
+		inspectorContext.BeginFrame(
+			0.0,
+			new UiSize(380f, 800f),
+			UiPoint.Zero);
+
+		inspectorContext.Draw();
+
+		CheckBox toggle = Descendants(inspector)
+			.OfType<CheckBox>()
+			.Single(box => box.Text == nameof(LightData.Enabled));
+
+		Assert.True(toggle.IsChecked, "The light starts enabled.");
+
+		int history = _session.Undo.UndoCount;
+
+		Click(inspectorContext, toggle.GlobalVisualBounds.Center);
+
+		Assert.False(data.Enabled);
+		Assert.Equal(history + 1, _session.Undo.UndoCount);
+		Assert.Equal(
+			ViewportLight.Default.DiffuseColor,
+			ViewportMath.ResolveLight(_session.Scene!).DiffuseColor);
+
+		UiTheme theme = _context.Theme;
+		SceneViewport viewport = BuildViewport(out UiDrawList drawList);
+
+		Project(viewport, light, out UiPoint center, out _);
+
+		Assert.True(
+			PaintsLine(
+				drawList,
+				new UiPoint(center.X - 7f, center.Y + 7f),
+				new UiPoint(center.X + 7f, center.Y - 7f),
+				theme.Palette.TextDisabled),
+			"Toggling Enabled off must cross out the light marker.");
+
+		Assert.True(
+			PaintsText(drawList, LabelArea(center), "Sun (off)"),
+			"Toggling Enabled off must update the label immediately.");
+
+		_session.UndoLast();
+
+		Assert.True(data.Enabled);
+		Assert.Equal(
+			new Vector3(2f, 0f, 0f),
+			ViewportMath.ResolveLight(_session.Scene!).DiffuseColor);
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(960f, 600f),
+			UiPoint.Zero);
+
+		drawList = _context.Draw();
+
+		Assert.True(
+			PaintsText(drawList, LabelArea(center), "Sun"),
+			"Undo must restore the light's normal label.");
+
+		Assert.False(
+			PaintsText(drawList, LabelArea(center), "Sun (off)"),
+			"Undo must remove the off state from the marker.");
+	}
+
+	[Fact]
 	public void SelectedLightMarker_UsesAccentColor()
 	{
 		SceneEntity light = _session.CreateDirectionalLight("Sun");
@@ -226,6 +306,25 @@ public sealed class LightMarkerTests : IDisposable
 				bounds,
 				out tip),
 			"The beam arrow must end inside the viewport.");
+	}
+
+	private static void Click(UiContext context, UiPoint point)
+	{
+		context.PointerDown(UiMouseButton.Left, point);
+		context.PointerUp(UiMouseButton.Left, point);
+	}
+
+	private static IEnumerable<Widget> Descendants(Widget widget)
+	{
+		foreach (Widget child in widget.Children)
+		{
+			yield return child;
+
+			foreach (Widget descendant in Descendants(child))
+			{
+				yield return descendant;
+			}
+		}
 	}
 
 	private static UiRect MarkerArea(UiPoint center)
