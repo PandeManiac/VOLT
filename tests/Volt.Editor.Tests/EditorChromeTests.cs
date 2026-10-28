@@ -891,6 +891,59 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_ReturnsToTheNewProjectsRoot()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		Assert.NotNull(_session.CreateScene(
+			"Scenes/Props/Prop.volt.scene.json",
+			"Prop"));
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		TreeViewItem props = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes")
+			.Children
+			.Single(item => item.Text == "Props");
+
+		folders.SetSelection([props]);
+		Paint(0.3);
+
+		Assert.Contains(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.Text == "Prop.volt.scene.json");
+
+		Assert.True(_session.NewProject(
+			Path.Combine(_root, "Other"),
+			"Other"));
+
+		Paint(0.4);
+
+		Assert.Contains(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.Text == "Scenes");
+
+		Assert.DoesNotContain(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.Text == "Prop.volt.scene.json");
+	}
+
+	[Fact]
 	public void ProjectBrowser_SelectionFollowsAssetsBetweenGridAndList()
 	{
 		const string Main = "Scenes/Main.volt.scene.json";

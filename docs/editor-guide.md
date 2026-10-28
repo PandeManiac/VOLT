@@ -290,7 +290,8 @@ ratios without discarding the state inside open panels.
   action opens the scene and moves the browser to the scene's folder
   so the new tile is visible. Grid and list modes share the selected
   asset, so switching views keeps the same item highlighted. The
-  folder tree keeps the current folder selected as it rebuilds.
+  folder tree keeps the current folder selected as it rebuilds, and
+  opening another project returns the browser to that project's root.
 - **Console** records editor actions and errors.
 - **Profiler** reports frame timing and runtime counts while the
   editor is running.

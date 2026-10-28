@@ -28,6 +28,7 @@ namespace Volt.Editor.Panels;
 public sealed class ProjectPanel : Panel
 {
 	private readonly EditorSession _session;
+	private EditorProject? _openProject;
 	private readonly TreeView _folders;
 	private readonly TreeView _list;
 	private readonly TileWrapPanel _tiles;
@@ -333,6 +334,16 @@ public sealed class ProjectPanel : Panel
 		}
 
 		EditorProject? project = _session.Project;
+
+		if (!ReferenceEquals(_openProject, project))
+		{
+			_openProject = project;
+			_folder = string.Empty;
+			_folderSelectionActive = false;
+			_selectedId = string.Empty;
+			_selectedIsFolder = false;
+			force = true;
+		}
 
 		if (project is null)
 		{
