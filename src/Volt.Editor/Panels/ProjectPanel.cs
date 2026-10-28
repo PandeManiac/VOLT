@@ -239,13 +239,23 @@ public sealed class ProjectPanel : Panel
 
 	protected override bool OnKeyDown(UiKeyEvent key)
 	{
+		if (!key.IsDown || key.Modifiers != UiKeyModifiers.None)
+		{
+			return false;
+		}
+
+		// The list view runs its own arrow navigation. The tile grid
+		// needs this panel to move focus and selection together.
+		if (_gridMode && TryMoveTileFocus(key.Key))
+		{
+			return true;
+		}
+
 		// Asset shortcuts belong to the asset view. The folder tree
 		// and the search field can both own the keyboard while an
 		// asset is selected, so requiring focus here keeps Delete
 		// from acting on something the author cannot see.
-		if (!key.IsDown ||
-			key.IsRepeat ||
-			key.Modifiers != UiKeyModifiers.None ||
+		if (key.IsRepeat ||
 			!AssetViewHasFocus() ||
 			_selectedId.Length == 0 ||
 			_selectedIsFolder)
@@ -270,6 +280,50 @@ public sealed class ProjectPanel : Panel
 		}
 
 		return false;
+	}
+
+	private bool TryMoveTileFocus(UiKey key)
+	{
+		int columns = _tiles.Columns;
+
+		if (columns <= 0)
+		{
+			return false;
+		}
+
+		int index = _tileViews.FindIndex(tile => tile.HasFocus);
+
+		if (index < 0)
+		{
+			return false;
+		}
+
+		int target = key switch
+		{
+			UiKey.Left => index - 1,
+			UiKey.Right => index + 1,
+			UiKey.Up => index - columns,
+			UiKey.Down => index + columns,
+			_ => -1
+		};
+
+		if (target < 0 ||
+			target >= _tileViews.Count ||
+			target == index)
+		{
+			return false;
+		}
+
+		IconTileView tile = _tileViews[target];
+
+		if (!SelectTile(tile))
+		{
+			return false;
+		}
+
+		tile.Focus();
+		RevealSelection();
+		return true;
 	}
 
 	private bool AssetViewHasFocus()
@@ -1323,6 +1377,11 @@ public sealed class ProjectPanel : Panel
 
 	private void OnTileClicked(IconTileView tile)
 	{
+		SelectTile(tile);
+	}
+
+	private bool SelectTile(IconTileView tile)
+	{
 		if (tile.Tag is ProjectAsset asset)
 		{
 			_selectedId = asset.Id;
@@ -1337,10 +1396,11 @@ public sealed class ProjectPanel : Panel
 
 		else
 		{
-			return;
+			return false;
 		}
 
 		SyncSelection(updateDetails: true);
+		return true;
 	}
 
 	private void OnTileActivated(IconTileView tile)

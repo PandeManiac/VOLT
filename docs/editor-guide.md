@@ -293,7 +293,9 @@ ratios without discarding the state inside open panels.
   folder tree keeps the current folder selected and its collapsed
   branches collapsed as it rebuilds, and the selected item's details
   survive a refresh. Switching between tiles and the list scrolls the
-  selected item into view, and changing the interface scale preserves
+  selected item into view, and the arrow keys move the selection and
+  focus between neighboring tiles, keeping the active tile in view.
+  Changing the interface scale preserves
   the browser's folder, view, search, and selection. Opening another
   project returns the browser to that project's root and clears its
   search filter. Right-click an asset for **Open**, **Rename…**,
@@ -327,8 +329,9 @@ Keyboard shortcuts: `Ctrl+S` save, `Ctrl+Z` undo, `Ctrl+Y` or
 `Ctrl+Shift+Z` redo, `Ctrl+D` duplicate selection, `Delete` delete
 selection, `F2` rename the active object, `Ctrl+A` select all,
 `Ctrl+Shift+A` select none, `Ctrl+I` invert selection. In the Project
-browser, `F2` renames and `Delete` deletes the focused asset. While a
-text field has focus, `Ctrl+Z` and
+browser, the arrow keys move through the tiles, `F2` renames, and
+`Delete` deletes the focused asset. While a text field has focus,
+`Ctrl+Z` and
 `Ctrl+Y` undo and redo that field's text instead of the scene, and
 `Ctrl+S` applies the field before writing the scene. Closing the
 window applies it before deciding whether to prompt for unsaved work.

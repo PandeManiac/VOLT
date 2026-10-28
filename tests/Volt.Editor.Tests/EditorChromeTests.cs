@@ -1368,6 +1368,87 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_ArrowKeysNavigateTheTileGrid()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		string assets = _session.Project!.AssetsPath;
+
+		for (int index = 0; index < 30; index++)
+		{
+			File.WriteAllText(
+				Path.Combine(assets, $"Asset{index:00}.mat"),
+				"material");
+		}
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem assetsFolder = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Assets");
+
+		folders.SetSelection([assetsFolder]);
+		Paint(0.2);
+
+		TileWrapPanel grid = Descendants(project)
+			.OfType<TileWrapPanel>()
+			.Single();
+
+		Assert.True(grid.Columns > 0);
+		Assert.True(grid.Children.Count > grid.Columns + 1);
+
+		IconTileView first = Assert.IsType<IconTileView>(grid.Children[0]);
+		IconTileView right = Assert.IsType<IconTileView>(grid.Children[1]);
+		IconTileView below = Assert.IsType<IconTileView>(
+			grid.Children[1 + grid.Columns]);
+
+		Click(first);
+		Paint(0.3);
+
+		Assert.True(first.IsSelected);
+		Assert.True(first.HasFocus);
+
+		Assert.True(_context.KeyDown(UiKey.Right));
+		Paint(0.35);
+
+		Assert.Same(right, _context.FocusedWidget);
+		Assert.True(right.IsSelected);
+		Assert.False(first.IsSelected);
+
+		Assert.True(_context.KeyDown(UiKey.Down));
+		Paint(0.4);
+
+		Assert.Same(below, _context.FocusedWidget);
+		Assert.True(below.IsSelected);
+
+		Assert.True(_context.KeyDown(UiKey.Up));
+		Paint(0.45);
+
+		Assert.Same(right, _context.FocusedWidget);
+		Assert.True(right.IsSelected);
+
+		Assert.True(_context.KeyDown(UiKey.Left));
+		Paint(0.5);
+
+		Assert.Same(first, _context.FocusedWidget);
+		Assert.True(first.IsSelected);
+
+		Assert.False(_context.KeyDown(UiKey.Left));
+		Assert.Same(first, _context.FocusedWidget);
+	}
+
+	[Fact]
 	public void ProjectBrowser_ContextMenuDuplicatesAScene()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);
