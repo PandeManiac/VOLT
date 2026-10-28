@@ -63,6 +63,7 @@ public sealed class VulkanUiHost : IDisposable
 	private readonly Stopwatch _clock = Stopwatch.StartNew();
 	private readonly List<string> _pendingText = [];
 	private readonly List<ImageRegistration> _images = [];
+	private readonly List<string> _diagnostics = [];
 
 	private int _nextImageId = 1;
 
@@ -73,6 +74,7 @@ public sealed class VulkanUiHost : IDisposable
 	private VulkanCommandPool _commandPool;
 	private VulkanCommandBuffers _commandBuffers;
 	private SwapchainResources? _resources;
+	private UiFontSet? _activeFontSet;
 
 	private UiPoint _pointer;
 	private UiKeyModifiers _modifiers;
@@ -98,6 +100,12 @@ public sealed class VulkanUiHost : IDisposable
 				VulkanCompatible: true,
 				Resizable: true,
 				HighPixelDensity: true));
+
+		// SDL knows both sizes as soon as the window exists, so startup
+		// diagnostics do not have to wait for the first UI frame.
+		SurfaceMetrics = UiSurfaceMetrics.FromWindowSizes(
+			_window.Size,
+			_window.PixelSize);
 
 		VulkanInstance? instance = null;
 		VulkanSurface? surface = null;
@@ -383,6 +391,19 @@ public sealed class VulkanUiHost : IDisposable
 	public int PresentedFrames { get; private set; }
 
 	/// <summary>
+	/// Gets the window geometry from the most recent frame, or from
+	/// window creation before the first frame.
+	/// </summary>
+	public UiSurfaceMetrics SurfaceMetrics { get; private set; } =
+		new(1, 1, 1, 1, 1f);
+
+	/// <summary>
+	/// Gets the problems reported while native resources were released,
+	/// oldest first.
+	/// </summary>
+	public IReadOnlyList<string> Diagnostics => _diagnostics;
+
+	/// <summary>
 	/// Gets the name of the GPU this host selected.
 	/// </summary>
 	public string DeviceName { get; private set; } = "unknown";
@@ -459,23 +480,22 @@ public sealed class VulkanUiHost : IDisposable
 			return;
 		}
 
-		WindowSize pixels = _window.PixelSize;
+		UiSurfaceMetrics metrics = UiSurfaceMetrics.FromWindowSizes(
+			_window.Size,
+			_window.PixelSize);
 
-		if (pixels.Width <= 0 || pixels.Height <= 0)
+		if (!metrics.HasPhysicalSurface)
 		{
+			// A minimized window has no drawable surface. Its logical
+			// size and scale stay as they were.
 			Thread.Sleep(1);
 			return;
 		}
 
-		WindowSize logical = _window.Size;
+		SurfaceMetrics = metrics;
 
-		UiSize surface = new(
-			MathF.Max(1f, logical.Width),
-			MathF.Max(1f, logical.Height));
-
-		float scale = MathF.Max(
-			0.01f,
-			pixels.Width / surface.Width);
+		UiSize surface = metrics.LogicalSize;
+		float scale = metrics.DisplayScale;
 
 		if (MathF.Abs(scale - _dpiScale) > 0.001f)
 		{
@@ -509,7 +529,9 @@ public sealed class VulkanUiHost : IDisposable
 
 		_geometry.Build(drawList, _dpiScale);
 
-		Present(pixels);
+		Present(new WindowSize(
+			metrics.PhysicalWidth,
+			metrics.PhysicalHeight));
 	}
 
 	/// <summary>
@@ -535,25 +557,76 @@ public sealed class VulkanUiHost : IDisposable
 			// remaining native resources from being released.
 		}
 
-		_resources?.Dispose();
+		// Every release is attempted even if an earlier one fails, so a
+		// shutdown problem cannot leave the window, device, or instance
+		// behind. The failure is reported instead of thrown: throwing
+		// here would replace the frame failure that caused the shutdown.
+		SwapchainResources? resources = _resources;
+
 		_resources = null;
 
-		_ui.Dispose();
-		_commandBuffers.Dispose();
-		_commandPool.Dispose();
-		_device.Dispose();
-		_surface.Dispose();
-		_instance.Dispose();
-		_window.Dispose();
+		Release("the swapchain generation", () => resources?.Dispose());
+
+		if (resources is not null)
+		{
+			ReportRetirement(resources);
+		}
+
+		Release("the UI context", _ui.Dispose);
+		Release("the command buffers", _commandBuffers.Dispose);
+		Release("the command pool", _commandPool.Dispose);
+		Release("the logical device", _device.Dispose);
+		Release("the presentation surface", _surface.Dispose);
+		Release("the Vulkan instance", _instance.Dispose);
+		Release("the native window", _window.Dispose);
+	}
+
+	private void Release(string operation, Action release)
+	{
+		try
+		{
+			release();
+		}
+
+		catch (Exception exception)
+		{
+			ReportDiagnostic(
+				$"Releasing {operation} failed during shutdown: {exception}");
+		}
+	}
+
+	private void ReportRetirement(SwapchainResources resources)
+	{
+		string? reason = resources.RetirementReason;
+
+		if (reason is not null)
+		{
+			ReportDiagnostic(reason);
+		}
+	}
+
+	private void ReportDiagnostic(string message)
+	{
+		_diagnostics.Add(message);
+		_options.DiagnosticSink?.Invoke(message);
 	}
 
 	private void Present(WindowSize pixels)
 	{
+		UiFontSet themeFonts = _ui.Theme.Fonts;
+
+		// Every atlas layer belongs to the font set the renderer was
+		// created with. A new theme font set replaces those font
+		// objects, so the generation is rebuilt before anything draws
+		// with fonts it cannot map.
+		bool fontSetChanged = !ReferenceEquals(themeFonts, _activeFontSet);
+
 		if (_resources is null ||
+			fontSetChanged ||
 			_resources.Pixels.Width != pixels.Width ||
 			_resources.Pixels.Height != pixels.Height)
 		{
-			Recreate(pixels);
+			Recreate(pixels, themeFonts);
 		}
 
 		SwapchainResources active = _resources
@@ -590,17 +663,26 @@ public sealed class VulkanUiHost : IDisposable
 
 			if (current.Width > 0 && current.Height > 0)
 			{
-				Recreate(current);
+				Recreate(current, _ui.Theme.Fonts);
 			}
 		}
 	}
 
-	private void Recreate(WindowSize pixels)
+	private void Recreate(WindowSize pixels, UiFontSet themeFonts)
 	{
 		_device.WaitIdle();
 
-		_resources?.Dispose();
+		SwapchainResources? previous = _resources;
+
 		_resources = null;
+
+		if (previous is not null)
+		{
+			previous.Dispose();
+			ReportRetirement(previous);
+		}
+
+		_activeFontSet = themeFonts;
 
 		if (pixels.Width <= 0 || pixels.Height <= 0)
 		{
@@ -614,7 +696,7 @@ public sealed class VulkanUiHost : IDisposable
 			_surface,
 			_commandBuffers,
 			pixels,
-			_ui.Theme.Fonts.Enumerate().ToArray(),
+			themeFonts.Enumerate().ToArray(),
 			_options.VertexShaderPath ?? DefaultShader("ui.vert.spv"),
 			_options.FragmentShaderPath ?? DefaultShader("ui.frag.spv"));
 
@@ -966,15 +1048,39 @@ public sealed class VulkanUiHost : IDisposable
 
 		public VulkanSwapchainFrameScheduler Frames { get; }
 
+		/// <summary>
+		/// Gets why the frame scheduler retained its synchronization
+		/// objects, or null when they were released.
+		/// </summary>
+		public string? RetirementReason { get; private set; }
+
 		public void Dispose()
 		{
+			// The scheduler reports rather than throws when a failed frame
+			// cannot be retired safely.
 			Frames.Dispose();
-			Renderer.Dispose();
-			_imageViews.Dispose();
 
-			// The swapchain owns the images the image views were
-			// created from, so it is destroyed after them.
-			_swapchain.Dispose();
+			RetirementReason = Frames.UnsafeRetirementReason;
+
+			try
+			{
+				Renderer.Dispose();
+			}
+
+			finally
+			{
+				try
+				{
+					_imageViews.Dispose();
+				}
+
+				finally
+				{
+					// The swapchain owns the images the image views were
+					// created from, so it is destroyed after them.
+					_swapchain.Dispose();
+				}
+			}
 		}
 	}
 }
