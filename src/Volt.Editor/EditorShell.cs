@@ -1217,13 +1217,13 @@ public sealed class EditorShell : Panel
 			UiKey.D,
 			UiKeyModifiers.Control,
 			() => Guard("Duplicate", () => _session.DuplicateSelection()),
-			() => _session.Selection.Count > 0));
+			() => _session.Selection.Count > 0 && CanUseEntityShortcut()));
 
 		AddShortcut(new UiShortcut(
 			UiKey.Delete,
 			UiKeyModifiers.None,
 			() => Guard("Delete", () => _session.DeleteSelection()),
-			() => _session.Selection.Count > 0));
+			() => _session.Selection.Count > 0 && CanUseEntityShortcut()));
 
 		AddShortcut(new UiShortcut(
 			UiKey.C,
@@ -1256,13 +1256,13 @@ public sealed class EditorShell : Panel
 			UiKey.A,
 			UiKeyModifiers.Control | UiKeyModifiers.Shift,
 			() => Guard("Select none", _session.SelectNone),
-			() => _session.Selection.Count > 0));
+			() => _session.Selection.Count > 0 && CanUseEntityShortcut()));
 
 		AddShortcut(new UiShortcut(
 			UiKey.I,
 			UiKeyModifiers.Control,
 			() => Guard("Invert selection", () => _session.InvertSelection()),
-			() => _session.Scene is not null));
+			() => _session.Scene is not null && CanUseEntityShortcut()));
 
 		// Tool hotkeys follow the familiar editor layout. They stand
 		// down while a viewport is navigating, because the same letters
@@ -1296,8 +1296,20 @@ public sealed class EditorShell : Panel
 	{
 		// A tool hotkey must never steal a letter from a field the user
 		// is typing in. Viewport navigation owns the same letters too.
-		return !_session.ViewportNavigating &&
-			Context?.FocusedWidget is not TextField;
+		return !_session.ViewportNavigating && CanUseEntityShortcut();
+	}
+
+	/// <summary>
+	/// Gets whether an entity command may react to the keyboard.
+	/// </summary>
+	/// <remarks>
+	/// A focused text field owns the keyboard for editing text. Without
+	/// this guard, Ctrl+D, Delete, or a selection shortcut could change
+	/// the scene while the user is renaming an object.
+	/// </remarks>
+	private bool CanUseEntityShortcut()
+	{
+		return Context?.FocusedWidget is not TextField;
 	}
 
 	/// <summary>

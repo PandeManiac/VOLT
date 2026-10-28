@@ -433,7 +433,7 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
-	public void ToolHotkeys_DoNotFireWhileATextFieldIsFocused()
+	public void EditorShortcuts_DoNotFireWhileATextFieldIsFocused()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);
 		SceneDocument scene = _session.Scene!;
@@ -466,13 +466,28 @@ public sealed class EditorChromeTests : IDisposable
 
 		Assert.Equal($"{cube.Name}W", name.Text);
 
-		// The shortcut still works once the field no longer owns the
+		int entities = scene.EntityCount;
+		int history = _session.Undo.UndoCount;
+
+		_context.KeyDown(UiKey.D, UiKeyModifiers.Control);
+		_context.KeyDown(UiKey.Delete);
+		_context.KeyDown(UiKey.A, UiKeyModifiers.Control | UiKeyModifiers.Shift);
+		_context.KeyDown(UiKey.I, UiKeyModifiers.Control);
+
+		Assert.Equal(entities, scene.EntityCount);
+		Assert.Equal(history, _session.Undo.UndoCount);
+		Assert.Contains(cube.Id, _session.Selection);
+
+		// The shortcuts still work once the field no longer owns the
 		// keyboard.
 		_context.ClearFocus();
 		_session.Tool = EditorTool.Select;
 
 		Assert.True(_context.KeyDown(UiKey.W));
 		Assert.Equal(EditorTool.Translate, _session.Tool);
+
+		Assert.True(_context.KeyDown(UiKey.D, UiKeyModifiers.Control));
+		Assert.Equal(entities + 1, scene.EntityCount);
 	}
 
 	private EditorShell BuildShell(float width, float height)
