@@ -214,7 +214,7 @@ internal sealed class EditorSceneRenderer : IViewportRenderer, IDisposable
 				continue;
 			}
 
-			RecordViewport(commandBuffer, target, request);
+			RecordViewport(commandBuffer, target, request, slot);
 		}
 	}
 
@@ -250,7 +250,8 @@ internal sealed class EditorSceneRenderer : IViewportRenderer, IDisposable
 	private void RecordViewport(
 		CommandBuffer commandBuffer,
 		SlotTarget slotTarget,
-		ViewportRenderRequest request)
+		ViewportRenderRequest request,
+		int slot)
 	{
 		VulkanOffscreenRenderTarget target = slotTarget.Target;
 
@@ -265,6 +266,13 @@ internal sealed class EditorSceneRenderer : IViewportRenderer, IDisposable
 		target.RecordBegin(commandBuffer, in clear);
 
 		VulkanSceneMeshPipeline pipeline = EnsurePipeline(target);
+
+		pipeline.BeginViewport(
+			commandBuffer,
+			slot,
+			new VulkanSceneLight(
+				request.Light.UnitDirection,
+				request.Light.DiffuseColor));
 
 		Extent2D extent = target.Extent;
 
@@ -310,6 +318,7 @@ internal sealed class EditorSceneRenderer : IViewportRenderer, IDisposable
 		_pipeline = new VulkanSceneMeshPipeline(
 			_instance,
 			_device,
+			_physicalDevice,
 			target.RenderPass,
 			_vertexShaderPath,
 			_fragmentShaderPath);

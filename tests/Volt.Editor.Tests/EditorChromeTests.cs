@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Text;
 using Volt.Editor.Core.Scenes;
 using Volt.Editor.Panels;
@@ -176,8 +177,8 @@ public sealed class EditorChromeTests : IDisposable
 		MenuItem light = create.Children
 			.Single(item => item.Label == "Create Light");
 
-		Assert.False(light.IsEnabled);
-		Assert.Null(light.Action);
+		Assert.True(light.IsEnabled);
+		Assert.NotNull(light.Action);
 
 		MenuItem edit = shell.MenuBarView.Menus
 			.Single(menu => menu.Label == "Edit");
@@ -220,6 +221,44 @@ public sealed class EditorChromeTests : IDisposable
 		_session.UndoLast();
 
 		Assert.Equal(before, scene.Entities.Count);
+	}
+
+	[Fact]
+	public void GameObjectMenu_CreatesADirectionalLightAsOneUndoStep()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneDocument scene = _session.Scene!;
+		int before = scene.Entities.Count;
+		int undoBefore = _session.Undo.UndoCount;
+
+		MenuItem create = shell.MenuBarView.Menus
+			.Single(menu => menu.Label == "GameObject");
+
+		create.Children
+			.Single(item => item.Label == "Create Light")
+			.Action!
+			.Invoke();
+
+		Assert.Equal(before + 1, scene.Entities.Count);
+		Assert.Equal(undoBefore + 1, _session.Undo.UndoCount);
+
+		SceneEntity created = _session.ActiveEntity!;
+		LightData light = Assert.IsType<LightData>(
+			created.GetComponent<LightData>());
+
+		Assert.True(light.Enabled);
+		Assert.Equal(1f, light.Intensity);
+		Assert.Equal(Vector4.One, light.Color);
+		Assert.Equal(LightData.DefaultEulerAngles, created.Transform.EulerAngles);
+
+		_session.UndoLast();
+
+		Assert.Equal(before, scene.Entities.Count);
+
+		_session.RedoLast();
+
+		Assert.Equal(before + 1, scene.Entities.Count);
+		Assert.NotNull(scene.Find(created.Id)?.GetComponent<LightData>());
 	}
 
 	[Fact]

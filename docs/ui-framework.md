@@ -296,7 +296,7 @@ target still renders. The editor uses this to pass CPU-rendered scene
 and game images into the headless capture: `SoftwareSceneRenderer`
 implements the same viewport-renderer contract as the Vulkan renderer,
 clips meshes and the ground grid against the view frustum, depth-tests
-them, applies the scene's directional light, and supersamples before
+them, applies the scene's authored directional light, and supersamples before
 box-filtering down. The editor exposes the path as `--snapshot <file>`:
 it lays out the shell, simulates three frames, rasterizes 3D content and
 the draw list, and writes the PNG without a window or a GPU. Tests in

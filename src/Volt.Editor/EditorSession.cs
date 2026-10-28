@@ -1,3 +1,4 @@
+using System.Numerics;
 using Volt.Editor.Core.Editing;
 using Volt.Editor.Core.Projects;
 using Volt.Editor.Core.Runtime;
@@ -475,6 +476,31 @@ public sealed class EditorSession : IDisposable
 	{
 		SceneDocument scene = RequireScene();
 		AddEntityCommand command = new(scene, name, parentId);
+
+		Undo.Execute(command);
+		Select(command.Entity.Id);
+		SetStatus($"Created {command.Entity.Name}");
+
+		return command.Entity;
+	}
+
+	/// <summary>
+	/// Creates a directional light and selects it as one undo step.
+	/// </summary>
+	/// <remarks>
+	/// The default rotation reproduces the key light earlier builds
+	/// baked into the scene pipeline, so adding the first authored light
+	/// does not change the scene's look until the user edits it.
+	/// </remarks>
+	public SceneEntity CreateDirectionalLight(
+		string name = "Directional Light")
+	{
+		SceneDocument scene = RequireScene();
+		AddEntityCommand command = new(scene, name);
+
+		command.Entity.Transform.Position = new Vector3(0f, 3f, 0f);
+		command.Entity.Transform.EulerAngles = LightData.DefaultEulerAngles;
+		command.Entity.AddComponent(new LightData());
 
 		Undo.Execute(command);
 		Select(command.Entity.Id);

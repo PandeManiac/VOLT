@@ -83,7 +83,8 @@ internal sealed class SoftwareSceneRenderer : IViewportRenderer
 			request.Projection,
 			[.. request.Instances],
 			request.ShowGrid,
-			request.ClearColor);
+			request.ClearColor,
+			request.Light);
 	}
 
 	/// <inheritdoc />
@@ -133,6 +134,7 @@ internal sealed class SoftwareSceneRenderer : IViewportRenderer
 /// <param name="Instances">The meshes to draw, in draw order.</param>
 /// <param name="ShowGrid">Whether the ground grid is drawn.</param>
 /// <param name="ClearColor">The background colour components.</param>
+/// <param name="Light">The authored directional light.</param>
 internal sealed record SoftwareViewportJob(
 	int Width,
 	int Height,
@@ -140,7 +142,8 @@ internal sealed record SoftwareViewportJob(
 	Matrix4x4 Projection,
 	ViewportMeshInstance[] Instances,
 	bool ShowGrid,
-	Vector4 ClearColor);
+	Vector4 ClearColor,
+	ViewportLight Light);
 
 /// <summary>
 /// Rasterizes scene meshes and the ground grid on the CPU.
@@ -149,8 +152,8 @@ internal sealed record SoftwareViewportJob(
 /// <para>
 /// The renderer follows the same contract as the GPU scene pipeline:
 /// right-handed view space, a Vulkan-style projection with Y down and
-/// depth in 0..1, no back-face culling, a one-directional light with an
-/// ambient term, and a depth buffer. Meshes come from
+/// depth in 0..1, no back-face culling, the authored directional light
+/// with an ambient term, and a depth buffer. Meshes come from
 /// <see cref="EditorMeshLibrary"/>, so a headless capture and a window
 /// draw the same geometry rather than two approximations of it.
 /// </para>
@@ -169,12 +172,6 @@ internal sealed record SoftwareViewportJob(
 /// </remarks>
 internal static class SoftwareSceneRasterizer
 {
-	/// <summary>
-	/// The direction toward the scene's single directional light.
-	/// </summary>
-	private static readonly Vector3 LightDirection =
-		Vector3.Normalize(new Vector3(0.35f, 0.85f, 0.40f));
-
 	private const float Ambient = 0.32f;
 	private const float Diffuse = 0.68f;
 
@@ -224,6 +221,9 @@ internal static class SoftwareSceneRasterizer
 
 		Matrix4x4 viewProjection = job.View * job.Projection;
 
+		Vector3 lightDirection = job.Light.UnitDirection;
+		Vector3 lightDiffuse = job.Light.DiffuseColor;
+
 		if (job.ShowGrid &&
 			s_meshes.Value.TryGetValue(
 				EditorMeshLibrary.Grid,
@@ -237,7 +237,9 @@ internal static class SoftwareSceneRasterizer
 				depth,
 				surfaceWidth,
 				surfaceHeight,
-				lit: true);
+				lit: true,
+				lightDirection,
+				lightDiffuse);
 		}
 
 		foreach (ViewportMeshInstance instance in job.Instances)
@@ -257,7 +259,9 @@ internal static class SoftwareSceneRasterizer
 				depth,
 				surfaceWidth,
 				surfaceHeight,
-				lit: true);
+				lit: true,
+				lightDirection,
+				lightDiffuse);
 		}
 
 		return Downsample(
@@ -277,7 +281,9 @@ internal static class SoftwareSceneRasterizer
 		float[] depth,
 		int width,
 		int height,
-		bool lit)
+		bool lit,
+		Vector3 lightDirection,
+		Vector3 lightDiffuse)
 	{
 		Vector4[] clip = new Vector4[vertices.Length];
 		Vector3[] positions = new Vector3[vertices.Length];
@@ -305,7 +311,7 @@ internal static class SoftwareSceneRasterizer
 			Vector3 second = positions[index + 1];
 			Vector3 third = positions[index + 2];
 
-			float lighting = 1f;
+			Vector3 lighting = Vector3.One;
 
 			if (lit)
 			{
@@ -324,16 +330,17 @@ internal static class SoftwareSceneRasterizer
 					// The absolute dot reproduces that two-sided
 					// lighting without needing a camera position.
 					float lambert = MathF.Abs(
-						Vector3.Dot(normal, LightDirection));
+						Vector3.Dot(normal, lightDirection));
 
-					lighting = Ambient + (Diffuse * lambert);
+					lighting = new Vector3(Ambient) +
+						(lightDiffuse * (Diffuse * lambert));
 				}
 			}
 
 			Vector3 albedo = vertices[index].Color;
-			byte red = ToByte(albedo.X * lighting);
-			byte green = ToByte(albedo.Y * lighting);
-			byte blue = ToByte(albedo.Z * lighting);
+			byte red = ToByte(albedo.X * lighting.X);
+			byte green = ToByte(albedo.Y * lighting.Y);
+			byte blue = ToByte(albedo.Z * lighting.Z);
 
 			ClipAndDraw(
 				clip[index],

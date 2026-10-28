@@ -63,6 +63,29 @@ public sealed class SceneSerializationTests
 	}
 
 	[Fact]
+	public void Serialize_RoundTripsLightColorAndIntensity()
+	{
+		SceneDocument scene = new("Lighting");
+		SceneEntity entity = scene.CreateEntity("Sun");
+
+		entity.AddComponent(new LightData
+		{
+			Enabled = false,
+			Color = new Vector4(0.2f, 0.4f, 0.6f, 1f),
+			Intensity = 2.5f
+		});
+
+		SceneDocument restored = SceneSerializer.Deserialize(
+			SceneSerializer.Serialize(scene));
+
+		LightData light = restored.Entities[0].GetComponent<LightData>()!;
+
+		Assert.False(light.Enabled);
+		Assert.Equal(new Vector4(0.2f, 0.4f, 0.6f, 1f), light.Color);
+		Assert.Equal(2.5f, light.Intensity);
+	}
+
+	[Fact]
 	public void UnknownComponent_RoundTripsWithoutDataLoss()
 	{
 		Volt.Editor.Core.Scenes.SceneDocument scene = new("Unknown");

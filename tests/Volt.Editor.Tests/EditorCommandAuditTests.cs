@@ -52,6 +52,7 @@ public sealed class EditorCommandAuditTests : IDisposable
 		Assert.False(Find(shell, "Assets", "New Scene").IsEnabled);
 		Assert.False(Find(shell, "GameObject", "Create Cube").IsEnabled);
 		Assert.False(Find(shell, "GameObject", "Create Empty").IsEnabled);
+		Assert.False(Find(shell, "GameObject", "Create Light").IsEnabled);
 		Assert.False(Find(shell, "Edit", "Undo").IsEnabled);
 		Assert.False(Find(shell, "Edit", "Redo").IsEnabled);
 		Assert.False(Find(shell, "Edit", "Cut").IsEnabled);

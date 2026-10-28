@@ -160,6 +160,37 @@ public sealed class SoftwareSceneRendererTests
 	}
 
 	[Fact]
+	public void AuthoredLight_TintsTheRenderedSurface()
+	{
+		SoftwareSceneRenderer renderer = new();
+		ViewportRenderRequest request = CreateRequest(
+			new Vector3(4f, 3f, 6f),
+			Vector3.Zero,
+			showGrid: false,
+			new ViewportMeshInstance(
+				EditorMeshLibrary.Cube,
+				Matrix4x4.Identity));
+
+		request.Light = new ViewportLight(
+			Vector3.UnitZ,
+			new Vector4(1f, 0.05f, 0.05f, 1f),
+			1f);
+
+		renderer.PublishRequest(request);
+		renderer.RenderFrame();
+
+		Assert.True(renderer.TryGetImage(
+			ViewportKind.Scene,
+			out UiRasterImage? image));
+
+		UiColor center = image!.GetPixel(Width / 2, Height / 2);
+
+		Assert.True(
+			center.R > center.G + 20,
+			"An authored red light must dominate the lit surface.");
+	}
+
+	[Fact]
 	public void CameraInsideAMesh_ClipsWithoutLosingTheFrame()
 	{
 		SoftwareSceneRenderer renderer = new();

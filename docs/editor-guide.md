@@ -39,7 +39,7 @@ state, and rasterizes the resulting draw list on the CPU. Without
 real workspace rather than the start screen. The Scene view publishes
 the same render request a window would, and `SoftwareSceneRenderer`
 rasterizes its meshes and ground grid on the CPU with clipping, a depth
-buffer, the scene's directional light, and supersampled edges, so the
+buffer, the scene's authored directional light, and supersampled edges, so the
 capture contains real 3D content instead of a placeholder. Game view
 content appears the same way while Play Mode has a running world.
 Everything the UI draws itself — surfaces, borders, icons, labels,
@@ -227,6 +227,12 @@ ratios without discarding the state inside open panels.
   testing, and the panel samples that image, so what it shows is real
   rendered geometry. Selection outlines, labels, and gizmos are UI
   overlays drawn on top of it.
+- **Directional lights are authored objects.** **GameObject → Create
+  Light** adds one as a selected, undoable object. A light shines along
+  its world +Z axis, so rotate it to aim it; **Color** and
+  **Intensity** are inspector properties. A scene uses the first
+  enabled directional light in hierarchy order, and falls back to the
+  editor's default key light when it has none.
 - **Selection works the way an editor's does.** A click takes one
   object, shift-click adds another, and dragging on empty space with the
   left button draws a box that takes every object its bounds touch

@@ -903,9 +903,12 @@ internal sealed class SceneViewport : Widget, IFrameTick
 			1,
 			(int)MathF.Round(bounds.Height * _dpiScale));
 
+		EnsureWorldMatrices(scene);
+
 		_request.View = view;
 		_request.Projection = projection;
 		_request.ShowGrid = _showGrid;
+		_request.Light = ViewportMath.ResolveLight(scene, _worldMatrices);
 		_request.HasContent = true;
 
 		_request.Instances.Clear();

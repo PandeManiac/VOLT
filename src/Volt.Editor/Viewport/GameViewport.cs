@@ -274,6 +274,8 @@ internal sealed class GameViewport : Widget, IFrameTick
 
 		SceneDocument? scene = _session.Scene;
 
+		_request.Light = ViewportMath.ResolveLight(scene);
+
 		foreach (RuntimeEntityInfo info in runtime.Entities)
 		{
 			if (!runtime.World.HasComponent<MeshRendererComponent>(

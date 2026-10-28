@@ -141,6 +141,7 @@ public sealed class ComponentCatalog
 	{
 		ComponentCatalog catalog = new();
 		catalog.Register<MeshRendererData>();
+		catalog.Register<LightData>();
 		catalog.Register<SpinBehaviourData>();
 		catalog.Register<MoveBehaviourData>();
 		catalog.Register<CameraData>();

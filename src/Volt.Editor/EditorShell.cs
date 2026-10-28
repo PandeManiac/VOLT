@@ -660,11 +660,12 @@ public sealed class EditorShell : Panel
 			CreateCamera,
 			() => _session.Scene is not null);
 
-		create.AddChild(MenuItem.Separator);
-
-		// There is no light component in authored data yet, so the
-		// command is present but unavailable rather than decorative.
-		create.AddChild(new MenuItem("Create Light") { IsEnabled = false });
+		AddCommand(
+			create,
+			"Create Light",
+			() => Guard("Create light", () =>
+				_session.CreateDirectionalLight("Directional Light")),
+			() => _session.Scene is not null);
 
 		MenuItem component = bar.AddMenu("Component");
 

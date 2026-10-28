@@ -26,6 +26,44 @@ public sealed class MeshRendererData : AuthoredComponent
 }
 
 /// <summary>
+/// A directional light that lights the authored scene and the running
+/// game.
+/// </summary>
+/// <remarks>
+/// The light shines along the entity's world +Z axis, so rotating the
+/// object points the light. Its position does not affect a directional
+/// light; only the first enabled light in hierarchy order is used.
+/// </remarks>
+[EditorComponent(
+	LightData.ComponentTypeId,
+	"Directional Light")]
+public sealed class LightData : AuthoredComponent
+{
+	public const string ComponentTypeId = "volt.light";
+
+	/// <summary>
+	/// The rotation that makes a new light match the editor's previous
+	/// baked key light.
+	/// </summary>
+	public static Vector3 DefaultEulerAngles =>
+		new(-58.2f, 41.2f, 0f);
+
+	public override string TypeId => ComponentTypeId;
+
+	public override string DisplayName => "Directional Light";
+
+	public bool Enabled { get; set; } = true;
+
+	[EditorProperty(
+		DisplayName = "Color",
+		Kind = EditorPropertyKind.Color)]
+	public Vector4 Color { get; set; } = Vector4.One;
+
+	[EditorProperty(Minimum = 0f, Maximum = 8f)]
+	public float Intensity { get; set; } = 1f;
+}
+
+/// <summary>
 /// Continuously rotates an entity around one local axis.
 /// </summary>
 [EditorComponent(

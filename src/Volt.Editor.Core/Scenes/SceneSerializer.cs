@@ -23,7 +23,11 @@ public static class SceneSerializer
 		PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
 		WriteIndented = true,
 		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-		Converters = { new Vector3JsonConverter() }
+		Converters =
+		{
+			new Vector3JsonConverter(),
+			new Vector4JsonConverter()
+		}
 	};
 
 	public static string Serialize(SceneDocument scene)

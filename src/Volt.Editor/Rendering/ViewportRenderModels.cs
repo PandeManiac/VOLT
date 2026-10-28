@@ -28,6 +28,91 @@ internal readonly record struct ViewportMeshInstance(
 	Matrix4x4 World);
 
 /// <summary>
+/// A directional light resolved from authored scene data.
+/// </summary>
+/// <param name="Direction">
+/// The world-space direction toward the light. It need not be unit
+/// length; <see cref="UnitDirection"/> normalizes it.
+/// </param>
+/// <param name="Color">The light color; alpha is ignored.</param>
+/// <param name="Intensity">The non-negative light intensity.</param>
+/// <remarks>
+/// Both renderers consume this value, so the software capture and the
+/// Vulkan viewport agree on what the authored light contributes. The
+/// default matches the key light earlier builds baked into the scene
+/// pipeline, which keeps a scene without a light looking unchanged.
+/// </remarks>
+internal readonly record struct ViewportLight(
+	Vector3 Direction,
+	Vector4 Color,
+	float Intensity)
+{
+	private static readonly Vector3 s_defaultDirection =
+		Vector3.Normalize(new Vector3(0.35f, 0.85f, 0.40f));
+
+	/// <summary>
+	/// The light a scene without an enabled authored light uses.
+	/// </summary>
+	public static ViewportLight Default { get; } =
+		new(s_defaultDirection, Vector4.One, 1f);
+
+	/// <summary>
+	/// Gets the finite, unit-length direction toward the light.
+	/// </summary>
+	public Vector3 UnitDirection
+	{
+		get
+		{
+			Vector3 direction = Direction;
+			float lengthSquared = direction.LengthSquared();
+
+			if (!float.IsFinite(direction.X) ||
+				!float.IsFinite(direction.Y) ||
+				!float.IsFinite(direction.Z) ||
+				lengthSquared < 1e-12f)
+			{
+				return s_defaultDirection;
+			}
+
+			// A world rotation already produces unit length to within
+			// rounding; keeping it avoids disturbing the default image.
+			return lengthSquared is > 0.99999f and < 1.00001f
+				? direction
+				: direction / MathF.Sqrt(lengthSquared);
+		}
+	}
+
+	/// <summary>
+	/// Gets the light color multiplied by its intensity.
+	/// </summary>
+	/// <remarks>
+	/// Each channel and the intensity are clamped to a finite range so
+	/// corrupted scene data cannot produce a non-finite shader value.
+	/// </remarks>
+	public Vector3 DiffuseColor
+	{
+		get
+		{
+			float intensity = float.IsFinite(Intensity)
+				? Math.Clamp(Intensity, 0f, 8f)
+				: 0f;
+
+			return new Vector3(
+				ColorChannel(Color.X),
+				ColorChannel(Color.Y),
+				ColorChannel(Color.Z)) * intensity;
+		}
+	}
+
+	private static float ColorChannel(float value)
+	{
+		return float.IsFinite(value)
+			? Math.Clamp(value, 0f, 1f)
+			: 0f;
+	}
+}
+
+/// <summary>
 /// Everything one viewport needs rendered for one frame.
 /// </summary>
 /// <remarks>
@@ -79,6 +164,11 @@ internal sealed class ViewportRenderRequest
 	/// Gets or sets whether the ground grid is drawn.
 	/// </summary>
 	public bool ShowGrid { get; set; } = true;
+
+	/// <summary>
+	/// Gets or sets the authored directional light for this frame.
+	/// </summary>
+	public ViewportLight Light { get; set; } = ViewportLight.Default;
 
 	/// <summary>
 	/// Gets or sets the background clear colour components.

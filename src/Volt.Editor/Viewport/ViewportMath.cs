@@ -1,5 +1,6 @@
 using System.Numerics;
 using Volt.Editor.Core.Scenes;
+using Volt.Editor.Rendering;
 using Volt.Ui;
 using Volt.Ui.Rendering;
 
@@ -523,6 +524,59 @@ internal static class ViewportMath
 		}
 
 		return matrices;
+	}
+
+	/// <summary>
+	/// Resolves the scene's first enabled directional light.
+	/// </summary>
+	/// <param name="scene">The authored scene, or null.</param>
+	/// <param name="worldMatrices">
+	/// Already resolved world matrices, when the caller has them; the
+	/// method builds a fresh set otherwise.
+	/// </param>
+	/// <returns>
+	/// The resolved light, or <see cref="ViewportLight.Default"/> when
+	/// the scene has no enabled light.
+	/// </returns>
+	/// <remarks>
+	/// A light shines along its world +Z axis, so a parent's rotation
+	/// and scale are inherited. Only one directional light is supported;
+	/// selecting the first enabled light in hierarchy order is
+	/// deterministic and keeps the renderer's cost independent of the
+	/// number of lights in the scene.
+	/// </remarks>
+	public static ViewportLight ResolveLight(
+		SceneDocument? scene,
+		IReadOnlyDictionary<Guid, Matrix4x4>? worldMatrices = null)
+	{
+		if (scene is null)
+		{
+			return ViewportLight.Default;
+		}
+
+		worldMatrices ??= BuildWorldMatrices(scene);
+
+		foreach (SceneEntity entity in scene.BuildHierarchyOrder())
+		{
+			if (entity.GetComponent<LightData>() is not
+				{ Enabled: true } light)
+			{
+				continue;
+			}
+
+			Matrix4x4 world = worldMatrices.TryGetValue(
+				entity.Id,
+				out Matrix4x4 matrix)
+					? matrix
+					: Matrix4x4.Identity;
+
+			return new ViewportLight(
+				Vector3.TransformNormal(Vector3.UnitZ, world),
+				light.Color,
+				light.Intensity);
+		}
+
+		return ViewportLight.Default;
 	}
 
 	/// <summary>

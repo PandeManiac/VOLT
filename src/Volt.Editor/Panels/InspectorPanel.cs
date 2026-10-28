@@ -463,6 +463,17 @@ public sealed class InspectorPanel : Panel
 						: Vector3.Zero,
 					value => SetProperty(entity, component, property, value)),
 
+				EditorPropertyKind.Color => new ColorProperty(
+					property.DisplayName,
+					() => property.GetValue(component) is Vector4 color
+						? ToUiColor(color)
+						: UiColor.White,
+					value => SetProperty(
+						entity,
+						component,
+						property,
+						value.ToVector4())),
+
 				EditorPropertyKind.Asset => new AssetProperty(
 					property.DisplayName,
 					() => property.GetValue(component) as string,
@@ -530,6 +541,27 @@ public sealed class InspectorPanel : Panel
 		{
 			_session.Log(exception.Message, EditorLogLevel.Error);
 		}
+	}
+
+	private static UiColor ToUiColor(Vector4 color)
+	{
+		return new UiColor(
+			ToColorByte(color.X),
+			ToColorByte(color.Y),
+			ToColorByte(color.Z),
+			ToColorByte(color.W));
+	}
+
+	private static byte ToColorByte(float value)
+	{
+		float clamped = float.IsFinite(value)
+			? Math.Clamp(value, 0f, 1f)
+			: 0f;
+
+		return (byte)Math.Clamp(
+			(int)MathF.Round(clamped * 255f),
+			0,
+			255);
 	}
 
 	private void OnNameCommitted(TextField field)
