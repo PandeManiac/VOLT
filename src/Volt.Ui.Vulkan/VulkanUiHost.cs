@@ -415,6 +415,18 @@ public sealed class VulkanUiHost : IDisposable
 	}
 
 	/// <summary>
+	/// Gets or sets a callback asked before a native window close is
+	/// accepted.
+	/// </summary>
+	/// <remarks>
+	/// Returning false keeps the window open and cancels that close
+	/// request, which lets an application ask about unsaved work. The
+	/// application is then responsible for calling
+	/// <see cref="RequestExit"/> once the user answers.
+	/// </remarks>
+	public Func<bool>? ConfirmClose { get; set; }
+
+	/// <summary>
 	/// Runs the presentation loop until the window closes or the
 	/// application requests an exit.
 	/// </summary>
@@ -427,8 +439,18 @@ public sealed class VulkanUiHost : IDisposable
 		ArgumentNullException.ThrowIfNull(update);
 		ThrowIfDisposed();
 
-		while (!_exitRequested && !_window.ShouldClose)
+		while (!_exitRequested)
 		{
+			if (_window.ShouldClose)
+			{
+				if (ConfirmClose is null || ConfirmClose())
+				{
+					break;
+				}
+
+				_window.CancelCloseRequest();
+			}
+
 			if (_options.FrameInterval is TimeSpan interval)
 			{
 				Thread.Sleep(interval);

@@ -74,6 +74,7 @@ public sealed class EditorShell : Panel
 
 	private float _uiScale = 1f;
 	private float? _pendingUiScale;
+	private Action? _pendingUnsavedChanges;
 	private double _frameSeconds;
 	private int _frameCount;
 	private float _fps;
@@ -133,6 +134,7 @@ public sealed class EditorShell : Panel
 		_session.StatusChanged += OnStatusChanged;
 		_session.RuntimeUpdated += OnRuntimeUpdated;
 		_session.SettingsChanged += OnSettingsChanged;
+		_session.UnsavedChangesGuard = GuardUnsavedChanges;
 
 		UpdateStartVisibility();
 		UpdatePlayButtons();
@@ -191,6 +193,7 @@ public sealed class EditorShell : Panel
 		_disposed = true;
 		RemoveShortcuts();
 
+		_session.UnsavedChangesGuard = null;
 		_session.ProjectChanged -= OnProjectChanged;
 		_session.SceneChanged -= OnSceneChanged;
 		_session.SelectionChanged -= OnSceneChanged;
@@ -510,9 +513,7 @@ public sealed class EditorShell : Panel
 			() => _session.Scene is not null,
 			"Ctrl+S");
 		file.AddChild(MenuItem.Separator);
-		file.AddChild(new MenuItem(
-			"Exit",
-			() => ExitRequested?.Invoke()));
+		file.AddChild(new MenuItem("Exit", RequestExit));
 
 		MenuItem edit = bar.AddMenu("Edit");
 
@@ -1489,6 +1490,221 @@ public sealed class EditorShell : Panel
 		});
 	}
 
+	/// <summary>
+	/// Asks to close the editor, giving the user a chance to save a
+	/// dirty scene first.
+	/// </summary>
+	public void RequestExit()
+	{
+		GuardUnsavedChanges(() => ExitRequested?.Invoke());
+	}
+
+	/// <summary>
+	/// Handles a native window close request.
+	/// </summary>
+	/// <returns>
+	/// True when the window can close immediately. False when the
+	/// editor asked about unsaved work and kept the window open until
+	/// the user answers.
+	/// </returns>
+	public bool ConfirmWindowClose()
+	{
+		if (!_session.IsSceneDirty || _session.Scene is null)
+		{
+			return true;
+		}
+
+		GuardUnsavedChanges(() => ExitRequested?.Invoke());
+		return false;
+	}
+
+	private bool GuardUnsavedChanges(Action continuation)
+	{
+		ArgumentNullException.ThrowIfNull(continuation);
+
+		if (!_session.IsSceneDirty || _session.Scene is null)
+		{
+			continuation();
+			return true;
+		}
+
+		if (_pendingUnsavedChanges is not null)
+		{
+			if (Context?.HasModal == true)
+			{
+				return false;
+			}
+
+			// The modal can be closed with Escape, which leaves no
+			// question on screen for the deferred operation.
+			_pendingUnsavedChanges = null;
+		}
+
+		if (Context is not UiContext)
+		{
+			// A shell outside a UI cannot ask, so it must not strand
+			// the operation behind a dialog that can never appear.
+			continuation();
+			return true;
+		}
+
+		_pendingUnsavedChanges = continuation;
+		ShowUnsavedChangesDialog();
+
+		return false;
+	}
+
+	private void CompletePendingChanges()
+	{
+		Action? continuation = _pendingUnsavedChanges;
+		_pendingUnsavedChanges = null;
+
+		if (continuation is null)
+		{
+			return;
+		}
+
+		try
+		{
+			continuation();
+		}
+
+		catch (Exception exception)
+		{
+			_session.Log(exception.Message, EditorLogLevel.Error);
+			_session.SetStatus(exception.Message);
+		}
+	}
+
+	private void ShowUnsavedChangesDialog()
+	{
+		if (Context is not UiContext context)
+		{
+			return;
+		}
+
+		UiTheme theme = context.Theme;
+
+		Panel scrim = new()
+		{
+			Background = UiColor.FromArgb(0xAA0B0E13),
+			DrawBorder = false
+		};
+
+		Panel card = new()
+		{
+			Width = UiLength.Points(430f),
+			Height = UiLength.Auto,
+			HorizontalAlignment = UiAlignment.Center,
+			VerticalAlignment = UiAlignment.Center,
+			DrawBackground = true,
+			Background = theme.Palette.SurfaceRaised,
+			DrawBorder = true,
+			BorderColor = theme.Palette.BorderStrong,
+			Padding = new UiThickness(20f)
+		};
+
+		StackPanel content = new()
+		{
+			Spacing = 10f
+		};
+
+		content.Add(new Label("Unsaved changes")
+		{
+			Font = theme.Fonts.Heading
+		});
+
+		content.Add(new Separator());
+
+		string sceneName = _session.Scene?.Name ?? "the current scene";
+
+		content.Add(new Label(
+			$"Save changes to \"{sceneName}\" before continuing?")
+		{
+			Font = theme.Fonts.Body,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		Label error = new(string.Empty)
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.Danger,
+			Wrap = UiTextWrap.Wrap
+		};
+
+		content.Add(error);
+
+		StackPanel buttons = new(UiOrientation.Horizontal)
+		{
+			Spacing = 6f
+		};
+
+		Button save = new("Save")
+		{
+			IsPrimary = true,
+			MinHeight = 28f
+		};
+
+		Button discard = new("Discard")
+		{
+			MinHeight = 28f
+		};
+
+		Button cancel = new("Cancel")
+		{
+			MinHeight = 28f
+		};
+
+		save.Clicked += _ =>
+		{
+			try
+			{
+				_session.SaveScene();
+			}
+
+			catch (Exception exception)
+			{
+				_session.Log(exception.Message, EditorLogLevel.Error);
+				error.Text = exception.Message;
+				return;
+			}
+
+			context.CloseModal();
+			CompletePendingChanges();
+		};
+
+		discard.Clicked += _ =>
+		{
+			context.CloseModal();
+			CompletePendingChanges();
+		};
+
+		cancel.Clicked += _ =>
+		{
+			_pendingUnsavedChanges = null;
+			context.CloseModal();
+		};
+
+		buttons.Add(save);
+		buttons.Add(discard);
+		buttons.Add(cancel);
+
+		content.Add(buttons);
+
+		content.Add(new Label(
+			"Cancel keeps the current scene and the editor open.")
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.TextDisabled,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		card.Add(content);
+		scrim.Add(card);
+
+		context.ShowModal(scrim);
+	}
+
 	private void CreateNewScene()
 	{
 		EditorProject project = _session.Project ??
@@ -1726,8 +1942,10 @@ public sealed class EditorShell : Panel
 
 		try
 		{
-			_session.NewProject(path.Text, name.Text);
-			HideStartScreen();
+			if (_session.NewProject(path.Text, name.Text))
+			{
+				HideStartScreen();
+			}
 		}
 
 		catch (Exception exception)
@@ -1745,8 +1963,10 @@ public sealed class EditorShell : Panel
 
 		try
 		{
-			_session.OpenProject(path.Text);
-			HideStartScreen();
+			if (_session.OpenProject(path.Text))
+			{
+				HideStartScreen();
+			}
 		}
 
 		catch (Exception exception)

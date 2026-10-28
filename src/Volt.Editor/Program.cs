@@ -175,6 +175,7 @@ internal static class Program
 
 		host.Ui.Add(shell);
 		shell.ExitRequested += host.RequestExit;
+		host.ConfirmClose = shell.ConfirmWindowClose;
 
 		// Free-look asks for the window's native relative pointer mode
 		// through the UI context. The capture is disposed before the

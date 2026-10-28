@@ -112,6 +112,19 @@ public sealed class EditorSession : IDisposable
 
 	public RuntimeInputState Input { get; } = new();
 
+	/// <summary>
+	/// Gets or sets the guard consulted before an operation would
+	/// discard a dirty scene.
+	/// </summary>
+	/// <remarks>
+	/// The guard receives the operation as a continuation. It returns
+	/// true when it ran the continuation immediately, and false when it
+	/// deferred it, for example while the editor asks the user whether
+	/// to save. A null guard lets the operation proceed unconditionally,
+	/// which is the shape headless callers and tests get.
+	/// </remarks>
+	public Func<Action, bool>? UnsavedChangesGuard { get; set; }
+
 	public IReadOnlyCollection<Guid> Selection => _selection;
 
 	public Guid? ActiveEntityId { get; private set; }
@@ -246,31 +259,42 @@ public sealed class EditorSession : IDisposable
 	public bool IsPlaying =>
 		PlayState is PlayState.Playing or PlayState.Paused;
 
-	public void NewProject(string projectRoot, string name)
+	public bool NewProject(string projectRoot, string name)
 	{
 		ThrowIfDisposed();
 
-		CloseProject();
+		return RunGuarded(() =>
+		{
+			CloseProjectCore();
 
-		EditorProject project = EditorProject.Create(projectRoot, name);
-		OpenProjectCore(project);
-		Log($"Created project '{project.Name}'.");
+			EditorProject project = EditorProject.Create(projectRoot, name);
+			OpenProjectCore(project);
+			Log($"Created project '{project.Name}'.");
+		});
 	}
 
-	public void OpenProject(string projectRoot)
+	public bool OpenProject(string projectRoot)
 	{
 		ThrowIfDisposed();
 
-		CloseProject();
+		return RunGuarded(() =>
+		{
+			CloseProjectCore();
 
-		EditorProject project = EditorProject.Open(projectRoot);
-		OpenProjectCore(project);
-		Log($"Opened project '{project.Name}'.");
+			EditorProject project = EditorProject.Open(projectRoot);
+			OpenProjectCore(project);
+			Log($"Opened project '{project.Name}'.");
+		});
 	}
 
-	public void CloseProject()
+	public bool CloseProject()
 	{
 		ThrowIfDisposed();
+		return RunGuarded(CloseProjectCore);
+	}
+
+	private void CloseProjectCore()
+	{
 		Stop();
 
 		if (Scene is not null)
@@ -292,26 +316,38 @@ public sealed class EditorSession : IDisposable
 		SetStatus("No project open");
 	}
 
-	public void OpenScene(string relativePath)
+	public bool OpenScene(string relativePath)
 	{
 		ThrowIfDisposed();
 
-		EditorProject project = RequireProject();
-		Stop();
+		return RunGuarded(() =>
+		{
+			EditorProject project = RequireProject();
+			Stop();
 
-		SceneDocument scene = project.LoadScene(relativePath);
-		SetScene(scene, relativePath, dirty: false);
-		Log($"Opened scene '{scene.Name}'.");
+			SceneDocument scene = project.LoadScene(relativePath);
+			SetScene(scene, relativePath, dirty: false);
+			Log($"Opened scene '{scene.Name}'.");
+		});
 	}
 
-	public SceneDocument CreateScene(string relativePath, string name)
+	public SceneDocument? CreateScene(string relativePath, string name)
 	{
-		ThrowIfDespacedProject(out EditorProject project);
+		ThrowIfDisposed();
 
-		SceneDocument scene = project.CreateScene(relativePath, name);
-		SetScene(scene, relativePath, dirty: false);
-		Log($"Created scene '{scene.Name}'.");
-		return scene;
+		SceneDocument? created = null;
+
+		RunGuarded(() =>
+		{
+			EditorProject project = RequireProject();
+			SceneDocument scene = project.CreateScene(relativePath, name);
+
+			SetScene(scene, relativePath, dirty: false);
+			Log($"Created scene '{scene.Name}'.");
+			created = scene;
+		});
+
+		return created;
 	}
 
 	public void SaveScene()
@@ -1158,6 +1194,21 @@ public sealed class EditorSession : IDisposable
 		}
 
 		_disposed = true;
+	}
+
+	private bool RunGuarded(Action action)
+	{
+		ArgumentNullException.ThrowIfNull(action);
+
+		if (!IsSceneDirty ||
+			Scene is null ||
+			UnsavedChangesGuard is not Func<Action, bool> guard)
+		{
+			action();
+			return true;
+		}
+
+		return guard(action);
 	}
 
 	private void OpenProjectCore(EditorProject project)

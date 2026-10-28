@@ -286,11 +286,12 @@ public sealed class ProjectPanel : Panel
 
 		try
 		{
-			_session.CreateScene(
-				relative,
-				$"Scene {index - 1}");
-
-			_folder = "Scenes";
+			if (_session.CreateScene(
+					relative,
+					$"Scene {index - 1}") is not null)
+			{
+				_folder = "Scenes";
+			}
 		}
 
 		catch (Exception exception)

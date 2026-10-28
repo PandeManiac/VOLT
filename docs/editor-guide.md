@@ -283,6 +283,12 @@ Saving writes a temporary file and moves it into place, so a failed
 save cannot truncate the previous scene. Unknown components are kept
 as raw JSON instead of being dropped.
 
+Opening another scene or project, creating a scene, or closing the
+editor while the current scene is dirty asks **Save**, **Discard**, or
+**Cancel**. Save writes the current scene before the operation
+continues, Cancel leaves it open and dirty, and closing the window uses
+the same prompt instead of discarding the scene silently.
+
 ## Play Mode
 
 The toolbar's Play button serializes the authored scene, loads that

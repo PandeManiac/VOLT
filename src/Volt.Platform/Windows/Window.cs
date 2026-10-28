@@ -26,6 +26,20 @@ public sealed class Window : IDisposable
 	public bool ShouldClose { get; private set; }
 
 	/// <summary>
+	/// Cancels a pending native close request.
+	/// </summary>
+	/// <remarks>
+	/// A close request is a notification rather than a command: an
+	/// application may keep the window open, for example to ask about
+	/// unsaved work. The next close request is delivered normally.
+	/// </remarks>
+	public void CancelCloseRequest()
+	{
+		ThrowIfDisposed();
+		ShouldClose = false;
+	}
+
+	/// <summary>
 	/// Gets the borrowed native SDL window handle.
 	/// </summary>
 	/// <remarks>
