@@ -100,4 +100,45 @@ public sealed class TextLayoutTests
 
 		Assert.Equal("X", field.Text);
 	}
+
+	[Fact]
+	public void TextField_UndoRedoRestoresTextAndCaret()
+	{
+		using UiTestHost host = new(400f, 200f);
+		Volt.Ui.Widgets.TextField field = host.Add(
+			new Volt.Ui.Widgets.TextField());
+
+		host.Layout();
+		field.Focus();
+
+		host.Context.TextInput("a");
+		host.Context.TextInput("b");
+
+		Assert.Equal("ab", field.Text);
+
+		Assert.True(host.Context.KeyDown(
+			UiKey.Z,
+			UiKeyModifiers.Control));
+
+		Assert.Equal("a", field.Text);
+		Assert.Equal(1, field.CaretIndex);
+
+		Assert.True(host.Context.KeyDown(
+			UiKey.Z,
+			UiKeyModifiers.Control));
+
+		Assert.Equal(string.Empty, field.Text);
+
+		Assert.True(host.Context.KeyDown(
+			UiKey.Y,
+			UiKeyModifiers.Control));
+
+		Assert.Equal("a", field.Text);
+
+		Assert.True(host.Context.KeyDown(
+			UiKey.Z,
+			UiKeyModifiers.Control | UiKeyModifiers.Shift));
+
+		Assert.Equal("ab", field.Text);
+	}
 }

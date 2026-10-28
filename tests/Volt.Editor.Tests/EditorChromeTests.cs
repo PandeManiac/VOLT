@@ -469,6 +469,12 @@ public sealed class EditorChromeTests : IDisposable
 		int entities = scene.EntityCount;
 		int history = _session.Undo.UndoCount;
 
+		_context.KeyDown(UiKey.Z, UiKeyModifiers.Control);
+
+		Assert.Equal(cube.Name, name.Text);
+		Assert.Equal(entities, scene.EntityCount);
+		Assert.Equal(history, _session.Undo.UndoCount);
+
 		_context.KeyDown(UiKey.D, UiKeyModifiers.Control);
 		_context.KeyDown(UiKey.Delete);
 		_context.KeyDown(UiKey.A, UiKeyModifiers.Control | UiKeyModifiers.Shift);

@@ -27,6 +27,15 @@ public class TextField : Widget
 	private bool _dragging;
 	private float _scrollX;
 	private string _textAtFocus = string.Empty;
+	private readonly List<TextSnapshot> _undo = [];
+	private readonly List<TextSnapshot> _redo = [];
+
+	private const int MaximumHistory = 100;
+
+	private readonly record struct TextSnapshot(
+		string Text,
+		int Anchor,
+		int Caret);
 
 	private UiTextLayoutResult? _layout;
 	private string? _layoutText;
@@ -64,6 +73,8 @@ public class TextField : Widget
 			}
 
 			_editor.SetText(value ?? string.Empty);
+			_undo.Clear();
+			_redo.Clear();
 			_layout = null;
 			InvalidateVisual();
 		}
@@ -284,6 +295,23 @@ public class TextField : Widget
 		{
 			switch (key.Key)
 			{
+				case UiKey.Z:
+					if (shift)
+					{
+						RedoText();
+					}
+
+					else
+					{
+						UndoText();
+					}
+
+					return true;
+
+				case UiKey.Y:
+					RedoText();
+					return true;
+
 				case UiKey.A:
 					_editor.SelectAll();
 					InvalidateVisual();
@@ -297,9 +325,11 @@ public class TextField : Widget
 					if (!_isReadOnly)
 					{
 						CopySelection();
+						TextSnapshot before = CaptureSnapshot();
 
 						if (_editor.CutSelection())
 						{
+							PushUndo(before);
 							_layout = null;
 							InvalidateVisual();
 							RaiseTextChanged();
@@ -479,14 +509,14 @@ public class TextField : Widget
 		}
 
 		ReplaceSelection(text);
-	}
-
-	private void ReplaceSelection(
+	}	private void ReplaceSelection(
 		string replacement,
 		bool backspace = false,
 		bool delete = false)
 	{
+		TextSnapshot before = CaptureSnapshot();
 		bool changed;
+
 
 		if (backspace)
 		{
@@ -508,6 +538,71 @@ public class TextField : Widget
 			return;
 		}
 
+		PushUndo(before);
+		_layout = null;
+		InvalidateVisual();
+		RaiseTextChanged();
+	}
+
+	private TextSnapshot CaptureSnapshot()
+	{
+		return new TextSnapshot(
+			_editor.Text,
+			_editor.SelectionAnchor,
+			_editor.CaretIndex);
+	}
+
+	private void PushUndo(TextSnapshot before)
+	{
+		_undo.Add(before);
+
+		if (_undo.Count > MaximumHistory)
+		{
+			_undo.RemoveAt(0);
+		}
+
+		_redo.Clear();
+	}
+
+	private bool UndoText()
+	{
+		if (_undo.Count == 0)
+		{
+			return false;
+		}
+
+		TextSnapshot target = _undo[^1];
+		_undo.RemoveAt(_undo.Count - 1);
+		_redo.Add(CaptureSnapshot());
+		RestoreSnapshot(target);
+		return true;
+	}
+
+	private bool RedoText()
+	{
+		if (_redo.Count == 0)
+		{
+			return false;
+		}
+
+		TextSnapshot target = _redo[^1];
+		_redo.RemoveAt(_redo.Count - 1);
+		_undo.Add(CaptureSnapshot());
+
+		if (_undo.Count > MaximumHistory)
+		{
+			_undo.RemoveAt(0);
+		}
+
+		RestoreSnapshot(target);
+		return true;
+	}
+
+	private void RestoreSnapshot(TextSnapshot snapshot)
+	{
+		_editor.SetText(snapshot.Text, moveCaretToEnd: false);
+		_editor.SetCaret(snapshot.Anchor);
+		_editor.SetCaret(snapshot.Caret, extendSelection: true);
 		_layout = null;
 		InvalidateVisual();
 		RaiseTextChanged();
