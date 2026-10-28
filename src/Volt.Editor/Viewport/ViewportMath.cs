@@ -315,6 +315,133 @@ internal static class ViewportMath
 	}
 
 	/// <summary>
+	/// Intersects a ray with an infinite plane.
+	/// </summary>
+	/// <param name="rayOrigin">The ray origin in world space.</param>
+	/// <param name="rayDirection">The unit ray direction.</param>
+	/// <param name="planeOrigin">A point on the plane.</param>
+	/// <param name="planeNormal">The plane normal; need not be unit.</param>
+	/// <param name="point">Receives the hit point in world space.</param>
+	/// <returns>
+	/// False when the ray is nearly parallel to the plane or the hit is
+	/// not finite.
+	/// </returns>
+	/// <remarks>
+	/// Plane drags use a real ray-plane intersection rather than two
+	/// axis projections: projecting each axis separately makes a
+	/// pointer that moves across the plane slide at a different rate
+	/// on each axis, which is what makes plane dragging feel detached.
+	/// A view that grazes the plane is refused, because the
+	/// intersection then runs off to infinity for a one-pixel move.
+	/// </remarks>
+	public static bool TryIntersectPlane(
+		Vector3 rayOrigin,
+		Vector3 rayDirection,
+		Vector3 planeOrigin,
+		Vector3 planeNormal,
+		out Vector3 point)
+	{
+		point = default;
+
+		if (planeNormal.LengthSquared() < 1e-9f)
+		{
+			return false;
+		}
+
+		Vector3 normal = Vector3.Normalize(planeNormal);
+		float alignment = Vector3.Dot(rayDirection, normal);
+
+		if (MathF.Abs(alignment) < MinimumPlaneAlignment)
+		{
+			return false;
+		}
+
+		float distance = Vector3.Dot(planeOrigin - rayOrigin, normal) /
+			alignment;
+
+		if (!float.IsFinite(distance))
+		{
+			return false;
+		}
+
+		point = rayOrigin + (rayDirection * distance);
+
+		return float.IsFinite(point.X) &&
+			float.IsFinite(point.Y) &&
+			float.IsFinite(point.Z);
+	}
+
+	/// <summary>
+	/// Converts a pure rotation matrix into the Euler angles the
+	/// authored transform stores.
+	/// </summary>
+	/// <param name="rotation">The rotation matrix, with no scale.</param>
+	/// <returns>
+	/// Pitch, yaw, and roll in degrees, in that order, which is the
+	/// order <see cref="TransformData.EulerAngles"/> uses.
+	/// </returns>
+	/// <remarks>
+	/// Rotation is authored as a quaternion and shown as Euler angles,
+	/// so a gizmo drag has to come back to Euler exactly once, at the
+	/// end of its own solve. Doing it through the forward axis and one
+	/// residual roll keeps the mapping consistent with
+	/// <c>Quaternion.CreateFromYawPitchRoll</c> without a second set of
+	/// trigonometric branches that could disagree with it.
+	/// </remarks>
+	public static Vector3 EulerDegrees(Matrix4x4 rotation)
+	{
+		// Reading the axes the rotation produces avoids depending on a
+		// hand-expanded matrix formula that can silently disagree with
+		// CreateFromYawPitchRoll. For the authored order the local axes
+		// transform as:
+		//   +Z -> ( sin(yaw) cos(pitch), -sin(pitch), cos(yaw) cos(pitch) )
+		//   +X -> ( cos(yaw) cos(roll) - ..., sin(roll) cos(pitch), .. )
+		//   +Y -> ( ..., cos(roll) cos(pitch), ... )
+		Vector3 zAxis = Vector3.TransformNormal(Vector3.UnitZ, rotation);
+		Vector3 xAxis = Vector3.TransformNormal(Vector3.UnitX, rotation);
+		Vector3 yAxis = Vector3.TransformNormal(Vector3.UnitY, rotation);
+
+		float pitch = -MathF.Asin(Math.Clamp(zAxis.Y, -1f, 1f));
+
+		float yaw;
+		float roll;
+
+		if (MathF.Abs(zAxis.Y) > 0.99999f)
+		{
+			// Looking straight up or down, yaw and roll describe the
+			// same turn. Keeping roll at zero and folding it into yaw
+			// reproduces the orientation without a discontinuity.
+			roll = 0f;
+			yaw = MathF.Atan2(xAxis.Z, xAxis.X);
+		}
+
+		else
+		{
+			yaw = MathF.Atan2(zAxis.X, zAxis.Z);
+			roll = MathF.Atan2(xAxis.Y, yAxis.Y);
+		}
+
+		const float RadiansToDegrees = 180f / MathF.PI;
+
+		return new Vector3(
+			pitch * RadiansToDegrees,
+			yaw * RadiansToDegrees,
+			roll * RadiansToDegrees);
+	}
+
+	/// <summary>
+	/// The smallest cosine between a pointer ray and a manipulation
+	/// plane that still counts as a usable intersection.
+	/// </summary>
+	/// <remarks>
+	/// At 0.15 the ray meets the plane at about 8.6 degrees or more,
+	/// which bounds how far a single pixel can move the hit point. A
+	/// flatter view refuses the drag instead of letting the object fly
+	/// off when the pointer crosses the horizon.
+	/// </remarks>
+	public const float MinimumPlaneAlignment = 0.15f;
+
+	/// <summary>
 	/// Measures the distance from a point to a line segment in screen
 	/// space.
 	/// </summary>

@@ -272,7 +272,7 @@ public sealed class RuntimeScene : IDisposable
 		return new WorldTransform(
 			Vector3.Transform(entity.Transform.Position, parent.CreateMatrix()),
 			Quaternion.Normalize(
-				Quaternion.Multiply(entity.Transform.Rotation, parent.Rotation)),
+				Quaternion.Multiply(parent.Rotation, entity.Transform.Rotation)),
 			entity.Transform.Scale * parent.Scale);
 	}
 

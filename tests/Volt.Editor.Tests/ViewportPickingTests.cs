@@ -1,4 +1,5 @@
 using System.Numerics;
+using Volt.Editor.Core.Scenes;
 using Volt.Editor.Viewport;
 using Volt.Ui;
 
@@ -240,8 +241,19 @@ public sealed class ViewportPickingTests
 			UnitsPerPixel));
 
 		Assert.True(gizmo.IsVisible);
-		Assert.Equal(4, gizmo.Handles.Count);
+
+		// Three axes plus the three plane handles between them.
+		Assert.Equal(6, gizmo.Handles.Count);
 		Assert.Equal(Vector3.Zero, gizmo.Origin);
+		Assert.Equal(
+			3,
+			gizmo.Handles.Count(handle => handle.IsPlane));
+		Assert.Equal(
+			3,
+			gizmo.Handles.Count(handle =>
+				handle.Handle is GizmoHandle.PlaneXY or
+					GizmoHandle.PlaneYZ or
+					GizmoHandle.PlaneXZ));
 
 		// The X handle is square to the camera, so its pixels measure
 		// the documented handle length: the size is screen constant.
@@ -295,14 +307,34 @@ public sealed class ViewportPickingTests
 				Midpoint(yAxis.StartPixel, yAxis.EndPixel),
 				ViewportMath.GizmoPickTolerancePixels).Handle);
 
-		// The plane handle owns the square between its axes.
+		// The plane handle owns the square between its axes. From a
+		// camera looking down -Z the XY plane faces the view, so it is
+		// the one with an area to grab.
 		GizmoHandleHit plane = gizmo.Handles.First(
-			handle => handle.Handle == GizmoHandle.PlaneXZ);
+			handle => handle.Handle == GizmoHandle.PlaneXY);
+
+		Assert.True(plane.Visible);
+		Assert.True(plane.Quad.Contains(plane.Quad.Center));
 
 		Assert.Equal(
+			GizmoHandle.PlaneXY,
+			gizmo.Pick(
+				plane.Quad.Center,
+				ViewportMath.GizmoPickTolerancePixels).Handle);
+
+		// A plane seen edge-on has no area to grab, so it must not
+		// steal the axes that run along it.
+		GizmoHandleHit edgeOn = gizmo.Handles.First(
+			handle => handle.Handle == GizmoHandle.PlaneXZ);
+
+		Assert.False(edgeOn.Visible);
+
+		// Its line points along the X handle, so the axis may own that
+		// pixel; what must not happen is the flat quad claiming it.
+		Assert.NotEqual(
 			GizmoHandle.PlaneXZ,
 			gizmo.Pick(
-				Midpoint(plane.StartPixel, plane.EndPixel),
+				Midpoint(edgeOn.StartPixel, edgeOn.EndPixel),
 				ViewportMath.GizmoPickTolerancePixels).Handle);
 
 		// Empty space, and pointer offsets beyond the tolerance: both
@@ -320,6 +352,149 @@ public sealed class ViewportPickingTests
 					onAxis.X,
 					onAxis.Y - (ViewportMath.GizmoPickTolerancePixels * 3f)),
 				ViewportMath.GizmoPickTolerancePixels).Handle);
+	}
+
+	[Fact]
+	public void ObliqueView_OffersEveryPlaneThatFacesTheCamera()
+	{
+		EditorCamera camera = new();
+		Vector3 position = new(6f, 5f, -10f);
+		Vector3 direction = Vector3.Normalize(Vector3.Zero - position);
+
+		camera.SetPose(
+			position,
+			MathF.Atan2(-direction.X, -direction.Z),
+			MathF.Asin(direction.Y));
+
+		Matrix4x4 viewProjection =
+			camera.CreateView() *
+			camera.CreateProjection(
+				Bounds.Width / Bounds.Height,
+				yDown: false);
+
+		ViewportGizmo gizmo = new();
+
+		Assert.True(gizmo.Build(
+			EditorTool.Translate,
+			Vector3.Zero,
+			Quaternion.Identity,
+			local: false,
+			scale: 1f,
+			viewProjection,
+			Bounds,
+			ViewportMath.WorldPerPixel(
+				FieldOfView,
+				Bounds.Height,
+				Vector3.Distance(position, Vector3.Zero))));
+
+		GizmoHandle[] planes =
+		[
+			GizmoHandle.PlaneXY,
+			GizmoHandle.PlaneYZ,
+			GizmoHandle.PlaneXZ
+		];
+
+		int visible = 0;
+
+		foreach (GizmoHandle handle in planes)
+		{
+			GizmoHandleHit plane = gizmo.Handles.First(
+				hit => hit.Handle == handle);
+
+			if (!plane.Visible)
+			{
+				continue;
+			}
+
+			visible++;
+
+			Assert.Equal(
+				handle,
+				gizmo.Pick(
+					plane.Quad.Center,
+					ViewportMath.GizmoPickTolerancePixels).Handle);
+		}
+
+		Assert.True(
+			visible >= 2,
+			$"An oblique view must offer at least two planes, got {visible}.");
+	}
+
+	[Fact]
+	public void PlaneIntersection_IsExactAndRefusesAGrazingRay()
+	{
+		// Straight down at the XY plane: the hit is the point itself.
+		Assert.True(ViewportMath.TryIntersectPlane(
+			new Vector3(0f, 0f, 5f),
+			-Vector3.UnitZ,
+			Vector3.Zero,
+			Vector3.UnitZ,
+			out Vector3 hit));
+
+		Assert.Equal(Vector3.Zero, hit);
+
+		// A ray in the plane has no single intersection, and a ray just
+		// grazing it would move the object across the scene for a
+		// single pixel, so both are refused.
+		Assert.False(ViewportMath.TryIntersectPlane(
+			new Vector3(0f, 0f, 5f),
+			Vector3.UnitX,
+			Vector3.Zero,
+			Vector3.UnitZ,
+			out _));
+	}
+
+	[Fact]
+	public void EulerExtraction_RoundTripsThroughTheAuthoredRotation()
+	{
+		// The inspector stores Euler angles while the gizmo solves in
+		// world space, so the conversion back has to reproduce the same
+		// orientation for any angle, including ones near the poles.
+		float[] angles = [0f, 15f, 45f, 89f, 120f, 179f, -30f, -135f];
+		Random random = new(1234);
+
+		for (int index = 0; index < 400; index++)
+		{
+			Vector3 euler = index < angles.Length * angles.Length
+				? new Vector3(
+					angles[index % angles.Length],
+					angles[(index / angles.Length) % angles.Length],
+					angles[(index / 7) % angles.Length])
+				: new Vector3(
+					(float)((random.NextDouble() * 360d) - 180d),
+					(float)((random.NextDouble() * 360d) - 180d),
+					(float)((random.NextDouble() * 360d) - 180d));
+
+			TransformData authored = new() { EulerAngles = euler };
+			Matrix4x4 expected = Matrix4x4.CreateFromQuaternion(
+				authored.Rotation);
+
+			Vector3 extracted = ViewportMath.EulerDegrees(expected);
+
+			Matrix4x4 actual = Matrix4x4.CreateFromQuaternion(
+				new TransformData { EulerAngles = extracted }.Rotation);
+
+			float error = 0f;
+
+			for (int column = 0; column < 3; column++)
+			{
+				error = MathF.Max(
+					error,
+					MathF.Abs(expected.M11 - actual.M11) +
+						MathF.Abs(expected.M12 - actual.M12) +
+						MathF.Abs(expected.M13 - actual.M13) +
+						MathF.Abs(expected.M21 - actual.M21) +
+						MathF.Abs(expected.M22 - actual.M22) +
+						MathF.Abs(expected.M23 - actual.M23) +
+						MathF.Abs(expected.M31 - actual.M31) +
+						MathF.Abs(expected.M32 - actual.M32) +
+						MathF.Abs(expected.M33 - actual.M33));
+			}
+
+			Assert.True(
+				error < 1e-3f,
+				$"Euler {euler} round-tripped with error {error}.");
+		}
 	}
 
 	[Fact]

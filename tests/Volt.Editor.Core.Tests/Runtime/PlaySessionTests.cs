@@ -116,6 +116,33 @@ public sealed class PlaySessionTests
 	}
 
 	[Fact]
+	public void RuntimeParenting_ComposesAChildRotationAfterItsParent()
+	{
+		SceneDocument scene = new("Rotated Parenting");
+		SceneEntity parent = scene.CreateEntity("Parent");
+		parent.Transform.EulerAngles = new Vector3(0f, 90f, 0f);
+
+		SceneEntity child = scene.CreateEntity("Child", parent.Id);
+		child.Transform.EulerAngles = new Vector3(0f, 0f, 90f);
+
+		using PlaySession session = new(scene);
+		RuntimeScene runtime = session.Start();
+
+		Quaternion rotation = runtime.World
+			.GetComponent<RotationComponent>(runtime.Find(child.Id)!.Entity)
+			.Value;
+
+		// The child turns about its own Z first, then the parent turns
+		// that about world Y, so local +X ends up pointing straight up.
+		// Composing the other way round would leave it on -Z instead.
+		Vector3 axis = Vector3.Transform(Vector3.UnitX, rotation);
+
+		Assert.Equal(0f, axis.X, 4);
+		Assert.Equal(1f, axis.Y, 4);
+		Assert.Equal(0f, axis.Z, 4);
+	}
+
+	[Fact]
 	public void Dispose_ReleasesRuntimeWorldAndMissingAssetsAreReported()
 	{
 		SceneDocument scene = new("Dispose");

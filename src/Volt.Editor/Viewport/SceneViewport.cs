@@ -46,6 +46,32 @@ internal sealed class SceneViewport : Widget, IFrameTick
 	private const float MarqueeThresholdPixels = 3f;
 
 	/// <summary>
+	/// Smallest projected length, in pixels, at which an axis remains
+	/// draggable.
+	/// </summary>
+	private const float MinimumAxisDragPixels = 10f;
+
+	/// <summary>
+	/// The angle one rotation snap step covers, in degrees.
+	/// </summary>
+	/// <remarks>
+	/// The configured snap increment is a world distance, so rotation
+	/// keeps its own angle step rather than deriving one from it.
+	/// </remarks>
+	private const float RotationSnapDegrees = 15f;
+
+	/// <summary>
+	/// Closest the pointer may be to the gizmo centre before its
+	/// bearing is treated as noise.
+	/// </summary>
+	private const float MinimumRotationRadiusPixels = 12f;
+
+	/// <summary>
+	/// Smallest authored scale component the scale gizmo produces.
+	/// </summary>
+	private const float MinimumScaleComponent = 0.001f;
+
+	/// <summary>
 	/// The increments the snap readout cycles through.
 	/// </summary>
 	private static readonly float[] s_snapSteps =
@@ -94,16 +120,31 @@ internal sealed class SceneViewport : Widget, IFrameTick
 	private bool _moveDown;
 	private bool _sprint;
 
+	private readonly Dictionary<Guid, Matrix4x4> _dragParentWorld = [];
+	private readonly Dictionary<Guid, Matrix4x4> _dragParentWorldInverse = [];
+	private readonly Dictionary<Guid, Matrix4x4> _dragParentRotation = [];
+	private readonly Dictionary<Guid, Matrix4x4> _dragParentRotationInverse = [];
+
 	private GizmoHandle _activeHandle;
 	private Guid _dragEntityId;
 	private TransformData? _dragBefore;
+	private DragGesture _dragGesture;
 	private Vector3 _dragOrigin;
 	private Vector3 _dragAxisWorld;
-	private Vector3 _dragAxisXWorld;
-	private Vector3 _dragAxisZWorld;
-	private float _dragStartAlong;
-	private float _dragStartAlongX;
-	private float _dragStartAlongZ;
+	private Vector3 _dragPlaneAxisA;
+	private Vector3 _dragPlaneAxisB;
+	private Vector3 _dragPlaneStart;
+	private Vector3 _dragRotationAxisWorld;
+	private Vector3 _dragLocalScaleAxis = Vector3.UnitX;
+	private Matrix4x4 _dragRotationStartWorld;
+	private Matrix4x4 _dragParentWorldStart;
+	private Matrix4x4 _dragParentWorldInverseStart = Matrix4x4.Identity;
+	private Matrix4x4 _dragParentRotationStart;
+	private Matrix4x4 _dragParentRotationInverseStart = Matrix4x4.Identity;
+	private UiPoint _dragPointerStart;
+	private float _dragAxisScreenX;
+	private float _dragAxisScreenY;
+	private float _dragUnitsPerScreenPixel = 1f;
 	private float _dragStartAngle;
 	private float _dragAngle;
 	private float _dragGizmoLength = 1f;
@@ -168,6 +209,15 @@ internal sealed class SceneViewport : Widget, IFrameTick
 		if (_hoverText is not null && deltaSeconds > 0.0)
 		{
 			_hoverSeconds += (float)deltaSeconds;
+		}
+
+		// A drag owns the pointer until it is released. Losing that
+		// ownership without a release event, which is what a focus loss
+		// or a detached panel produces, must restore the transforms
+		// rather than leave a half-finished edit behind.
+		if (_activeHandle != GizmoHandle.None && !IsPointerCaptured)
+		{
+			CancelDrag();
 		}
 
 		// Camera movement only happens while the look button is held,
@@ -512,6 +562,14 @@ internal sealed class SceneViewport : Widget, IFrameTick
 					return true;
 				}
 
+				// Escape cancels a drag, which restores the transforms the
+				// gesture previewed instead of committing half an edit.
+				if (_activeHandle != GizmoHandle.None)
+				{
+					CancelDrag();
+					return true;
+				}
+
 				return false;
 
 			case UiKey.W:
@@ -732,6 +790,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 	private void Unsubscribe()
 	{
 		EndLook(releaseCapture: true);
+		CancelDrag();
 		_session.SceneChanged -= OnSessionChanged;
 		_session.SelectionChanged -= OnSessionChanged;
 		_session.PlayStateChanged -= OnSessionChanged;
@@ -985,33 +1044,79 @@ internal sealed class SceneViewport : Widget, IFrameTick
 		}
 
 		Vector3 origin = Vector3.Transform(Vector3.Zero, world);
+		Quaternion worldRotation = ResolveWorldRotation(scene, entity);
+
+		// The handles are drawn along the object's axes in local mode
+		// and along the world axes otherwise; scaling always reads the
+		// object's own axes. The drag has to solve against the same
+		// orientation the handle was drawn with, or a rotated object
+		// moves in a direction its handle does not point at.
+		bool objectAxes =
+			_session.LocalTransform || _session.Tool == EditorTool.Scale;
+
+		Quaternion orientation = objectAxes
+			? worldRotation
+			: Quaternion.Identity;
 
 		// Every object the gesture will move is captured up front, so
 		// the whole drag commits as one undo step. A child of another
 		// selected object is left out: its parent already carries it.
 		_dragStarts.Clear();
+		_dragParentWorld.Clear();
+		_dragParentWorldInverse.Clear();
+		_dragParentRotation.Clear();
+		_dragParentRotationInverse.Clear();
+
 		_dragEntityId = activeId;
 		_dragBefore = entity.Transform.Clone();
+		_dragOrigin = origin;
+		_dragGizmoLength = _gizmo.WorldLength;
+		_dragMoved = false;
+		_dragGesture = DragGesture.None;
 
 		foreach (SceneEntity selected in SceneSelection.Roots(
 			scene,
 			_session.Selection))
 		{
 			_dragStarts[selected.Id] = selected.Transform.Clone();
+			_dragParentWorld[selected.Id] = ParentWorld(
+				selected,
+				_worldMatrices);
+
+			_dragParentWorldInverse[selected.Id] = Matrix4x4.Invert(
+				_dragParentWorld[selected.Id],
+				out Matrix4x4 parentInverse)
+					? parentInverse
+					: Matrix4x4.Identity;
+
+			_dragParentRotation[selected.Id] = ParentRotation(
+				scene,
+				selected);
+
+			_dragParentRotationInverse[selected.Id] = Matrix4x4.Invert(
+				_dragParentRotation[selected.Id],
+				out Matrix4x4 rotationInverse)
+					? rotationInverse
+					: Matrix4x4.Identity;
 		}
 
-		_dragOrigin = origin;
-		_dragGizmoLength = _gizmo.WorldLength;
-		_dragMoved = false;
+		_dragParentWorldStart = ParentWorld(entity, _worldMatrices);
+		_dragParentWorldInverseStart = Matrix4x4.Invert(
+			_dragParentWorldStart,
+			out Matrix4x4 activeParentInverse)
+				? activeParentInverse
+				: Matrix4x4.Identity;
 
-		Quaternion rotation = ResolveWorldRotation(scene, entity);
+		_dragParentRotationStart = ParentRotation(scene, entity);
+		_dragParentRotationInverseStart = Matrix4x4.Invert(
+			_dragParentRotationStart,
+			out Matrix4x4 activeRotationInverse)
+				? activeRotationInverse
+				: Matrix4x4.Identity;
 
-		_dragAxisWorld = AxisDirection(hit.Handle, rotation);
-		_dragAxisXWorld = AxisDirection(GizmoHandle.AxisX, rotation);
-		_dragAxisZWorld = AxisDirection(GizmoHandle.AxisZ, rotation);
-
-		float facing = Vector3.Dot(_dragAxisWorld, _camera.Forward);
-		_dragFacing = facing > 0f ? 1f : -1f;
+		_dragAxisWorld = AxisDirection(hit.Handle, orientation);
+		_dragRotationStartWorld = Matrix4x4.CreateFromQuaternion(
+			worldRotation);
 
 		// Rotation is driven by the angle the pointer sweeps around the
 		// gizmo centre, so its own start value is that angle.
@@ -1033,44 +1138,127 @@ internal sealed class SceneViewport : Widget, IFrameTick
 				centerPixel);
 
 			_dragAngle = 0f;
+			_dragRotationAxisWorld = _dragAxisWorld;
+
+			// An axis pointing away from the camera turns the visible
+			// tangent the other way, so the sign follows the view.
+			_dragFacing = Vector3.Dot(
+				_dragRotationAxisWorld,
+				_camera.Forward) > 0f
+					? 1f
+					: -1f;
+
 			_activeHandle = hit.Handle;
 
 			return true;
 		}
 
-		if (hit.Handle == GizmoHandle.PlaneXZ)
+		if (ViewportGizmo.IsPlaneHandle(hit.Handle))
 		{
-			if (!ViewportMath.TryProjectOntoAxis(
-					rayOrigin,
-					rayDirection,
-					_camera.Position,
-					origin,
-					_dragAxisXWorld,
-					out _dragStartAlongX) ||
-				!ViewportMath.TryProjectOntoAxis(
-					rayOrigin,
-					rayDirection,
-					_camera.Position,
-					origin,
-					_dragAxisZWorld,
-					out _dragStartAlongZ))
+			(Vector3 firstAxis, Vector3 secondAxis) =
+				ViewportGizmo.PlaneAxes(hit.Handle);
+
+			_dragPlaneAxisA = Vector3.Normalize(
+				Vector3.Transform(firstAxis, orientation));
+
+			_dragPlaneAxisB = Vector3.Normalize(
+				Vector3.Transform(secondAxis, orientation));
+
+			Vector3 normal = Vector3.Cross(
+				_dragPlaneAxisA,
+				_dragPlaneAxisB);
+
+			// The press's own plane hit is the reference point for the
+			// whole gesture, so no error accumulates from frame to
+			// frame and the object cannot jump when the drag starts.
+			if (!ViewportMath.TryIntersectPlane(
+				rayOrigin,
+				rayDirection,
+				origin,
+				normal,
+				out _dragPlaneStart))
 			{
 				return false;
 			}
+
+			_activeHandle = hit.Handle;
+
+			return true;
 		}
 
-		else if (!ViewportMath.TryProjectOntoAxis(
-			rayOrigin,
-			rayDirection,
-			_camera.Position,
+		if (!TryBeginScreenAxisDrag(
+			bounds,
+			pointer.GlobalPosition,
 			origin,
-			_dragAxisWorld,
-			out _dragStartAlong))
+			_dragAxisWorld))
 		{
 			return false;
 		}
 
+		if (_session.Tool == EditorTool.Scale)
+		{
+			_dragLocalScaleAxis = ViewportGizmo.LocalAxis(hit.Handle);
+		}
+
 		_activeHandle = hit.Handle;
+
+		return true;
+	}
+
+	/// <summary>
+	/// Starts an axis drag that maps pointer travel along the handle.
+	/// </summary>
+	/// <remarks>
+	/// A ray-axis solve is exact while the axis faces the camera, but a
+	/// one-pixel move near a parallel axis maps to an unbounded world
+	/// distance. Measuring the projected handle keeps the mapping finite
+	/// at every angle: moving the pointer to where the handle's tip is
+	/// drawn moves the object by the handle's world length.
+	/// </remarks>
+	private bool TryBeginScreenAxisDrag(
+		UiRect bounds,
+		UiPoint pointer,
+		Vector3 origin,
+		Vector3 axisWorld)
+	{
+		float length = MathF.Max(0.001f, _dragGizmoLength);
+
+		Matrix4x4 viewProjection =
+			_camera.CreateView() *
+			_camera.CreateProjection(
+				bounds.Width / MathF.Max(1f, bounds.Height),
+				yDown: false);
+
+		if (!ViewportMath.TryProject(
+				viewProjection,
+				origin,
+				bounds,
+				out UiPoint startPixel) ||
+			!ViewportMath.TryProject(
+				viewProjection,
+				origin + (axisWorld * length),
+				bounds,
+				out UiPoint endPixel))
+		{
+			return false;
+		}
+
+		float dx = endPixel.X - startPixel.X;
+		float dy = endPixel.Y - startPixel.Y;
+		float pixels = MathF.Sqrt((dx * dx) + (dy * dy));
+
+		// An axis aimed at the camera covers almost no pixels, and
+		// trading one pixel for an unbounded world distance is exactly
+		// what makes a drag jump. The gesture is refused instead.
+		if (pixels < MinimumAxisDragPixels)
+		{
+			return false;
+		}
+
+		_dragPointerStart = pointer;
+		_dragAxisScreenX = dx / pixels;
+		_dragAxisScreenY = dy / pixels;
+		_dragUnitsPerScreenPixel = length / pixels;
 
 		return true;
 	}
@@ -1079,7 +1267,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 	{
 		if (_session.Scene is not SceneDocument scene ||
 			_dragBefore is not TransformData before ||
-			scene.Find(_dragEntityId) is not SceneEntity entity)
+			scene.Find(_dragEntityId) is null)
 		{
 			return false;
 		}
@@ -1097,59 +1285,67 @@ internal sealed class SceneViewport : Widget, IFrameTick
 		}
 
 		TransformData next = before.Clone();
+		DragGesture gesture = DragGesture.None;
+		bool applied;
 
-		bool applied = _session.Tool switch
+		switch (_session.Tool)
 		{
-			EditorTool.Translate => ApplyTranslate(
-				scene,
-				entity,
-				before,
-				next,
-				rayOrigin,
-				rayDirection),
-			EditorTool.Rotate => ApplyRotate(
-				scene,
-				before,
-				next,
-				bounds,
-				pointer.GlobalPosition),
-			EditorTool.Scale => ApplyScale(
-				before,
-				next,
-				rayOrigin,
-				rayDirection),
-			_ => false
-		};
+			case EditorTool.Translate:
+				applied = ApplyTranslate(
+					next,
+					rayOrigin,
+					rayDirection,
+					pointer.GlobalPosition,
+					out gesture);
+				break;
+
+			case EditorTool.Rotate:
+				applied = ApplyRotate(
+					next,
+					bounds,
+					pointer.GlobalPosition,
+					out gesture);
+				break;
+
+			case EditorTool.Scale:
+				applied = ApplyScale(
+					next,
+					pointer.GlobalPosition,
+					out gesture);
+				break;
+
+			default:
+				applied = false;
+				break;
+		}
 
 		if (!applied)
 		{
 			return false;
 		}
 
+		_dragGesture = gesture;
 		_dragMoved = true;
 		_worldDirty = true;
 
-		ApplyGesture(scene, before, next);
+		ApplyGesture(scene, next);
 
 		return true;
 	}
 
 	/// <summary>
-	/// Replays one object's drag delta on the rest of the selection.
+	/// Replays one drag's world-space gesture on the rest of the
+	/// selection.
 	/// </summary>
 	/// <remarks>
 	/// The edited object lands on the exact transform its own drag math
-	/// produced, snapping included, while every other object keeps its
-	/// own authored transform plus that delta. The result is previewed
-	/// directly and committed once the drag ends.
+	/// produced, snapping included. Every other object is moved by the
+	/// same world-space operation, converted through its own parent, so
+	/// a rotated or scaled parent cannot distort a group edit. The
+	/// result is previewed directly and committed once the drag ends.
 	/// </remarks>
-	private void ApplyGesture(
-		SceneDocument scene,
-		TransformData before,
-		TransformData after)
+	private void ApplyGesture(SceneDocument scene, TransformData after)
 	{
-		TransformDelta delta = TransformDelta.Between(before, after);
-
 		foreach (KeyValuePair<Guid, TransformData> start in _dragStarts)
 		{
 			if (scene.Find(start.Key) is not SceneEntity entity)
@@ -1157,18 +1353,23 @@ internal sealed class SceneViewport : Widget, IFrameTick
 				continue;
 			}
 
+			TransformData next = start.Value.Clone();
+
 			if (start.Key == _dragEntityId)
 			{
-				entity.Transform.CopyFrom(after);
+				next.CopyFrom(after);
 			}
 
 			else
 			{
-				TransformData next = start.Value.Clone();
-				delta.ApplyTo(next);
-				entity.Transform.CopyFrom(next);
+				_dragGesture.ApplyTo(
+					next,
+					_dragParentWorldInverse[start.Key],
+					_dragParentRotation[start.Key],
+					_dragParentRotationInverse[start.Key]);
 			}
 
+			entity.Transform.CopyFrom(next);
 			scene.NotifyTransformChanged(entity.Id);
 		}
 
@@ -1176,207 +1377,188 @@ internal sealed class SceneViewport : Widget, IFrameTick
 	}
 
 	private bool ApplyTranslate(
-		SceneDocument scene,
-		SceneEntity entity,
-		TransformData before,
 		TransformData next,
 		Vector3 rayOrigin,
-		Vector3 rayDirection)
+		Vector3 rayDirection,
+		UiPoint pointer,
+		out DragGesture gesture)
 	{
+		gesture = DragGesture.None;
+
 		Vector3 worldDelta;
 
-		if (_activeHandle == GizmoHandle.PlaneXZ)
+		if (ViewportGizmo.IsPlaneHandle(_activeHandle))
 		{
-			if (!ViewportMath.TryProjectOntoAxis(
-					rayOrigin,
-					rayDirection,
-					_camera.Position,
-					_dragOrigin,
-					_dragAxisXWorld,
-					out float alongX) ||
-				!ViewportMath.TryProjectOntoAxis(
-					rayOrigin,
-					rayDirection,
-					_camera.Position,
-					_dragOrigin,
-					_dragAxisZWorld,
-					out float alongZ))
+			Vector3 normal = Vector3.Cross(
+				_dragPlaneAxisA,
+				_dragPlaneAxisB);
+
+			// A real ray-plane hit, not two axis projections: the
+			// pointer's travel across the plane is reproduced at the
+			// same rate on both of its axes.
+			if (!ViewportMath.TryIntersectPlane(
+				rayOrigin,
+				rayDirection,
+				_dragOrigin,
+				normal,
+				out Vector3 hit))
 			{
 				return false;
 			}
 
-			worldDelta =
-				(_dragAxisXWorld * (alongX - _dragStartAlongX)) +
-				(_dragAxisZWorld * (alongZ - _dragStartAlongZ));
+			worldDelta = hit - _dragPlaneStart;
+
+			if (_session.GridSnapping)
+			{
+				float first = SnapScalar(
+					Vector3.Dot(worldDelta, _dragPlaneAxisA),
+					_session.SnapStep);
+
+				float second = SnapScalar(
+					Vector3.Dot(worldDelta, _dragPlaneAxisB),
+					_session.SnapStep);
+
+				worldDelta =
+					(_dragPlaneAxisA * first) +
+					(_dragPlaneAxisB * second);
+			}
 		}
 
 		else
 		{
-			if (!ViewportMath.TryProjectOntoAxis(
-					rayOrigin,
-					rayDirection,
-					_camera.Position,
-					_dragOrigin,
-					_dragAxisWorld,
-					out float along))
+			float along = ScreenAxisDistance(pointer);
+
+			if (_session.GridSnapping)
 			{
-				return false;
+				along = SnapScalar(along, _session.SnapStep);
 			}
 
-			worldDelta = _dragAxisWorld * (along - _dragStartAlong);
+			worldDelta = _dragAxisWorld * along;
 		}
 
-		Vector3 localDelta = worldDelta;
+		gesture = DragGesture.Translate(worldDelta);
 
-		if (entity.ParentId is Guid parentId &&
-			_worldMatrices.TryGetValue(parentId, out Matrix4x4 parentWorld) &&
-			Matrix4x4.Invert(parentWorld, out Matrix4x4 parentInverse))
-		{
-			localDelta = Vector3.TransformNormal(worldDelta, parentInverse);
-		}
-
-		Vector3 position = before.Position;
-
-		if (_session.GridSnapping)
-		{
-			position = SnapVector(localDelta, _session.SnapStep) + position;
-		}
-
-		else
-		{
-			position += localDelta;
-		}
-
-		next.Position = position;
+		gesture.ApplyTo(
+			next,
+			_dragParentWorldInverseStart,
+			_dragParentRotationStart,
+			_dragParentRotationInverseStart);
 
 		return true;
 	}
 
+	/// <summary>
+	/// Measures pointer travel along the dragged handle, in world units.
+	/// </summary>
+	private float ScreenAxisDistance(UiPoint pointer)
+	{
+		float pixels =
+			((pointer.X - _dragPointerStart.X) * _dragAxisScreenX) +
+			((pointer.Y - _dragPointerStart.Y) * _dragAxisScreenY);
+
+		return pixels * _dragUnitsPerScreenPixel;
+	}
+
 	private bool ApplyRotate(
-		SceneDocument scene,
-		TransformData before,
 		TransformData next,
 		UiRect bounds,
-		UiPoint pointer)
+		UiPoint pointer,
+		out DragGesture gesture)
 	{
+		gesture = DragGesture.None;
+
 		float aspect = bounds.Width / MathF.Max(1f, bounds.Height);
 
 		if (!ViewportMath.TryProject(
 				_camera.CreateView() *
 				_camera.CreateProjection(aspect, yDown: false),
-				Vector3.Transform(Vector3.Zero, _worldMatrices[_dragEntityId]),
+				_dragOrigin,
 				bounds,
 				out UiPoint centerPixel))
 		{
 			return false;
 		}
 
-		float angle = AngleAround(pointer, centerPixel);
-		float step = angle - _dragStartAngle;
+		float radius = DistanceBetween(pointer, centerPixel);
 
-		// Unwrap so a drag that crosses the -X axis keeps turning in
-		// the direction the pointer moved.
-		if (step > MathF.PI)
+		// Right at the gizmo centre the pointer's bearing is noise;
+		// keeping the last stable angle beats spinning the object.
+		if (radius >= MinimumRotationRadiusPixels)
 		{
-			step -= MathF.Tau;
-		}
+			float angle = AngleAround(pointer, centerPixel);
+			float step = angle - _dragStartAngle;
 
-		else if (step < -MathF.PI)
-		{
-			step += MathF.Tau;
-		}
+			// Unwrap so a drag that crosses the -X axis keeps turning
+			// in the direction the pointer moved.
+			if (step > MathF.PI)
+			{
+				step -= MathF.Tau;
+			}
 
-		_dragStartAngle = angle;
-		_dragAngle += step;
+			else if (step < -MathF.PI)
+			{
+				step += MathF.Tau;
+			}
+
+			_dragStartAngle = angle;
+			_dragAngle += step;
+		}
 
 		float degrees = _dragAngle * _dragFacing * (180f / MathF.PI);
 
 		if (_session.GridSnapping)
 		{
-			float increment = MathF.Max(1f, _session.SnapStep * 45f);
-			degrees = MathF.Round(degrees / increment) * increment;
+			degrees = MathF.Round(degrees / RotationSnapDegrees) *
+				RotationSnapDegrees;
 		}
 
-		Vector3 euler = before.EulerAngles;
+		// Rotation is solved in world space and converted back once:
+		// turning an Euler component in place would mean a different
+		// rotation for every orientation and would drift as soon as the
+		// object had a rotated parent.
+		Matrix4x4 rotationDelta = Matrix4x4.CreateFromAxisAngle(
+			_dragRotationAxisWorld,
+			degrees * (MathF.PI / 180f));
 
-		// A drag turns the Euler angle its axis corresponds to. Local
-		// and world mode therefore differ only in which axis the handle
-		// names, which keeps a single drag predictable.
-		euler = _activeHandle switch
-		{
-			GizmoHandle.AxisX => new Vector3(
-				WrapDegrees(euler.X + degrees),
-				euler.Y,
-				euler.Z),
+		gesture = DragGesture.Rotate(rotationDelta);
 
-			GizmoHandle.AxisY => new Vector3(
-				euler.X,
-				WrapDegrees(euler.Y + degrees),
-				euler.Z),
-
-			GizmoHandle.AxisZ => new Vector3(
-				euler.X,
-				euler.Y,
-				WrapDegrees(euler.Z + degrees)),
-
-			_ => euler
-		};
-
-		next.EulerAngles = euler;
+		gesture.ApplyTo(
+			next,
+			_dragParentWorldInverseStart,
+			_dragParentRotationStart,
+			_dragParentRotationInverseStart);
 
 		return true;
 	}
 
 	private bool ApplyScale(
-		TransformData before,
 		TransformData next,
-		Vector3 rayOrigin,
-		Vector3 rayDirection)
+		UiPoint pointer,
+		out DragGesture gesture)
 	{
-		if (!ViewportMath.TryProjectOntoAxis(
-				rayOrigin,
-				rayDirection,
-				_camera.Position,
-				_dragOrigin,
-				_dragAxisWorld,
-				out float along))
-		{
-			return false;
-		}
+		gesture = DragGesture.None;
 
-		float factor = 1f + ((along - _dragStartAlong) /
-			MathF.Max(0.001f, _dragGizmoLength));
+		float along = ScreenAxisDistance(pointer);
+
+		float factor = 1f + (along / MathF.Max(0.001f, _dragGizmoLength));
 
 		if (_session.GridSnapping)
 		{
 			factor = MathF.Round(factor * 10f) / 10f;
 		}
 
-		factor = MathF.Max(0.01f, factor);
+		// Authored scale is positive: picking treats a component as a
+		// magnitude, and a zero or inverted axis would make the object
+		// unreachable. A floor keeps a drag from collapsing it.
+		factor = MathF.Max(MinimumScaleComponent, factor);
 
-		Vector3 scale = before.Scale;
+		gesture = DragGesture.Scale(_dragLocalScaleAxis, factor);
 
-		scale = _activeHandle switch
-		{
-			GizmoHandle.AxisX => new Vector3(
-				MathF.Max(0.01f, scale.X * factor),
-				scale.Y,
-				scale.Z),
-
-			GizmoHandle.AxisY => new Vector3(
-				scale.X,
-				MathF.Max(0.01f, scale.Y * factor),
-				scale.Z),
-
-			GizmoHandle.AxisZ => new Vector3(
-				scale.X,
-				scale.Y,
-				MathF.Max(0.01f, scale.Z * factor)),
-
-			_ => scale
-		};
-
-		next.Scale = scale;
+		gesture.ApplyTo(
+			next,
+			_dragParentWorldInverseStart,
+			_dragParentRotationStart,
+			_dragParentRotationInverseStart);
 
 		return true;
 	}
@@ -1396,9 +1578,232 @@ internal sealed class SceneViewport : Widget, IFrameTick
 			_session.CommitTransforms(_dragStarts);
 		}
 
+		ClearDrag();
+	}
+
+	/// <summary>
+	/// Abandons a drag and restores every transform it previewed.
+	/// </summary>
+	/// <remarks>
+	/// Cancelling is not an undo: the gesture never entered the
+	/// history, so restoring the captured transforms leaves the
+	/// document exactly as it was before the press.
+	/// </remarks>
+	private void CancelDrag()
+	{
+		if (_activeHandle == GizmoHandle.None)
+		{
+			ClearDrag();
+			return;
+		}
+
+		if (_session.Scene is SceneDocument scene)
+		{
+			foreach (KeyValuePair<Guid, TransformData> start in _dragStarts)
+			{
+				if (scene.Find(start.Key) is not SceneEntity entity)
+				{
+					continue;
+				}
+
+				entity.Transform.CopyFrom(start.Value);
+				scene.NotifyTransformChanged(entity.Id);
+			}
+		}
+
+		_activeHandle = GizmoHandle.None;
+		_dragMoved = false;
+
+		ClearDrag();
+		ReleasePointer();
+
+		_session.SetStatus("Drag canceled");
+		InvalidateVisual();
+	}
+
+	private void ClearDrag()
+	{
 		_dragStarts.Clear();
+		_dragParentWorld.Clear();
+		_dragParentWorldInverse.Clear();
+		_dragParentRotation.Clear();
+		_dragParentRotationInverse.Clear();
 		_dragBefore = null;
+		_dragGesture = DragGesture.None;
 		_worldDirty = true;
+	}
+
+	/// <summary>
+	/// Rounds a value to the nearest multiple of a step.
+	/// </summary>
+	private static float SnapScalar(float value, float step)
+	{
+		if (!float.IsFinite(step) || step <= 0f)
+		{
+			return value;
+		}
+
+		return MathF.Round(value / step) * step;
+	}
+
+	/// <summary>
+	/// Gets an object's parent world matrix, or the identity at the
+	/// root.
+	/// </summary>
+	private static Matrix4x4 ParentWorld(
+		SceneEntity entity,
+		Dictionary<Guid, Matrix4x4> worlds)
+	{
+		return entity.ParentId is Guid parentId &&
+			worlds.TryGetValue(parentId, out Matrix4x4 parent)
+				? parent
+				: Matrix4x4.Identity;
+	}
+
+	/// <summary>
+	/// Gets an object's parent rotation, or the identity at the root.
+	/// </summary>
+	private static Matrix4x4 ParentRotation(
+		SceneDocument scene,
+		SceneEntity entity)
+	{
+		if (entity.ParentId is not Guid parentId ||
+			scene.Find(parentId) is not SceneEntity parent)
+		{
+			return Matrix4x4.Identity;
+		}
+
+		return Matrix4x4.CreateFromQuaternion(
+			ResolveWorldRotation(scene, parent));
+	}
+
+	private static Vector3 ScaleAlongAxis(
+		Vector3 scale,
+		Vector3 localAxis,
+		float factor)
+	{
+		float x = MathF.Abs(localAxis.X);
+		float y = MathF.Abs(localAxis.Y);
+		float z = MathF.Abs(localAxis.Z);
+
+		if (x >= y && x >= z)
+		{
+			scale.X = MathF.Max(MinimumScaleComponent, scale.X * factor);
+		}
+
+		else if (y >= z)
+		{
+			scale.Y = MathF.Max(MinimumScaleComponent, scale.Y * factor);
+		}
+
+		else
+		{
+			scale.Z = MathF.Max(MinimumScaleComponent, scale.Z * factor);
+		}
+
+		return scale;
+	}
+
+	/// <summary>
+	/// One drag's effect, expressed in world space so it can be replayed
+	/// on every other selected object.
+	/// </summary>
+	private readonly record struct DragGesture(
+		DragGestureKind Kind,
+		Vector3 WorldDelta,
+		Matrix4x4 WorldRotation,
+		Vector3 LocalScaleAxis,
+		float ScaleFactor)
+	{
+		public static DragGesture None => default;
+
+		public static DragGesture Translate(Vector3 worldDelta)
+		{
+			return new DragGesture(
+				DragGestureKind.Translation,
+				worldDelta,
+				Matrix4x4.Identity,
+				Vector3.UnitX,
+				1f);
+		}
+
+		public static DragGesture Rotate(Matrix4x4 worldRotation)
+		{
+			return new DragGesture(
+				DragGestureKind.Rotation,
+				Vector3.Zero,
+				worldRotation,
+				Vector3.UnitX,
+				1f);
+		}
+
+		public static DragGesture Scale(Vector3 localAxis, float factor)
+		{
+			return new DragGesture(
+				DragGestureKind.Scaling,
+				Vector3.Zero,
+				Matrix4x4.Identity,
+				localAxis,
+				factor);
+		}
+
+		/// <summary>
+		/// Replays this gesture on one object.
+		/// </summary>
+		/// <param name="target">The transform to change in place.</param>
+		/// <param name="parentWorldInverse">
+		/// The inverse of the object's parent world matrix.
+		/// </param>
+		/// <param name="parentRotation">
+		/// The object's parent world rotation.
+		/// </param>
+		/// <param name="parentRotationInverse">
+		/// The inverse of <paramref name="parentRotation"/>.
+		/// </param>
+		public void ApplyTo(
+			TransformData target,
+			Matrix4x4 parentWorldInverse,
+			Matrix4x4 parentRotation,
+			Matrix4x4 parentRotationInverse)
+		{
+			switch (Kind)
+			{
+				case DragGestureKind.Translation:
+					target.Position += Vector3.TransformNormal(
+						WorldDelta,
+						parentWorldInverse);
+					break;
+
+				case DragGestureKind.Rotation:
+					// The delta is a world-space rotation, so it is applied
+					// after the object's own world orientation and then
+					// converted back through its parent.
+					Matrix4x4 world =
+						Matrix4x4.CreateFromQuaternion(target.Rotation) *
+						parentRotation;
+
+					Matrix4x4 local =
+						world * WorldRotation * parentRotationInverse;
+
+					target.EulerAngles = ViewportMath.EulerDegrees(local);
+					break;
+
+				case DragGestureKind.Scaling:
+					target.Scale = ScaleAlongAxis(
+						target.Scale,
+						LocalScaleAxis,
+						ScaleFactor);
+					break;
+			}
+		}
+	}
+
+	private enum DragGestureKind
+	{
+		None = 0,
+		Translation = 1,
+		Rotation = 2,
+		Scaling = 3
 	}
 
 	private void DrawEntities(
@@ -1704,16 +2109,13 @@ internal sealed class SceneViewport : Widget, IFrameTick
 
 			float thickness = isActive ? 3.5f : 2f;
 
-			if (handle.Handle == GizmoHandle.PlaneXZ)
+			if (handle.IsPlane)
 			{
-				drawList.AddRoundedRect(
-					new UiRect(
-						MathF.Min(handle.StartPixel.X, handle.EndPixel.X),
-						MathF.Min(handle.StartPixel.Y, handle.EndPixel.Y),
-						MathF.Abs(handle.EndPixel.X - handle.StartPixel.X) + 4f,
-						MathF.Abs(handle.EndPixel.Y - handle.StartPixel.Y) + 4f),
-					2f,
-					color);
+				DrawPlaneHandle(
+					drawList,
+					handle.Quad,
+					color,
+					isActive);
 
 				continue;
 			}
@@ -1742,6 +2144,23 @@ internal sealed class SceneViewport : Widget, IFrameTick
 				2f,
 				theme.Palette.Warning);
 		}
+	}
+
+	/// <summary>
+	/// Draws a plane handle as the quadrilateral between its two axes.
+	/// </summary>
+	private static void DrawPlaneHandle(
+		UiDrawList drawList,
+		GizmoPlaneQuad quad,
+		UiColor color,
+		bool active)
+	{
+		float thickness = active ? 2.4f : 1.4f;
+
+		drawList.AddLine(quad.A, quad.B, thickness, color);
+		drawList.AddLine(quad.B, quad.C, thickness, color);
+		drawList.AddLine(quad.C, quad.D, thickness, color);
+		drawList.AddLine(quad.D, quad.A, thickness, color);
 	}
 
 	private static void DrawGizmoTip(
@@ -2419,10 +2838,15 @@ internal sealed class SceneViewport : Widget, IFrameTick
 			visited.Add(parentId) &&
 			scene.Find(parentId) is SceneEntity parent)
 		{
+			// System.Numerics composes quaternions the opposite way
+			// round from its matrices: multiply(a, b) is the matrix
+			// product b * a. A child's world orientation is its own
+			// rotation written before its parent's, so the parent is
+			// the first operand here.
 			rotation = Quaternion.Normalize(
 				Quaternion.Multiply(
-					rotation,
-					parent.Transform.Rotation));
+					parent.Transform.Rotation,
+					rotation));
 
 			entity = parent;
 		}
