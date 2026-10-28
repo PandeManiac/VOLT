@@ -289,7 +289,8 @@ Opening another scene or project, creating a scene, or closing the
 editor while the current scene is dirty asks **Save**, **Discard**, or
 **Cancel**. Save writes the current scene before the operation
 continues, Cancel leaves it open and dirty, and closing the window uses
-the same prompt instead of discarding the scene silently.
+the same prompt instead of discarding the scene silently. **File →
+Close Project** returns to the start screen through the same guard.
 
 ## Play Mode
 

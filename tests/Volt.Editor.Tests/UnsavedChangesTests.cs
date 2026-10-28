@@ -182,6 +182,31 @@ public sealed class UnsavedChangesTests : IDisposable
 	}
 
 	[Fact]
+	public void Shell_AsksBeforeClosingAProject()
+	{
+		EditorShell shell = BuildShell();
+
+		_session.CreateEntity("Cube");
+
+		MenuItem close = shell.MenuBarView.Menus
+			.Single(menu => menu.Label == "File")
+			.Children
+			.Single(item => item.Label == "Close Project");
+
+		close.Action!.Invoke();
+
+		Assert.Equal("Guard", _session.Project!.Name);
+		Assert.True(_context.HasModal);
+
+		Layout();
+		Click(FindButton(_context.Modal!, "Discard"));
+
+		Assert.Null(_session.Project);
+		Assert.Null(_session.Scene);
+		Assert.False(_context.HasModal);
+	}
+
+	[Fact]
 	public void Shell_AsksBeforeExitAndExitsAfterDiscard()
 	{
 		EditorShell shell = BuildShell();

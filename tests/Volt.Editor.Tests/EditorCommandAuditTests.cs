@@ -46,6 +46,7 @@ public sealed class EditorCommandAuditTests : IDisposable
 		EditorShell shell = new(session);
 
 		Assert.False(Find(shell, "File", "Save Scene").IsEnabled);
+		Assert.False(Find(shell, "File", "Close Project").IsEnabled);
 		Assert.False(Find(shell, "File", "New Scene").IsEnabled);
 		Assert.False(Find(shell, "Assets", "Refresh Asset Catalog").IsEnabled);
 		Assert.False(Find(shell, "Assets", "New Scene").IsEnabled);
@@ -58,6 +59,21 @@ public sealed class EditorCommandAuditTests : IDisposable
 		Assert.False(Find(shell, "Edit", "Paste").IsEnabled);
 		Assert.False(Find(shell, "Edit", "Delete Selection").IsEnabled);
 		Assert.False(Find(shell, "Edit", "Select All").IsEnabled);
+	}
+
+	[Fact]
+	public void CloseProjectCommand_ReturnsToTheStartScreen()
+	{
+		EditorShell shell = new(_session);
+		MenuItem close = Find(shell, "File", "Close Project");
+
+		Assert.True(close.IsEnabled);
+
+		close.Action!.Invoke();
+
+		Assert.Null(_session.Project);
+		Assert.Null(_session.Scene);
+		Assert.False(Find(shell, "File", "Close Project").IsEnabled);
 	}
 
 	[Fact]

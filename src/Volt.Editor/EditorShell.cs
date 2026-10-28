@@ -512,6 +512,13 @@ public sealed class EditorShell : Panel
 			() => Guard("Save scene", _session.SaveScene),
 			() => _session.Scene is not null,
 			"Ctrl+S");
+
+		AddCommand(
+			file,
+			"Close Project",
+			() => Guard("Close project", () => _session.CloseProject()),
+			() => _session.Project is not null);
+
 		file.AddChild(MenuItem.Separator);
 		file.AddChild(new MenuItem("Exit", RequestExit));
 
