@@ -471,6 +471,89 @@ public sealed class EditorProject
 	}
 
 	/// <summary>
+	/// Renames a folder beneath Assets or Scenes.
+	/// </summary>
+	/// <remarks>
+	/// The project roots cannot be renamed because the catalog and the
+	/// project layout depend on them. Moving a folder updates its files,
+	/// the startup scene path when it lives there, and every scene's
+	/// asset references that share the old folder prefix. The folder's
+	/// own leaf name is the only segment changed.
+	/// </remarks>
+	/// <returns>The normalized project-relative identity of the folder.</returns>
+	public string RenameFolder(string relativePath, string newName)
+	{
+		string id = ProjectAssetCatalog.NormalizeId(relativePath).TrimEnd('/');
+		string[] segments = id.Split('/');
+
+		if (segments.Length < 2 ||
+			(!string.Equals(segments[0], "Assets", StringComparison.OrdinalIgnoreCase) &&
+				!string.Equals(segments[0], "Scenes", StringComparison.OrdinalIgnoreCase)))
+		{
+			throw new ArgumentException(
+				"Only folders inside Assets or Scenes can be renamed.",
+				nameof(relativePath));
+		}
+
+		foreach (string segment in segments)
+		{
+			ValidateAssetName(segment, nameof(relativePath));
+		}
+
+		string source = ResolvePath(id);
+
+		if (!Directory.Exists(source))
+		{
+			throw new DirectoryNotFoundException(
+				$"The folder '{relativePath}' does not exist.");
+		}
+
+		string trimmed = (newName ?? string.Empty).Trim();
+		ValidateAssetName(trimmed, nameof(newName));
+
+		string currentName = Path.GetFileName(source);
+
+		if (string.Equals(trimmed, currentName, StringComparison.Ordinal))
+		{
+			return id;
+		}
+
+		string directory = Path.GetDirectoryName(source)!;
+		string relativeDirectory = Path.GetRelativePath(RootPath, directory);
+		string renamed = relativeDirectory == "."
+			? trimmed
+			: Path.Combine(relativeDirectory, trimmed);
+		string destination = ResolvePath(renamed);
+
+		if (File.Exists(destination) || Directory.Exists(destination))
+		{
+			throw new IOException(
+				$"A file or folder already exists at '{renamed}'.");
+		}
+
+		string oldPrefix = id + "/";
+		string renamedId = ProjectAssetCatalog.NormalizeId(renamed);
+		string newPrefix = renamedId + "/";
+		string startupScene = ProjectAssetCatalog.NormalizeId(StartupScenePath);
+		bool startupInside = startupScene.StartsWith(
+			oldPrefix,
+			StringComparison.OrdinalIgnoreCase);
+
+		Directory.Move(source, destination);
+
+		if (startupInside)
+		{
+			StartupScenePath = newPrefix + startupScene[oldPrefix.Length..];
+			SaveManifest();
+		}
+
+		ReplaceFolderReferencesInScenes(oldPrefix, newPrefix);
+		AssetCatalog.Refresh();
+
+		return renamedId;
+	}
+
+	/// <summary>
 	/// Deletes several asset files from the project.
 	/// </summary>
 	/// <remarks>
@@ -595,6 +678,23 @@ public sealed class EditorProject
 				path,
 				oldId,
 				newId);
+		}
+
+		return changed;
+	}
+
+	private int ReplaceFolderReferencesInScenes(
+		string oldPrefix,
+		string newPrefix)
+	{
+		int changed = 0;
+
+		foreach (string path in EnumerateSceneFiles())
+		{
+			changed += SceneAssetReferences.ReplaceFolderInFile(
+				path,
+				oldPrefix,
+				newPrefix);
 		}
 
 		return changed;

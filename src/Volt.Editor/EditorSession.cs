@@ -416,6 +416,58 @@ public sealed class EditorSession : IDisposable
 	}
 
 	/// <summary>
+	/// Renames a project folder and keeps the open scene's save path,
+	/// in-memory references, and disk scene references in sync.
+	/// </summary>
+	public string RenameFolder(string folderId, string newName)
+	{
+		ThrowIfDisposed();
+
+		EditorProject project = RequireProject();
+		string id = ProjectAssetCatalog.NormalizeId(folderId).TrimEnd('/');
+		string oldPrefix = id + "/";
+		string? sceneSuffix = ScenePath is string current &&
+			current.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase)
+				? current[oldPrefix.Length..]
+				: null;
+		ProjectAsset[] affected =
+		[
+			.. project.AssetCatalog.Assets.Where(asset =>
+				asset.Id.StartsWith(
+					oldPrefix,
+					StringComparison.OrdinalIgnoreCase))
+		];
+		bool wasDirty = IsSceneDirty;
+
+		string renamed = project.RenameFolder(id, newName);
+		string newPrefix = renamed + "/";
+
+		if (sceneSuffix is not null)
+		{
+			ScenePath = newPrefix + sceneSuffix;
+		}
+
+		int changed = 0;
+
+		foreach (ProjectAsset asset in affected)
+		{
+			changed += Scene?.ReplaceAssetReference(
+				asset.Id,
+				newPrefix + asset.Id[oldPrefix.Length..]) ?? 0;
+		}
+
+		if (changed > 0 && !wasDirty && Scene is not null &&
+			ScenePath is not null)
+		{
+			project.SaveScene(Scene, ScenePath);
+			IsSceneDirty = false;
+		}
+
+		ProjectChanged?.Invoke(this);
+		return renamed;
+	}
+
+	/// <summary>
 	/// Deletes several project assets in one project change.
 	/// </summary>
 	/// <returns>The number of distinct assets that were removed.</returns>

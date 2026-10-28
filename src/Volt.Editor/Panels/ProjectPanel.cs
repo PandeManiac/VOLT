@@ -139,6 +139,7 @@ public sealed class ProjectPanel : Panel
 		};
 
 		_folders.SelectionChanged += OnFolderSelectionChanged;
+		_folders.ContextMenuRequested += OnFolderTreeContextMenuRequested;
 
 		_tiles = new TileWrapPanel();
 
@@ -1315,6 +1316,13 @@ public sealed class ProjectPanel : Panel
 		IconTileView tile,
 		UiPoint position)
 	{
+		if (tile.Tag is string folder)
+		{
+			SelectFolder(folder);
+			ShowFolderContextMenu(folder, position);
+			return;
+		}
+
 		if (tile.Tag is not ProjectAsset asset)
 		{
 			return;
@@ -1333,6 +1341,13 @@ public sealed class ProjectPanel : Panel
 		TreeViewItem item,
 		UiPoint position)
 	{
+		if (item.Tag is string folder)
+		{
+			SelectFolder(folder);
+			ShowFolderContextMenu(folder, position);
+			return;
+		}
+
 		if (item.Tag is not ProjectAsset asset)
 		{
 			return;
@@ -1344,6 +1359,172 @@ public sealed class ProjectPanel : Panel
 		}
 
 		ShowAssetContextMenu(asset, SelectedAssets(), position);
+	}
+
+	private void OnFolderTreeContextMenuRequested(
+		TreeView tree,
+		TreeViewItem item,
+		UiPoint position)
+	{
+		if (item.Tag is string folder)
+		{
+			ShowFolderContextMenu(folder, position);
+		}
+	}
+
+	private void ShowFolderContextMenu(string folder, UiPoint position)
+	{
+		if (IsProjectRootFolder(folder))
+		{
+			return;
+		}
+
+		MenuItem rename = new(
+			"Rename…",
+			() => ShowRenameFolderDialog(folder));
+
+		Context?.ShowPopup(
+			new MenuPopup([rename]),
+			new UiRect(position.X, position.Y, 0f, 0f));
+	}
+
+	private void ShowRenameFolderDialog(string folder)
+	{
+		if (IsProjectRootFolder(folder) ||
+			Context is not UiContext context)
+		{
+			return;
+		}
+
+		int slash = folder.LastIndexOf('/');
+		string oldName = slash < 0 ? folder : folder[(slash + 1)..];
+		UiTheme theme = context.Theme;
+		Panel scrim = CreateAssetDialog(
+			theme,
+			"Rename folder",
+			400f,
+			out StackPanel content);
+
+		content.Add(new Label($"Rename \"{oldName}\".")
+		{
+			Font = theme.Fonts.Body,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		TextField name = new(oldName)
+		{
+			Height = UiLength.Points(28f),
+			Placeholder = "Folder name",
+			MaximumLength = 120,
+			TooltipText = "New folder name"
+		};
+
+		content.Add(name);
+
+		content.Add(new Label(
+			"Scene references and the startup or open scene path follow " +
+			"the renamed folder.")
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.TextDisabled,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		Label error = new(string.Empty)
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.Danger,
+			Wrap = UiTextWrap.Wrap
+		};
+
+		content.Add(error);
+
+		StackPanel buttons = new(UiOrientation.Horizontal)
+		{
+			Spacing = 6f
+		};
+
+		Button rename = new("Rename")
+		{
+			IsPrimary = true,
+			MinHeight = 28f
+		};
+
+		Button cancel = new("Cancel")
+		{
+			MinHeight = 28f
+		};
+
+		cancel.Clicked += _ => context.CloseModal();
+
+		rename.Clicked += _ =>
+		{
+			try
+			{
+				string renamed = _session.RenameFolder(folder, name.Text);
+
+				_folder = RemapFolder(_folder, folder, renamed);
+				_folderSelectionActive = true;
+
+				if (_search.Text.Length > 0)
+				{
+					_search.Text = string.Empty;
+				}
+
+				ClearAssetSelection();
+
+				if (string.Equals(
+					ParentFolder(renamed),
+					_folder,
+					StringComparison.OrdinalIgnoreCase))
+				{
+					_selectedId = renamed;
+					_selectedIsFolder = true;
+				}
+
+				Rebuild(force: true);
+				_revealSelectionPending = true;
+				context.CloseModal();
+				_session.SetStatus(
+					$"Renamed folder {oldName} to {Path.GetFileName(renamed)}");
+			}
+
+			catch (Exception exception)
+			{
+				error.Text = exception.Message;
+			}
+		};
+
+		buttons.Add(rename);
+		buttons.Add(cancel);
+		content.Add(buttons);
+
+		context.ShowModal(scrim);
+		name.Focus();
+		name.SelectAll();
+	}
+
+	private static bool IsProjectRootFolder(string folder)
+	{
+		return string.Equals(folder, "Assets", StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(folder, "Scenes", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static string RemapFolder(
+		string current,
+		string oldFolder,
+		string newFolder)
+	{
+		if (string.Equals(current, oldFolder, StringComparison.OrdinalIgnoreCase))
+		{
+			return newFolder;
+		}
+
+		string oldPrefix = oldFolder + "/";
+
+		return current.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase)
+			? newFolder + current[oldFolder.Length..]
+			: current;
 	}
 
 	private void ShowAssetContextMenu(

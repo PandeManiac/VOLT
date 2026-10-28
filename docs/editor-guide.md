@@ -322,7 +322,11 @@ ratios without discarding the state inside open panels.
   duplicates the selection, and `Delete` removes the whole selection
   through one confirmation. Deleting is refused if any selected file is
   the open or startup scene, since either would leave the editor or
-  project pointing at a missing file.
+  project pointing at a missing file. Right-click a folder tile or
+  folder-tree row for **Rename…**. Renaming moves the directory and
+  rewrites folder-prefixed asset references in every scene, including
+  unknown component data; the startup scene and the open scene keep
+  their new paths. The `Assets` and `Scenes` roots cannot be renamed.
   Scene shortcuts such as Delete and F2 stand down while the browser
   has keyboard focus; the asset shortcuts require the tile or row
   itself to have focus, so the search field and folder tree keep their

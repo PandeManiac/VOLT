@@ -1,4 +1,5 @@
 using System.Numerics;
+using Volt.Editor.Core.Projects;
 using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
 
@@ -196,6 +197,58 @@ public sealed class EditorSessionTests : IDisposable
 		Assert.Equal(
 			string.Empty,
 			afterDeleteCube.GetComponent<MeshRendererData>()!.Mesh);
+	}
+
+	[Fact]
+	public void FolderRename_UpdatesTheOpenScenePathAndReferences()
+	{
+		_session.NewProject(
+			Path.Combine(_root, "FolderRename"),
+			"Folder Rename");
+
+		EditorProject project = _session.Project!;
+
+		project.CreateFolder("Scenes/Levels");
+		project.CreateFolder("Assets/Materials");
+
+		string meshId = "Assets/Materials/cube.mesh";
+
+		File.WriteAllText(project.ResolvePath(meshId), "mesh");
+		project.AssetCatalog.Refresh();
+
+		Assert.NotNull(_session.CreateScene(
+			"Scenes/Levels/Level.volt.scene.json",
+			"Level"));
+
+		SceneDocument level = _session.Scene!;
+		SceneEntity cube = level.CreateEntity("Cube");
+		cube.AddComponent(new MeshRendererData { Mesh = meshId });
+		_session.SaveScene();
+
+		string textures = _session.RenameFolder("Assets/Materials", "Textures");
+
+		Assert.Equal("Assets/Textures", textures);
+		Assert.Equal(
+			"Assets/Textures/cube.mesh",
+			cube.GetComponent<MeshRendererData>()!.Mesh);
+		Assert.False(_session.IsSceneDirty);
+
+		string maps = _session.RenameFolder("Scenes/Levels", "Maps");
+
+		Assert.Equal("Scenes/Maps", maps);
+		Assert.Equal(
+			"Scenes/Maps/Level.volt.scene.json",
+			_session.ScenePath);
+		Assert.NotNull(_session.ScenePath);
+		Assert.True(File.Exists(project.ResolvePath(_session.ScenePath)));
+
+		SceneDocument reloaded = project.LoadScene(_session.ScenePath);
+		SceneEntity reloadedCube = reloaded.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+
+		Assert.Equal(
+			"Assets/Textures/cube.mesh",
+			reloadedCube.GetComponent<MeshRendererData>()!.Mesh);
 	}
 
 	[Fact]

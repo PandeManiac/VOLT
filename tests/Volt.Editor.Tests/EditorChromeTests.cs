@@ -1036,6 +1036,86 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_RenamesAFolderFromItsTileMenu()
+	{
+		EditorProject projectState = _session.Project!;
+
+		projectState.CreateFolder("Assets/Materials");
+
+		const string Renamed = "Assets/Textures";
+
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem assets = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Assets");
+
+		folders.SetSelection([assets]);
+		Paint(0.2);
+
+		IconTileView materials = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Materials");
+
+		UiPoint center = materials.GlobalVisualBounds.Center;
+
+		_context.PointerDown(UiMouseButton.Right, center);
+
+		Assert.IsType<MenuPopup>(_context.ActivePopup);
+
+		_context.KeyDown(UiKey.Down);
+		_context.KeyDown(UiKey.Enter);
+		Paint(0.25);
+
+		TextField name = Assert.IsType<TextField>(_context.FocusedWidget);
+
+		Assert.Equal("Materials", name.Text);
+
+		name.SetSelection(0, name.Text.Length);
+		_context.TextInput("Textures");
+		Paint(0.3);
+
+		Button rename = Descendants(_context.Modal!)
+			.OfType<Button>()
+			.Single(button => button.Text == "Rename");
+
+		Click(rename);
+		Paint(0.35);
+
+		Assert.Null(_context.Modal);
+		Assert.False(Directory.Exists(
+			projectState.ResolvePath("Assets/Materials")));
+		Assert.True(Directory.Exists(
+			projectState.ResolvePath(Renamed)));
+		Assert.Contains(Renamed, projectState.AssetCatalog.Folders);
+
+		IconTileView textures = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Textures");
+
+		Assert.True(textures.IsSelected);
+		Assert.Equal(
+			Renamed,
+			folders.Roots[0]
+				.Children
+				.Single(item => item.Text == "Assets")
+				.Children
+				.Single(item => item.Text == "Textures")
+				.Tag);
+	}
+
+	[Fact]
 	public void ProjectBrowser_ReturnsToTheNewProjectsRoot()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);
