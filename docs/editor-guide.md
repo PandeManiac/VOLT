@@ -291,7 +291,8 @@ Keyboard shortcuts: `Ctrl+S` save, `Ctrl+Z` undo, `Ctrl+Y` or
 `Ctrl+Shift+Z` redo, `Ctrl+D` duplicate selection, `Delete` delete
 selection, `Ctrl+A` select all, `Ctrl+Shift+A` select none, `Ctrl+I`
 invert selection. While a text field has focus, `Ctrl+Z` and
-`Ctrl+Y` undo and redo that field's text instead of the scene.
+`Ctrl+Y` undo and redo that field's text instead of the scene, and
+`Ctrl+S` applies the field before writing the scene.
 
 Saving writes a temporary file and moves it into place, so a failed
 save cannot truncate the previous scene. Unknown components are kept

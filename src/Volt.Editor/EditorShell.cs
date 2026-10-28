@@ -509,7 +509,7 @@ public sealed class EditorShell : Panel
 		AddCommand(
 			file,
 			"Save Scene",
-			() => Guard("Save scene", _session.SaveScene),
+			() => Guard("Save scene", SaveSceneWithPendingEdits),
 			() => _session.Scene is not null,
 			"Ctrl+S");
 
@@ -1192,7 +1192,7 @@ public sealed class EditorShell : Panel
 		AddShortcut(new UiShortcut(
 			UiKey.S,
 			UiKeyModifiers.Control,
-			() => Guard("Save scene", _session.SaveScene),
+			() => Guard("Save scene", SaveSceneWithPendingEdits),
 			() => _session.Scene is not null));
 
 		AddShortcut(new UiShortcut(
@@ -1310,6 +1310,24 @@ public sealed class EditorShell : Panel
 	private bool CanUseEntityShortcut()
 	{
 		return Context?.FocusedWidget is not TextField;
+	}
+
+	/// <summary>
+	/// Applies the focused field before writing the scene.
+	/// </summary>
+	/// <remarks>
+	/// A text edit is committed on focus loss or Enter. Saving from the
+	/// keyboard must not bypass that step, or the file would hold the
+	/// previous name while the still-focused field keeps the new one.
+	/// </remarks>
+	private void SaveSceneWithPendingEdits()
+	{
+		if (Context?.FocusedWidget is TextField field)
+		{
+			field.Commit();
+		}
+
+		_session.SaveScene();
 	}
 
 	/// <summary>

@@ -467,6 +467,19 @@ public class TextField : Widget
 		}
 	}
 
+	/// <summary>
+	/// Applies the field's current text without moving focus.
+	/// </summary>
+	public void Commit()
+	{
+		if (!HasFocus)
+		{
+			return;
+		}
+
+		CommitEditing();
+	}
+
 	protected void CommitEditing()
 	{
 		CommitText();
