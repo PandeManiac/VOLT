@@ -49,6 +49,20 @@ public sealed class EditorSettingsTests
 		Assert.Equal(rate, settings.Normalize().TargetFrameRate);
 	}
 
+	[Theory]
+	[InlineData(5, 10)]
+	[InlineData(-1, 10)]
+	[InlineData(90, 90)]
+	[InlineData(999, 480)]
+	public void Clamp_BringsTypedRatesIntoTheSupportedRange(
+		int typed,
+		int expected)
+	{
+		Assert.Equal(
+			expected,
+			EditorSettings.ClampTargetFrameRate(typed));
+	}
+
 	[Fact]
 	public void Serialize_RoundTripsThroughDeserialize()
 	{

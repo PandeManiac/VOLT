@@ -62,6 +62,22 @@ public sealed class EditorSettings
 	}
 
 	/// <summary>
+	/// Brings a typed frame rate into the supported range.
+	/// </summary>
+	/// <remarks>
+	/// A preference field clamps rather than falls back: typing 5 fps
+	/// should give the slowest supported rate, not silently reset the
+	/// setting to the default.
+	/// </remarks>
+	public static int ClampTargetFrameRate(int frameRate)
+	{
+		return Math.Clamp(
+			frameRate,
+			MinimumTargetFrameRate,
+			MaximumTargetFrameRate);
+	}
+
+	/// <summary>
 	/// Returns a copy whose values are all representable, falling back
 	/// to defaults rather than trusting a file.
 	/// </summary>

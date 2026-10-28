@@ -38,8 +38,6 @@ public sealed class EditorShell : Panel
 {
 	private static readonly float[] s_uiScales = [0.75f, 1f, 1.25f, 1.5f, 2f];
 
-	private static readonly int[] s_frameRates = [30, 60, 120, 144];
-
 	private readonly EditorSession _session;
 	private readonly IViewportRenderer? _viewportRenderer;
 	private readonly List<IFrameTick> _frameTicks = [];
@@ -1464,7 +1462,7 @@ public sealed class EditorShell : Panel
 		Panel card = new()
 		{
 			Width = UiLength.Points(380f),
-			Height = UiLength.Points(330f),
+			Height = UiLength.Points(370f),
 			HorizontalAlignment = UiAlignment.Center,
 			VerticalAlignment = UiAlignment.Center,
 			DrawBackground = true,
@@ -1524,32 +1522,53 @@ public sealed class EditorShell : Panel
 			TextColor = theme.Palette.TextMuted
 		});
 
-		StackPanel rates = new(UiOrientation.Horizontal)
+		NumericField rateField = new(_session.TargetFrameRate)
+		{
+			Width = UiLength.Points(96f),
+			MinWidth = 80f,
+			Height = UiLength.Points(28f),
+			Format = "0",
+			Minimum = EditorSettings.MinimumTargetFrameRate,
+			Maximum = EditorSettings.MaximumTargetFrameRate,
+			Step = 1f,
+			TooltipText = "Frame rate the profiler budgets against"
+		};
+
+		Button applyRate = new("Apply")
+		{
+			MinHeight = 28f
+		};
+
+		applyRate.Clicked += _ =>
+		{
+			int rate = EditorSettings.ClampTargetFrameRate(
+				(int)MathF.Round(rateField.Value));
+
+			context.CloseModal();
+			_session.TargetFrameRate = rate;
+			_session.SetStatus($"Target frame rate {rate} fps");
+		};
+
+		StackPanel rateRow = new(UiOrientation.Horizontal)
 		{
 			Spacing = 6f
 		};
 
-		foreach (int rate in s_frameRates)
+		rateRow.Add(rateField);
+		rateRow.Add(applyRate);
+
+		content.Add(rateRow);
+
+		content.Add(new Label(
+			$"The profiler budgets against this rate " +
+			$"({EditorSettings.MinimumTargetFrameRate}\u2013" +
+			$"{EditorSettings.MaximumTargetFrameRate} fps). The choice " +
+			"is saved with the workspace.")
 		{
-			int captured = rate;
-
-			Button button = new($"{captured} fps")
-			{
-				IsSelected = _session.TargetFrameRate == captured,
-				MinHeight = 28f
-			};
-
-			button.Clicked += _ =>
-			{
-				context.CloseModal();
-				_session.TargetFrameRate = captured;
-				_session.SetStatus($"Target frame rate {captured} fps");
-			};
-
-			rates.Add(button);
-		}
-
-		content.Add(rates);
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.TextDisabled,
+			Wrap = UiTextWrap.Wrap
+		});
 
 		content.Add(new Label(
 			"Scaling rebuilds panel widgets so text is rasterized at " +
