@@ -570,8 +570,15 @@ internal static class ViewportMath
 					? matrix
 					: Matrix4x4.Identity;
 
+			// Authored forward is the direction the light travels.
+			// The renderer wants the direction from the surface toward
+			// the light, which is the opposite vector.
+			Vector3 forward = Vector3.TransformNormal(
+				Vector3.UnitZ,
+				world);
+
 			return new ViewportLight(
-				Vector3.TransformNormal(Vector3.UnitZ, world),
+				-forward,
 				light.Color,
 				light.Intensity);
 		}

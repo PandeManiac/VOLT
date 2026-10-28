@@ -85,7 +85,7 @@ public sealed class ViewportLightingTests
 		ViewportLight resolved = ViewportMath.ResolveLight(scene);
 
 		Vector3 expected = Vector3.Normalize(
-			Vector3.Transform(Vector3.UnitZ, light.Transform.Rotation));
+			-Vector3.Transform(Vector3.UnitZ, light.Transform.Rotation));
 
 		Assert.Equal(expected.X, resolved.UnitDirection.X, 4);
 		Assert.Equal(expected.Y, resolved.UnitDirection.Y, 4);

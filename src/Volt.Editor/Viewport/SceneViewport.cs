@@ -846,6 +846,8 @@ internal sealed class SceneViewport : Widget, IFrameTick
 			MeshRendererData? renderer =
 				entity.GetComponent<MeshRendererData>();
 
+			LightData? light = entity.GetComponent<LightData>();
+
 			EditorMeshInfo? mesh = renderer is not null && renderer.Visible
 				? EditorMeshLibrary.Resolve(renderer.Mesh)
 				: null;
@@ -856,7 +858,9 @@ internal sealed class SceneViewport : Widget, IFrameTick
 
 			Vector3 halfExtent = mesh is EditorMeshInfo bounds
 				? bounds.HalfExtent
-				: new Vector3(0.25f);
+				: light is not null
+					? new Vector3(0.5f)
+					: new Vector3(0.25f);
 
 			Vector3 worldCenter = Vector3.Transform(center, world);
 
@@ -1830,11 +1834,13 @@ internal sealed class SceneViewport : Widget, IFrameTick
 			MeshRendererData? renderer =
 				entity.GetComponent<MeshRendererData>();
 
+			LightData? light = entity.GetComponent<LightData>();
+
 			bool renderable = renderer is not null &&
 				renderer.Visible &&
 				EditorMeshLibrary.Resolve(renderer.Mesh) is not null;
 
-			if (selected)
+			if (selected && light is null)
 			{
 				ViewportMath.DrawWireBox(
 					drawList,
@@ -1847,11 +1853,12 @@ internal sealed class SceneViewport : Widget, IFrameTick
 					1.2f);
 			}
 
-			else if (!renderable)
+			else if (!renderable && light is null)
 			{
 				// Objects the render target cannot show, such as a
 				// camera or an empty, still get a marker and a label so
-				// they can be seen and picked.
+				// they can be seen and picked. Lights use their own
+				// sun marker instead of a warning box.
 				ViewportMath.DrawWireBox(
 					drawList,
 					target.World,
@@ -1863,20 +1870,196 @@ internal sealed class SceneViewport : Widget, IFrameTick
 					1f);
 			}
 
+			if (light is not null)
+			{
+				DrawLightMarker(
+					drawList,
+					target,
+					light,
+					viewProjection,
+					bounds,
+					theme,
+					selected);
+			}
+
 			if (selected || !renderable)
 			{
+				string label = light is { Enabled: false }
+					? $"{entity.Name} (off)"
+					: entity.Name;
+
 				DrawEntityLabel(
 					drawList,
 					viewProjection,
 					bounds,
 					target,
-					entity.Name,
+					label,
 					selected
 						? theme.Palette.Accent
-						: theme.Palette.TextMuted,
+						: light is not null
+							? LightMarkerColor(light, theme)
+							: theme.Palette.TextMuted,
 					theme);
 			}
 		}
+	}
+
+	/// <summary>
+	/// Draws a light's viewport marker: a sun at the authored position
+	/// and an arrow along the beam it casts.
+	/// </summary>
+	/// <remarks>
+	/// The arrow is screen-scaled rather than world-scaled so it stays a
+	/// readable direction indicator at any distance. A disabled light is
+	/// muted and crossed out instead of disappearing, which keeps it
+	/// findable while it is switched off.
+	/// </remarks>
+	private void DrawLightMarker(
+		UiDrawList drawList,
+		PickTarget target,
+		LightData light,
+		in Matrix4x4 viewProjection,
+		UiRect bounds,
+		UiTheme theme,
+		bool selected)
+	{
+		Vector3 origin = Vector3.Transform(Vector3.Zero, target.World);
+
+		if (!ViewportMath.TryProject(
+			viewProjection,
+			origin,
+			bounds,
+			out UiPoint center))
+		{
+			return;
+		}
+
+		UiColor color = selected && light.Enabled
+			? theme.Palette.Accent
+			: LightMarkerColor(light, theme);
+
+		Vector3 beam = Vector3.TransformNormal(Vector3.UnitZ, target.World);
+
+		if (beam.LengthSquared() > 1e-8f)
+		{
+			beam = Vector3.Normalize(beam);
+
+			float distance = Vector3.Distance(_camera.Position, origin);
+
+			float worldPerPixel = ViewportMath.WorldPerPixel(
+				_camera.FieldOfView,
+				bounds.Height,
+				distance);
+
+			float length = MathF.Max(0.05f, worldPerPixel * 46f);
+
+			if (ViewportMath.TryProject(
+				viewProjection,
+				origin + (beam * length),
+				bounds,
+				out UiPoint tip))
+			{
+				drawList.AddLine(
+					center,
+					tip,
+					selected ? 2.4f : 1.8f,
+					color.ScaleAlpha(0.9f));
+
+				DrawArrowHead(drawList, center, tip, color, 7f);
+			}
+		}
+
+		const float IconSize = 16f;
+
+		UiIconPainter.Draw(
+			drawList,
+			UiIcon.Light,
+			new UiRect(
+				center.X - (IconSize * 0.5f),
+				center.Y - (IconSize * 0.5f),
+				IconSize,
+				IconSize),
+			color,
+			selected ? 1.8f : 1.4f);
+
+		if (!light.Enabled)
+		{
+			drawList.AddLine(
+				new UiPoint(center.X - 7f, center.Y + 7f),
+				new UiPoint(center.X + 7f, center.Y - 7f),
+				1.5f,
+				theme.Palette.TextDisabled);
+		}
+	}
+
+	private static UiColor LightMarkerColor(LightData light, UiTheme theme)
+	{
+		if (!light.Enabled ||
+			!float.IsFinite(light.Intensity) ||
+			light.Intensity <= 0.01f)
+		{
+			return theme.Palette.TextDisabled;
+		}
+
+		return new UiColor(
+			MarkerChannel(light.Color.X),
+			MarkerChannel(light.Color.Y),
+			MarkerChannel(light.Color.Z));
+	}
+
+	private static byte MarkerChannel(float value)
+	{
+		// Keep a dark light's marker visible against the viewport
+		// background without changing the light it represents.
+		float clamped = float.IsFinite(value)
+			? Math.Clamp(value, 0.35f, 1f)
+			: 1f;
+
+		return (byte)Math.Clamp(
+			(int)MathF.Round(clamped * 255f),
+			0,
+			255);
+	}
+
+	private static void DrawArrowHead(
+		UiDrawList drawList,
+		UiPoint start,
+		UiPoint end,
+		UiColor color,
+		float size)
+	{
+		float dx = end.X - start.X;
+		float dy = end.Y - start.Y;
+		float length = MathF.Sqrt((dx * dx) + (dy * dy));
+
+		if (length < 1e-3f)
+		{
+			return;
+		}
+
+		float directionX = dx / length;
+		float directionY = dy / length;
+		float perpendicularX = -directionY;
+		float perpendicularY = directionX;
+		float backX = end.X - (directionX * size);
+		float backY = end.Y - (directionY * size);
+		float halfWidth = size * 0.55f;
+
+		drawList.AddLine(
+			end,
+			new UiPoint(
+				backX + (perpendicularX * halfWidth),
+				backY + (perpendicularY * halfWidth)),
+			1.5f,
+			color);
+
+		drawList.AddLine(
+			end,
+			new UiPoint(
+				backX - (perpendicularX * halfWidth),
+				backY - (perpendicularY * halfWidth)),
+			1.5f,
+			color);
 	}
 
 	/// <summary>

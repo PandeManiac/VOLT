@@ -230,9 +230,11 @@ ratios without discarding the state inside open panels.
 - **Directional lights are authored objects.** **GameObject → Create
   Light** adds one as a selected, undoable object. A light shines along
   its world +Z axis, so rotate it to aim it; **Color** and
-  **Intensity** are inspector properties. A scene uses the first
-  enabled directional light in hierarchy order, and falls back to the
-  editor's default key light when it has none.
+  **Intensity** are inspector properties. The Scene view draws a sun
+  marker at the light's position and a short arrow along its beam, so
+  it stays findable and aimable while it is off or unselected. A scene
+  uses the first enabled directional light in hierarchy order, and
+  falls back to the editor's default key light when it has none.
 - **Selection works the way an editor's does.** A click takes one
   object, shift-click adds another, and dragging on empty space with the
   left button draws a box that takes every object its bounds touch

@@ -46,7 +46,7 @@ public sealed class LightData : AuthoredComponent
 	/// baked key light.
 	/// </summary>
 	public static Vector3 DefaultEulerAngles =>
-		new(-58.2f, 41.2f, 0f);
+		new(58.2f, -138.8f, 0f);
 
 	public override string TypeId => ComponentTypeId;
 
