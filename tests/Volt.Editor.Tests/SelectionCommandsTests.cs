@@ -95,6 +95,21 @@ public sealed class SelectionCommandsTests : IDisposable
 	}
 
 	[Fact]
+	public void SelectMany_CanKeepTheCurrentSelectionWhenChangingTheActiveObject()
+	{
+		SceneDocument scene = _session.Scene!;
+		Guid[] all = [.. scene.Entities.Select(entity => entity.Id)];
+
+		Assert.True(all.Length > 1, "The starter scene has more than one object.");
+
+		_session.SelectMany(all, all[0]);
+		_session.SelectMany(_session.Selection, all[^1]);
+
+		Assert.Equal(all.Length, _session.Selection.Count);
+		Assert.Equal(all[^1], _session.ActiveEntityId);
+	}
+
+	[Fact]
 	public void SelectionShortcuts_WorkThroughTheShell()
 	{
 		EditorShell shell = new(_session);

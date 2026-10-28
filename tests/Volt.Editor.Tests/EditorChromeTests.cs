@@ -677,6 +677,90 @@ public sealed class EditorChromeTests : IDisposable
 		Assert.False(types.IsEnabled);
 	}
 
+	[Fact]
+	public void F2FocusesTheInspectorNameAndRenamesTheActiveObject()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneDocument scene = _session.Scene!;
+		SceneEntity cube = scene.Entities.First(
+			entity => entity.GetComponent<MeshRendererData>() is not null);
+
+		_session.Select(cube.Id);
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		Assert.True(_context.KeyDown(UiKey.F2));
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.HasFocus);
+
+		Assert.Same(name, _context.FocusedWidget);
+		Assert.True(name.HasSelection);
+		Assert.Equal(cube.Name, name.Text);
+
+		_context.TextInput("Renamed");
+		_context.KeyDown(UiKey.Enter);
+
+		Assert.Equal("Renamed", cube.Name);
+	}
+
+	[Fact]
+	public void HierarchyContextMenu_RenameFocusesTheInspectorName()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		HierarchyPanel hierarchy = Descendants(shell)
+			.OfType<HierarchyPanel>()
+			.Single();
+
+		TreeView tree = Descendants(hierarchy)
+			.OfType<TreeView>()
+			.Single();
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		UiRect treeBounds = tree.GlobalContentBounds;
+		UiPoint row = new(treeBounds.X + 50f, treeBounds.Y + 5f);
+
+		_context.PointerDown(UiMouseButton.Right, row);
+
+		MenuPopup popup = Assert.IsType<MenuPopup>(_context.ActivePopup);
+
+		_context.BeginFrame(
+			0.2,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		UiPoint rename = new(
+			popup.GlobalVisualBounds.X + 20f,
+			popup.GlobalVisualBounds.Y + 10f);
+
+		_context.PointerDown(UiMouseButton.Left, rename);
+		_context.PointerUp(UiMouseButton.Left, rename);
+
+		Assert.Null(_context.ActivePopup);
+
+		TextField name = Assert.IsType<TextField>(_context.FocusedWidget);
+
+		Assert.True(name.HasSelection);
+	}
+
 	private EditorShell BuildShell(float width, float height)
 	{
 		EditorShell shell = new(_session);

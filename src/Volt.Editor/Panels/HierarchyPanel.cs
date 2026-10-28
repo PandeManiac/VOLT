@@ -37,6 +37,11 @@ public sealed class HierarchyPanel : Panel
 	private bool _updating;
 	private bool _disposed;
 
+	/// <summary>
+	/// Raised when the context menu asks to rename the active row.
+	/// </summary>
+	public event Action? RenameRequested;
+
 	public HierarchyPanel(EditorSession session)
 	{
 		ArgumentNullException.ThrowIfNull(session);
@@ -494,6 +499,14 @@ public sealed class HierarchyPanel : Panel
 			_session.Select(id);
 		}
 
+		MenuItem rename = new("Rename", () =>
+		{
+			// Keep a multi-selection, but make the row the command
+			// came from the object the inspector renames.
+			_session.SelectMany(_session.Selection, id);
+			RenameRequested?.Invoke();
+		});
+
 		MenuItem duplicate = new("Duplicate", Duplicate);
 		MenuItem delete = new("Delete", Delete);
 		MenuItem child = new(
@@ -502,6 +515,7 @@ public sealed class HierarchyPanel : Panel
 
 		MenuPopup menu = new(
 		[
+			rename,
 			duplicate,
 			delete,
 			MenuItem.Separator,

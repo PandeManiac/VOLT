@@ -443,9 +443,14 @@ public sealed class EditorSession : IDisposable
 	{
 		ArgumentNullException.ThrowIfNull(entities);
 
+		// A caller may pass the current selection as the new one, for
+		// example to change only the active object. Snapshot before
+		// clearing, or that caller would supply an empty sequence.
+		List<Guid> requested = [.. entities];
+
 		_selection.Clear();
 
-		foreach (Guid id in entities)
+		foreach (Guid id in requested)
 		{
 			if (Scene?.Find(id) is not null)
 			{

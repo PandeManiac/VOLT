@@ -214,7 +214,9 @@ ratios without discarding the state inside open panels.
   named uniquely and left selected, and the whole operation is one undo
   step (redo recreates the same copies, ids included). Acting on a row
   that already belongs to a selection keeps that selection, so its
-  commands reach all of it.
+  commands reach all of it. **Rename** in the row's context menu, or
+  `F2`, focuses the inspector's name field with the current name
+  selected; Enter commits the rename and Escape restores it.
 
   Drag a row onto another row to re-parent it, or onto the empty space
   below the rows to move it back to the scene root. The row that will
@@ -297,8 +299,8 @@ still selected, so the inspector does not jump to an unrelated object.
 
 Keyboard shortcuts: `Ctrl+S` save, `Ctrl+Z` undo, `Ctrl+Y` or
 `Ctrl+Shift+Z` redo, `Ctrl+D` duplicate selection, `Delete` delete
-selection, `Ctrl+A` select all, `Ctrl+Shift+A` select none, `Ctrl+I`
-invert selection. While a text field has focus, `Ctrl+Z` and
+selection, `F2` rename the active object, `Ctrl+A` select all,
+`Ctrl+Shift+A` select none, `Ctrl+I` invert selection. While a text field has focus, `Ctrl+Z` and
 `Ctrl+Y` undo and redo that field's text instead of the scene, and
 `Ctrl+S` applies the field before writing the scene. Closing the
 window applies it before deciding whether to prompt for unsaved work.

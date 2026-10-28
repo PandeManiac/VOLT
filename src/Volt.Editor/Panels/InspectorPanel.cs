@@ -611,6 +611,28 @@ public sealed class InspectorPanel : Panel
 			255);
 	}
 
+	/// <summary>
+	/// Focuses and selects the active object's name for renaming.
+	/// </summary>
+	/// <returns>
+	/// False when the inspector is hidden or no object is selected.
+	/// </returns>
+	internal bool FocusNameField()
+	{
+		if (!IsVisible || !_name.IsVisible || _session.ActiveEntity is null)
+		{
+			return false;
+		}
+
+		if (!_name.Focus())
+		{
+			return false;
+		}
+
+		_name.SelectAll();
+		return true;
+	}
+
 	private void OnNameCommitted(TextField field)
 	{
 		if (_updating || _session.ActiveEntity is not SceneEntity entity)

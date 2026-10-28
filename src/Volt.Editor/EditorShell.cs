@@ -79,6 +79,7 @@ public sealed class EditorShell : Panel
 	private double _frameSeconds;
 	private int _frameCount;
 	private float _fps;
+	private bool _pendingRenameFocus;
 	private bool _shortcutsInstalled;
 	private bool _disposed;
 
@@ -232,6 +233,7 @@ public sealed class EditorShell : Panel
 
 		_session.Update(deltaSeconds);
 		_session.RecordFrame(deltaSeconds);
+		TryFocusPendingRename();
 
 		for (int index = _frameTicks.Count - 1;
 			index >= 0;
@@ -479,7 +481,7 @@ public sealed class EditorShell : Panel
 	{
 		Widget? panel = id switch
 		{
-			"hierarchy" => new HierarchyPanel(_session),
+			"hierarchy" => CreateHierarchyPanel(),
 			"scene" => new SceneViewport(_session, _viewportRenderer),
 			"game" => new GameViewport(_session, _viewportRenderer),
 			"inspector" => new InspectorPanel(_session),
@@ -497,6 +499,76 @@ public sealed class EditorShell : Panel
 		}
 
 		return panel;
+	}
+
+	private Widget CreateHierarchyPanel()
+	{
+		HierarchyPanel hierarchy = new(_session);
+
+		hierarchy.RenameRequested += BeginRename;
+		return hierarchy;
+	}
+
+	/// <summary>
+	/// Brings the inspector's name field forward for a rename, opening
+	/// the panel when it is closed.
+	/// </summary>
+	/// <remarks>
+	/// A dock rebuild is deferred to the next layout pass, so a panel
+	/// that has just been reopened cannot focus its field immediately.
+	/// <see cref="TryFocusPendingRename"/> finishes the request once
+	/// the field exists.
+	/// </remarks>
+	private void BeginRename()
+	{
+		if (_session.ActiveEntity is not SceneEntity entity)
+		{
+			return;
+		}
+
+		_layout.OpenPanel("inspector");
+		UpdateWindowMenuChecks();
+
+		_pendingRenameFocus = !TryFocusRenameField();
+		_session.SetStatus($"Renaming {entity.Name}");
+	}
+
+	private void TryFocusPendingRename()
+	{
+		if (!_pendingRenameFocus)
+		{
+			return;
+		}
+
+		if (TryFocusRenameField() || _session.ActiveEntity is null)
+		{
+			_pendingRenameFocus = false;
+		}
+	}
+
+	private bool TryFocusRenameField()
+	{
+		return _dock is not null &&
+			FindDescendant<InspectorPanel>(_dock)?.FocusNameField() == true;
+	}
+
+	private static T? FindDescendant<T>(Widget root)
+		where T : Widget
+	{
+		foreach (Widget child in root.Children)
+		{
+			if (child is T match)
+			{
+				return match;
+			}
+
+			if (FindDescendant<T>(child) is T nested)
+			{
+				return nested;
+			}
+		}
+
+		return null;
 	}
 
 	private MenuBar BuildMenuBar()
@@ -756,7 +828,7 @@ public sealed class EditorShell : Panel
 			"Keyboard Shortcuts",
 			() => _session.Log(
 				"Q/W/E/R select, Ctrl+S save, Ctrl+Z undo, Ctrl+Y redo, " +
-				"Ctrl+D duplicate, Del delete. In a viewport: hold the " +
+				"Ctrl+D duplicate, Del delete, F2 rename. In a viewport: hold the " +
 				"right mouse button to look, WASD/E/Q to fly, Shift to " +			" sprint, middle drag to pan, wheel to dolly, F to frame.")));
 
 		RefreshCommandStates();
@@ -1280,6 +1352,12 @@ public sealed class EditorShell : Panel
 			UiKeyModifiers.Control,
 			() => Guard("Invert selection", () => _session.InvertSelection()),
 			() => _session.Scene is not null && CanUseEntityShortcut()));
+
+		AddShortcut(new UiShortcut(
+			UiKey.F2,
+			UiKeyModifiers.None,
+			() => Guard("Rename", BeginRename),
+			() => _session.ActiveEntity is not null && CanUseEntityShortcut()));
 
 		// Tool hotkeys follow the familiar editor layout. They stand
 		// down while a viewport is navigating, because the same letters
