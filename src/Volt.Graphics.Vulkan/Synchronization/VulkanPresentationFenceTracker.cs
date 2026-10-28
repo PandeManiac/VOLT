@@ -40,6 +40,20 @@ public sealed unsafe class VulkanPresentationFenceTracker : IDisposable
 
 	private bool _failed;
 	private bool _disposed;
+	private Exception? _failure;
+	private int _unresolvedImage = -1;
+
+	/// <summary>
+	/// Gets the exception that left presentation completion unresolved,
+	/// or null when every presentation call returned normally.
+	/// </summary>
+	public Exception? Failure => _failure;
+
+	/// <summary>
+	/// Gets why the native fences were retained instead of destroyed,
+	/// or null when they were released.
+	/// </summary>
+	public string? UnsafeRetirementReason { get; private set; }
 
 	/// <summary>
 	/// Gets the number of tracked swapchain images.
@@ -246,9 +260,15 @@ public sealed unsafe class VulkanPresentationFenceTracker : IDisposable
 			return result;
 		}
 
-		catch
+		catch (Exception exception)
 		{
+			// The presentation may still have been queued before the
+			// error was reported, so this image's completion is unknown
+			// until its fence signals.
 			_failed = true;
+			_failure ??= exception;
+			_unresolvedImage = index;
+
 			throw;
 		}
 	}
@@ -286,20 +306,32 @@ public sealed unsafe class VulkanPresentationFenceTracker : IDisposable
 	}
 
 	/// <summary>
-	/// Releases all presentation fences after completion.
+	/// Releases the presentation fences when every tracked presentation
+	/// has completed.
 	/// </summary>
+	/// <param name="reason">
+	/// Why the fences were retained, or null when they were destroyed.
+	/// </param>
+	/// <returns>True when the fences were destroyed.</returns>
 	/// <remarks>
-	/// If completion cannot be established, disposal throws
-	/// and the native fence handles are retained.
+	/// A fence must not be destroyed while the presentation engine can
+	/// still signal it, so a presentation whose completion cannot be
+	/// proven keeps its fence. The device frees it when the device is
+	/// destroyed, which is why retaining is safer than guessing.
 	/// </remarks>
-	public void Dispose()
+	public bool TryRetire(out string? reason)
 	{
 		if (_disposed)
 		{
-			return;
+			reason = null;
+			return true;
 		}
 
-		WaitForAll();
+		if (!TryWaitForCompletions(out reason))
+		{
+			UnsafeRetirementReason = reason;
+			return false;
+		}
 
 		DestroyFences(
 			_api,
@@ -307,6 +339,63 @@ public sealed unsafe class VulkanPresentationFenceTracker : IDisposable
 			_fences);
 
 		_disposed = true;
+
+		return true;
+	}
+
+	/// <summary>
+	/// Releases all presentation fences after completion.
+	/// </summary>
+	/// <remarks>
+	/// Disposal never throws: an exception here would replace the frame
+	/// failure that made cleanup unsafe in the first place. When a
+	/// presentation cannot be proven complete, the native fences are
+	/// retained and <see cref="UnsafeRetirementReason"/> explains why.
+	/// </remarks>
+	public void Dispose()
+	{
+		_ = TryRetire(out _);
+	}
+
+	private bool TryWaitForCompletions(out string? reason)
+	{
+		reason = null;
+
+		for (int index = 0;
+			 index < _pendingPresentations.Length;
+			 index++)
+		{
+			bool pending = _pendingPresentations[index];
+
+			// A failed present may have been queued without being
+			// recorded as pending, so its fence is waited on as well.
+			if (!pending && index != _unresolvedImage)
+			{
+				continue;
+			}
+
+			try
+			{
+				VulkanQueueSubmission.WaitForFence(
+					_instance,
+					_device,
+					_fences[index],
+					DefaultFenceTimeoutNanoseconds);
+
+				_pendingPresentations[index] = false;
+			}
+
+			catch (Exception exception)
+			{
+				reason =
+					$"presentation of swapchain image {index} did not " +
+					$"complete ({exception.Message})";
+
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	/// <summary>

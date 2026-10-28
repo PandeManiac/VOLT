@@ -50,6 +50,18 @@ public sealed class VulkanUiHostOptions
 	public string? FragmentShaderPath { get; init; }
 
 	/// <summary>
+	/// Gets an optional sink for diagnostics reported while the host
+	/// releases native resources.
+	/// </summary>
+	/// <remarks>
+	/// A failure that makes native cleanup unsafe is reported here
+	/// instead of being thrown from disposal, because a second exception
+	/// would replace the frame failure that caused it. Applications that
+	/// leave this unset can read <c>VulkanUiHost.Diagnostics</c>.
+	/// </remarks>
+	public Action<string>? DiagnosticSink { get; init; }
+
+	/// <summary>
 	/// Gets whether the presentation loop is driven by a fixed frame
 	/// interval instead of running as fast as the display allows.
 	/// </summary>

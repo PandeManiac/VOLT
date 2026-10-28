@@ -16,6 +16,18 @@ public readonly record struct VulkanSwapchainFrameResult(
 	bool RequiresRecreation);
 
 /// <summary>
+/// Describes how far a frame that could not be completed progressed.
+/// </summary>
+public enum VulkanFrameFailurePhase
+{
+	None = 0,
+	ImageAcquired = 1,
+	Recorded = 2,
+	Submitted = 3,
+	Presented = 4
+}
+
+/// <summary>
 /// Coordinates frame-slot reuse, swapchain image acquisition,
 /// graphics submission, and presentation for one swapchain generation.
 /// </summary>
@@ -53,6 +65,25 @@ public sealed class VulkanSwapchainFrameScheduler : IDisposable
 	private int _frameIndex;
 	private bool _failed;
 	private bool _disposed;
+	private Exception? _failure;
+	private VulkanFrameFailurePhase _failurePhase;
+
+	/// <summary>
+	/// Gets the exception that abandoned the current frame, or null when
+	/// the last frame completed.
+	/// </summary>
+	public Exception? Failure => _failure;
+
+	/// <summary>
+	/// Gets how far the abandoned frame progressed before it failed.
+	/// </summary>
+	public VulkanFrameFailurePhase FailurePhase => _failurePhase;
+
+	/// <summary>
+	/// Gets why the owned synchronization objects were retained instead
+	/// of destroyed, or null when they were released.
+	/// </summary>
+	public string? UnsafeRetirementReason { get; private set; }
 
 	public int FramesInFlight
 	{
@@ -173,6 +204,7 @@ public sealed class VulkanSwapchainFrameScheduler : IDisposable
 			// From this point, failure cannot simply return to the
 			// normal frame loop: a swapchain image is now acquired.
 			_failed = true;
+			_failurePhase = VulkanFrameFailurePhase.ImageAcquired;
 
 			int imageIndex = checked((int)(acquisition.ImageIndex
 				?? throw new InvalidOperationException(
@@ -214,6 +246,8 @@ public sealed class VulkanSwapchainFrameScheduler : IDisposable
 			record(commandBuffer, imageIndex);
 			VulkanCommandRecording.End(_instance, commandBuffer);
 
+			_failurePhase = VulkanFrameFailurePhase.Recorded;
+
 			Semaphore renderFinished =
 				_synchronization.GetRenderFinishedSemaphore(imageIndex);
 
@@ -232,6 +266,8 @@ public sealed class VulkanSwapchainFrameScheduler : IDisposable
 				frameFence);
 
 			_imageInFlightFences[imageIndex] = frameFence;
+
+			_failurePhase = VulkanFrameFailurePhase.Submitted;
 
 			VulkanSwapchainPresentationResult presentation;
 
@@ -255,6 +291,7 @@ public sealed class VulkanSwapchainFrameScheduler : IDisposable
 				(_frameIndex + 1) % _synchronization.FramesInFlight;
 
 			_failed = false;
+			_failurePhase = VulkanFrameFailurePhase.None;
 
 			return new VulkanSwapchainFrameResult(
 				true,
@@ -269,11 +306,14 @@ public sealed class VulkanSwapchainFrameScheduler : IDisposable
 			// outstanding, but no new image ownership was taken.
 			throw;
 		}
-		catch
+		catch (Exception exception)
 		{
 			// Any other failure can leave ownership or native
-			// synchronization state unresolved.
+			// synchronization state unresolved. The first exception is
+			// what the caller has to act on, so it is preserved.
 			_failed = true;
+			_failure ??= exception;
+
 			throw;
 		}
 	}
@@ -296,17 +336,34 @@ public sealed class VulkanSwapchainFrameScheduler : IDisposable
 			return;
 		}
 
-		if (_failed)
+		_disposed = true;
+
+		string? unresolved = null;
+
+		if (_failed && !TryQuiesce(out string? quiesceFailure))
 		{
-			throw new InvalidOperationException(
-				"Cannot safely retire a swapchain generation " +
-				"after a failed or incomplete frame.");
+			unresolved = quiesceFailure;
 		}
 
-		// On failure, do not free semaphores still referenced by present.
-		_presentationFences?.Dispose();
+		if (unresolved is null &&
+			!RetirePresentation(out string? presentationFailure))
+		{
+			unresolved = presentationFailure;
+		}
+
+		if (unresolved is not null)
+		{
+			// Destroying a semaphore or fence that a pending frame or
+			// presentation may still reference is undefined behaviour.
+			UnsafeRetirementReason = DescribeUnsafeRetirement(
+				_failurePhase,
+				_failure,
+				unresolved);
+
+			return;
+		}
+
 		_synchronization.Dispose();
-		_disposed = true;
 	}
 
 	/// <summary>
@@ -350,8 +407,80 @@ public sealed class VulkanSwapchainFrameScheduler : IDisposable
 		if (_failed)
 		{
 			throw new InvalidOperationException(
-				"The previous frame operation failed. " +
-				"The swapchain generation cannot be reused.");
+				$"The previous frame operation failed at " +
+				$"{_failurePhase}. The swapchain generation cannot be reused.",
+				_failure);
 		}
+	}
+
+	/// <summary>
+	/// Establishes that the GPU and the presentation queue have finished
+	/// the abandoned frame.
+	/// </summary>
+	private bool TryQuiesce(out string? reason)
+	{
+		reason = null;
+
+		try
+		{
+			_device.WaitIdle();
+
+			// A queue wait is what makes presentation completion
+			// checkable: the presentation engine holds its semaphores
+			// until the present operation completes.
+			Result result = _instance.Api.QueueWaitIdle(
+				_device.GraphicsQueue);
+
+			if (result != Result.Success)
+			{
+				reason =
+					"waiting for the graphics and presentation queue " +
+					$"failed ({result})";
+
+				return false;
+			}
+
+			return true;
+		}
+
+		catch (Exception exception)
+		{
+			reason =
+				"establishing GPU and presentation completion failed " +
+				$"({exception.Message})";
+
+			return false;
+		}
+	}
+
+	private bool RetirePresentation(out string? reason)
+	{
+		reason = null;
+
+		if (_presentationFences is null)
+		{
+			return true;
+		}
+
+		return _presentationFences.TryRetire(out reason);
+	}
+
+	/// <summary>
+	/// Describes why a generation could not be retired safely and
+	/// restates the failure that caused it.
+	/// </summary>
+	internal static string DescribeUnsafeRetirement(
+		VulkanFrameFailurePhase phase,
+		Exception? failure,
+		string unresolvedReason)
+	{
+		string original = failure is null
+			? "the frame did not complete"
+			: $"{failure.GetType().Name}: {failure.Message}";
+
+		return
+			"Retained the synchronization objects of a frame that reached " +
+			$"{phase} because {unresolvedReason}. The device releases " +
+			$"them when it is destroyed. Original failure: {original}";
 	}
 }
