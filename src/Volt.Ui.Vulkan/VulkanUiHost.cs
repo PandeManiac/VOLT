@@ -3,6 +3,7 @@ using Silk.NET.Vulkan;
 using Volt.Graphics.Vulkan.Commands;
 using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
+using Volt.Graphics.Vulkan.Rendering;
 using Volt.Graphics.Vulkan.Surface;
 using Volt.Graphics.Vulkan.Swapchain;
 using Volt.Graphics.Vulkan.Synchronization;
@@ -61,6 +62,9 @@ public sealed class VulkanUiHost : IDisposable
 	private readonly UiGeometry _geometry = new();
 	private readonly Stopwatch _clock = Stopwatch.StartNew();
 	private readonly List<string> _pendingText = [];
+	private readonly List<ImageRegistration> _images = [];
+
+	private int _nextImageId = 1;
 
 	private VulkanInstance _instance;
 	private VulkanSurface _surface;
@@ -198,6 +202,154 @@ public sealed class VulkanUiHost : IDisposable
 	/// Gets the UI context owned by this host.
 	/// </summary>
 	public UiContext Ui => _ui;
+
+	/// <summary>
+	/// Gets the Vulkan instance the host created.
+	/// </summary>
+	/// <remarks>
+	/// The host owns it; an application only borrows it to create
+	/// resources that must outlive a swapchain generation. It must not
+	/// be disposed by the application.
+	/// </remarks>
+	public VulkanInstance Instance => _instance;
+
+	/// <summary>
+	/// Gets the logical device the host created.
+	/// </summary>
+	/// <remarks>
+	/// The host owns it. The application may create and record its own
+	/// resources with it, but anything submitted must be complete before
+	/// the host is disposed.
+	/// </remarks>
+	public VulkanLogicalDevice Device => _device;
+
+	/// <summary>
+	/// Gets the physical device the host selected.
+	/// </summary>
+	/// <remarks>
+	/// Named for the hardware rather than the handle type so it cannot
+	/// be confused with <see cref="Device"/>, which is the logical
+	/// device.
+	/// </remarks>
+	public PhysicalDevice Gpu => _physicalDevice;
+
+	/// <summary>
+	/// Gets the frame slot the current frame records into.
+	/// </summary>
+	/// <remarks>
+	/// Frames in flight alternate between slots, so an application that
+	/// renders into its own offscreen image should keep one image per
+	/// slot: the image a frame samples is then written by the same
+	/// submission that samples it, and the other slot cannot still be
+	/// reading it. The value only advances when a frame is submitted.
+	/// </remarks>
+	public int CurrentFrameSlot { get; private set; }
+
+	/// <summary>
+	/// Gets or sets a callback that records application passes into the
+	/// frame before the UI pass samples them.
+	/// </summary>
+	/// <remarks>
+	/// The callback receives a command buffer that is recording and is
+	/// outside any render pass. Anything it records is ordered before
+	/// the UI pass, which is where a viewport render target is filled.
+	/// Registered images are transitioned to their sampled layout by the
+	/// UI renderer, so the callback only has to leave them in a layout
+	/// the UI renderer can name. An exception thrown here aborts the
+	/// frame loop exactly as an exception from the update callback does.
+	/// </remarks>
+	public Action<CommandBuffer>? BeforeUiPass { get; set; }
+
+	/// <summary>
+	/// Registers a render target as a UI image texture.
+	/// </summary>
+	/// <param name="image">The image to sample.</param>
+	/// <returns>
+	/// The identifier draw commands use. It stays valid for the life of
+	/// the host, including across swapchain recreation, because the host
+	/// re-registers every image with each new renderer.
+	/// </returns>
+	/// <exception cref="ArgumentNullException">
+	/// <paramref name="image"/> is null.
+	/// </exception>
+	public UiTextureId RegisterImage(IVulkanSampledImage image)
+	{
+		ThrowIfDisposed();
+		ArgumentNullException.ThrowIfNull(image);
+
+		UiTextureId id = UiTextureId.FromIndex(_nextImageId++);
+
+		_images.Add(new ImageRegistration(id, image));
+
+		_resources?.Renderer.RegisterImage(image, id);
+
+		return id;
+	}
+
+	/// <summary>
+	/// Re-points a registered image identifier at a different image.
+	/// </summary>
+	/// <param name="id">The identifier returned by registration.</param>
+	/// <param name="image">The image the identifier should sample.</param>
+	/// <returns>
+	/// True when the identifier was registered, false otherwise.
+	/// </returns>
+	/// <remarks>
+	/// This exists for render targets that are recreated at a new size,
+	/// which changes their image view. It waits for the device, because
+	/// a descriptor set must not be rewritten while a submitted frame
+	/// could still be reading it. A resize is a rare event, so paying one
+	/// idle to keep the composition correct is the right trade.
+	/// </remarks>
+	public bool UpdateImage(UiTextureId id, IVulkanSampledImage image)
+	{
+		ThrowIfDisposed();
+		ArgumentNullException.ThrowIfNull(image);
+
+		int index = _images.FindIndex(entry => entry.Id == id);
+
+		if (index < 0)
+		{
+			return false;
+		}
+
+		_device.WaitIdle();
+
+		_images[index] = new ImageRegistration(id, image);
+
+		_resources?.Renderer.UpdateImage(id, image);
+
+		return true;
+	}
+
+	/// <summary>
+	/// Releases a registered image identifier.
+	/// </summary>
+	/// <param name="id">The identifier returned by registration.</param>
+	/// <returns>
+	/// True when the identifier was registered, false otherwise.
+	/// </returns>
+	/// <remarks>
+	/// The identifier is never reused, so geometry that still names it
+	/// falls back to the white texel rather than sampling a different
+	/// image.
+	/// </remarks>
+	public bool UnregisterImage(UiTextureId id)
+	{
+		ThrowIfDisposed();
+
+		int index = _images.FindIndex(entry => entry.Id == id);
+
+		if (index < 0)
+		{
+			return false;
+		}
+
+		_resources?.Renderer.UnregisterImage(id);
+		_images.RemoveAt(index);
+
+		return true;
+	}
 
 	/// <summary>
 	/// Gets the native window.
@@ -410,15 +562,21 @@ public sealed class VulkanUiHost : IDisposable
 
 		int slot = _frameSlot % PixelSlots;
 
+		CurrentFrameSlot = slot;
+
 		VulkanSwapchainFrameResult frame = active.Frames.Draw(
 			(commandBuffer, imageIndex) =>
+			{
+				BeforeUiPass?.Invoke(commandBuffer);
+
 				active.Renderer.Render(
 					commandBuffer,
 					imageIndex,
 					slot,
 					_geometry.Vertices,
 					_geometry.Indices,
-					_geometry.Batches));
+					_geometry.Batches);
+			});
 
 		if (frame.Submitted)
 		{
@@ -459,6 +617,16 @@ public sealed class VulkanUiHost : IDisposable
 			_ui.Theme.Fonts.Enumerate().ToArray(),
 			_options.VertexShaderPath ?? DefaultShader("ui.vert.spv"),
 			_options.FragmentShaderPath ?? DefaultShader("ui.frag.spv"));
+
+		// Descriptor sets belong to a renderer, and a renderer belongs
+		// to a swapchain generation, so every generation re-registers
+		// the application's images under their stable identifiers.
+		foreach (ImageRegistration registration in _images)
+		{
+			_resources.Renderer.RegisterImage(
+				registration.Image,
+				registration.Id);
+		}
 	}
 
 	private void DispatchInput(InputSnapshot input, UiSize surface)
@@ -586,6 +754,13 @@ public sealed class VulkanUiHost : IDisposable
 			}
 		}
 	}
+
+	/// <summary>
+	/// One render target registered under a stable UI identifier.
+	/// </summary>
+	private readonly record struct ImageRegistration(
+		UiTextureId Id,
+		IVulkanSampledImage Image);
 
 	private static bool TryMapKey(KeyCode key, out UiKey mapped)
 	{

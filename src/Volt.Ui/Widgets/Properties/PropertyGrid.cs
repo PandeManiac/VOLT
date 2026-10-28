@@ -1,5 +1,6 @@
 using System.Globalization;
 using Volt.Ui.Layout;
+using Volt.Ui.Styling;
 using Volt.Ui.Text;
 
 namespace Volt.Ui.Widgets.Properties;
@@ -69,14 +70,7 @@ public sealed class PropertyGrid : ScrollView
 
 			if (group.Name.Length > 0)
 			{
-				Label header = new(group.Name)
-				{
-					Font = Context?.Theme.Fonts.Small,
-					TextColor = Context?.Theme.Palette.TextMuted,
-					Margin = new UiThickness(2f, groupIndex == 0 ? 2f : 8f, 2f, 2f)
-				};
-
-				_stack.Add(header);
+				_stack.Add(BuildSectionHeader(group, groupIndex));
 			}
 
 			for (int index = 0; index < group.Properties.Count; index++)
@@ -106,6 +100,54 @@ public sealed class PropertyGrid : ScrollView
 
 			row.Sync();
 		}
+	}
+
+	private Widget BuildSectionHeader(
+		UiPropertyGroup group,
+		int groupIndex)
+	{
+		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
+
+		Panel bar = new()
+		{
+			Height = UiLength.Points(
+				MathF.Max(22f, theme.Metrics.PanelHeaderHeight - 4f)),
+			DrawBackground = true,
+			Background = theme.Palette.Header,
+			DrawBorder = true,
+			BorderColor = theme.Palette.ChromeBorder,
+			Margin = new UiThickness(
+				0f,
+				groupIndex == 0 ? 2f : 9f,
+				0f,
+				2f),
+			Padding = new UiThickness(6f, 0f)
+		};
+
+		StackPanel row = new(UiOrientation.Horizontal)
+		{
+			Spacing = 6f
+		};
+
+		row.Add(new IconView(group.Icon)
+		{
+			Width = UiLength.Points(14f),
+			Height = UiLength.Points(14f),
+			VerticalAlignment = UiAlignment.Center,
+			Color = theme.Palette.TextMuted
+		});
+
+		row.Add(new Label(group.Name)
+		{
+			Font = theme.Fonts.PanelHeader,
+			TextColor = theme.Palette.Text,
+			FlexGrow = 1f,
+			VerticalAlignment = UiAlignment.Center
+		});
+
+		bar.Add(row);
+
+		return bar;
 	}
 
 	private void BuildRow(UiProperty property)

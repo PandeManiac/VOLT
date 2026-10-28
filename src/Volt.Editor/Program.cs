@@ -1,5 +1,8 @@
 using Volt.Editor.Core.Projects;
+using Volt.Editor.Core.Scenes;
+using Volt.Editor.Rendering;
 using Volt.Ui.Docking;
+using Volt.Ui.Rendering;
 using Volt.Ui.Styling;
 using Volt.Ui.Vulkan;
 
@@ -19,6 +22,11 @@ internal static class Program
 	private const string ValidationArgument = "--validation";
 	private const string ProjectArgument = "--project";
 	private const string FramesArgument = "--frames";
+	private const string WidthArgument = "--width";
+	private const string HeightArgument = "--height";
+	private const string UiScaleArgument = "--ui-scale";
+	private const string SnapshotArgument = "--snapshot";
+	private const string SnapshotStateArgument = "--snapshot-state";
 	private const string WorkspaceFolderName = ".volt";
 	private const string WorkspaceFileName = "workspace.json";
 
@@ -30,19 +38,35 @@ internal static class Program
 				out bool validation,
 				out string? projectPath,
 				out int? frameLimit,
+				out int? width,
+				out int? height,
+				out float? uiScale,
+				out string? snapshotPath,
+				out string? snapshotState,
 				out string? error))
 		{
 			Console.Error.WriteLine(error);
 			Console.Error.WriteLine(
 				"Usage: Volt.Editor [--validation] " +
-				"[--project <folder>] [--frames <count>]");
+				"[--project <folder>] [--frames <count>] " +
+				"[--width <pixels>] [--height <pixels>] " +
+				"[--ui-scale <factor>] [--snapshot <file>] " +
+				"[--snapshot-state <workspace|authoring|start>]");
 
 			return 2;
 		}
 
 		try
 		{
-			return Run(validation, projectPath, frameLimit);
+			return Run(
+				validation,
+				projectPath,
+				frameLimit,
+				width,
+				height,
+				uiScale,
+				snapshotPath,
+				snapshotState);
 		}
 
 		catch (Exception exception)
@@ -58,8 +82,24 @@ internal static class Program
 	private static int Run(
 		bool validation,
 		string? projectPath,
-		int? frameLimit)
+		int? frameLimit,
+		int? width,
+		int? height,
+		float? uiScale,
+		string? snapshotPath,
+		string? snapshotState)
 	{
+		if (snapshotPath is not null)
+		{
+			return CaptureSnapshot(
+				projectPath,
+				width,
+				height,
+				uiScale,
+				snapshotState,
+				snapshotPath);
+		}
+
 		using EditorSession session = new();
 
 		if (projectPath is not null)
@@ -88,24 +128,54 @@ internal static class Program
 				Title = "VOLT Editor",
 				EnableValidation = validation,
 				Theme = UiTheme.CreateDark(),
-				Size = new Volt.Platform.Windows.WindowSize(1600, 960)
+				Size = new Volt.Platform.Windows.WindowSize(
+					width ?? 1600,
+					height ?? 960)
 			});
 
 		Console.WriteLine($"GPU: {host.DeviceName}");
 		Console.WriteLine($"Validation: {host.ValidationLayersEnabled}");
 
-		using EditorShell shell = new(session, projectRoot, layout);
+		using EditorSceneRenderer? sceneRenderer = CreateSceneRenderer(host);
+
+		using EditorShell shell = new(
+			session,
+			projectRoot,
+			layout,
+			sceneRenderer);
+
+		if (sceneRenderer is not null)
+		{
+			// Viewport passes are recorded into the frame's own command
+			// buffer before the UI pass, which is what lets one
+			// submission fill a render target and then sample it.
+			host.BeforeUiPass = commandBuffer =>
+			{
+				sceneRenderer.FrameSlot = host.CurrentFrameSlot;
+				sceneRenderer.RecordFrame(commandBuffer);
+			};
+		}
+
+		if (uiScale is float scale)
+		{
+			// Applying the scale before the first frame keeps startup
+			// free of a visible rebuild.
+			shell.ApplyUiScale(scale);
+		}
 
 		host.Ui.Add(shell);
 		shell.ExitRequested += host.RequestExit;
+
+		Console.WriteLine(
+			$"Window: {host.Ui.Surface.Width:0}x{host.Ui.Surface.Height:0} " +
+			$"at interface scale {shell.UiScale * 100f:0}%");
 
 		int frames = 0;
 
 		host.Run(
 			ui =>
-			{
-				session.Update(ui.DeltaSeconds);
-				shell.Update(ui.DeltaSeconds);
+			{					session.Update(ui.DeltaSeconds);
+					shell.Update(ui.DeltaSeconds, ui.DpiScale);
 
 				frames++;
 
@@ -131,6 +201,165 @@ internal static class Program
 		}
 
 		return 0;
+	}
+
+	/// <summary>
+	/// Writes the editor's chrome to a PNG without opening a window.
+	/// </summary>
+	/// <remarks>
+	/// Without a project the snapshot uses a temporary starter project, so
+	/// the image shows the real workspace rather than the start screen;
+	/// the folder is removed once the image exists. The
+	/// <c>--snapshot-state</c> preset can instead capture the start screen,
+	/// or select a mesh and activate Move so the inspector is populated,
+	/// which is what the editor guide's screenshots use.
+	/// </remarks>
+	private static int CaptureSnapshot(
+		string? projectPath,
+		int? width,
+		int? height,
+		float? uiScale,
+		string? snapshotState,
+		string snapshotPath)
+	{
+		string state = snapshotState ?? "workspace";
+		string? temporary = null;
+
+		using EditorSession session = new();
+
+		try
+		{
+			if (state == "start")
+			{
+				// The start screen is the interface before a project exists.
+			}
+
+			else if (projectPath is not null)
+			{
+				session.OpenProject(projectPath);
+			}
+
+			else
+			{
+				temporary = Path.Combine(
+					Path.GetTempPath(),
+					$"volt-snapshot-{Guid.NewGuid():N}");
+
+				session.NewProject(temporary, "Snapshot");
+			}
+
+			if (state == "authoring")
+			{
+				SceneEntity? mesh = session.Scene?.Entities.FirstOrDefault(
+					entity => entity.GetComponent<MeshRendererData>() is not null);
+
+				if (mesh is null)
+				{
+					throw new InvalidOperationException(
+						"The authoring snapshot needs a scene with a mesh object.");
+				}
+
+				session.Select(mesh.Id);
+				session.Tool = EditorTool.Translate;
+			}
+
+			string fullPath = Path.GetFullPath(snapshotPath);
+			string? folder = Path.GetDirectoryName(fullPath);
+
+			if (folder is not null)
+			{
+				Directory.CreateDirectory(folder);
+			}
+
+			UiRasterImage image = EditorSnapshot.Capture(
+				session,
+				fullPath,
+				width ?? 1600,
+				height ?? 960,
+				uiScale: uiScale ?? 1f,
+				defaultProjectFolder: state == "start"
+					? "~/VoltGame"
+					: null);
+
+			Console.WriteLine(
+				$"Wrote {fullPath} ({image.Width}x{image.Height}).");
+
+			return 0;
+		}
+
+		catch (Exception exception)
+		{
+			Console.Error.WriteLine(
+				$"Could not write the snapshot: {exception.Message}");
+
+			return 1;
+		}
+
+		finally
+		{
+			if (temporary is not null)
+			{
+				try
+				{
+					Directory.Delete(temporary, recursive: true);
+				}
+
+				catch (IOException)
+				{
+					// A leftover temporary folder must not fail a snapshot.
+				}
+
+				catch (UnauthorizedAccessException)
+				{
+					// The same: the image is what matters.
+				}
+			}
+		}
+	}
+
+	/// <summary>
+	/// Creates the viewport renderer, or reports why it is unavailable.
+	/// </summary>
+	/// <remarks>
+	/// A missing or malformed scene shader must not stop the editor from
+	/// opening: without a renderer the viewports draw their overlays and
+	/// state, and the reason is printed once at startup.
+	/// </remarks>
+	private static EditorSceneRenderer? CreateSceneRenderer(
+		VulkanUiHost host)
+	{
+		try
+		{
+			return new EditorSceneRenderer(
+				host,
+				SceneShaderPath("scene.vert.spv"),
+				SceneShaderPath("scene.frag.spv"));
+		}
+
+		catch (Exception exception)
+		{
+			Console.Error.WriteLine(
+				"Viewport rendering is unavailable; the scene and game " +
+				$"views will draw their overlays only: {exception.Message}");
+
+			return null;
+		}
+	}
+
+	/// <summary>
+	/// Resolves a compiled scene shader next to the executable.
+	/// </summary>
+	/// <remarks>
+	/// The shaders travel with the build output because the graphics
+	/// project copies them, and a project reference makes that copy
+	/// transitive.
+	/// </remarks>
+	private static string SceneShaderPath(string fileName)
+	{
+		return Path.Combine(
+			AppContext.BaseDirectory,
+			"Shaders",
+			fileName);
 	}
 
 	private static DockLayout LoadWorkspace(string? projectRoot)
@@ -219,11 +448,21 @@ internal static class Program
 		out bool validation,
 		out string? projectPath,
 		out int? frameLimit,
+		out int? width,
+		out int? height,
+		out float? uiScale,
+		out string? snapshotPath,
+		out string? snapshotState,
 		out string? error)
 	{
 		validation = false;
 		projectPath = null;
 		frameLimit = null;
+		width = null;
+		height = null;
+		uiScale = null;
+		snapshotPath = null;
+		snapshotState = null;
 		error = null;
 
 		for (int index = 0; index < args.Length; index++)
@@ -256,6 +495,74 @@ internal static class Program
 					frameLimit = frames;
 					break;
 
+				case WidthArgument:
+					if (index + 1 >= args.Length ||
+						!int.TryParse(args[++index], out int widthPixels) ||
+						widthPixels < 640)
+					{
+						error = "--width requires at least 640 pixels.";
+						return false;
+					}
+
+					width = widthPixels;
+					break;
+
+				case HeightArgument:
+					if (index + 1 >= args.Length ||
+						!int.TryParse(args[++index], out int heightPixels) ||
+						heightPixels < 480)
+					{
+						error = "--height requires at least 480 pixels.";
+						return false;
+					}
+
+					height = heightPixels;
+					break;
+
+				case SnapshotArgument:
+					if (index + 1 >= args.Length)
+					{
+						error = "--snapshot requires a file path.";
+						return false;
+					}
+
+					snapshotPath = Path.GetFullPath(args[++index]);
+					break;
+
+				case SnapshotStateArgument:
+					if (index + 1 >= args.Length)
+					{
+						error = "--snapshot-state requires workspace, authoring, or start.";
+						return false;
+					}
+
+					snapshotState = args[++index].ToLowerInvariant();
+
+					if (snapshotState is not ("workspace" or "authoring" or "start"))
+					{
+						error = "--snapshot-state must be workspace, authoring, or start.";
+						return false;
+					}
+
+					break;
+
+				case UiScaleArgument:
+					if (index + 1 >= args.Length ||
+						!float.TryParse(
+							args[++index],
+							System.Globalization.NumberStyles.Float,
+							System.Globalization.CultureInfo.InvariantCulture,
+							out float scale) ||
+						!float.IsFinite(scale) ||
+						scale <= 0f)
+					{
+						error = "--ui-scale requires a positive factor.";
+						return false;
+					}
+
+					uiScale = scale;
+					break;
+
 				default:
 					error = $"Unknown argument '{args[index]}'.";
 					return false;
@@ -266,6 +573,18 @@ internal static class Program
 			!Directory.Exists(projectPath))
 		{
 			error = $"Project folder '{projectPath}' does not exist.";
+			return false;
+		}
+
+		if (snapshotState is not null && snapshotPath is null)
+		{
+			error = "--snapshot-state requires --snapshot.";
+			return false;
+		}
+
+		if (snapshotState == "start" && projectPath is not null)
+		{
+			error = "--snapshot-state start cannot be combined with --project.";
 			return false;
 		}
 

@@ -1,16 +1,27 @@
 using System.Numerics;
 using Volt.Ui.Layout;
+using Volt.Ui.Styling;
 
 namespace Volt.Ui.Widgets;
 
 /// <summary>
 /// Three numeric fields editing a vector's X, Y, and Z components.
 /// </summary>
+/// <remarks>
+/// Each component carries its axis letter in the conventional muted
+/// red/green/blue, which is what lets a developer read a position row
+/// without counting columns. The labels sit before the fields rather
+/// than inside them so the numeric text stays on the same baseline as
+/// every other inspector field.
+/// </remarks>
 public sealed class Vector3Field : Widget
 {
 	private readonly NumericField _x;
 	private readonly NumericField _y;
 	private readonly NumericField _z;
+	private readonly Label _xLabel;
+	private readonly Label _yLabel;
+	private readonly Label _zLabel;
 	private readonly StackPanel _row;
 	private Vector3 _value;
 	private bool _updating;
@@ -21,14 +32,26 @@ public sealed class Vector3Field : Widget
 		_y = CreateComponent("Y");
 		_z = CreateComponent("Z");
 
+		_xLabel = CreateAxisLabel("X");
+		_yLabel = CreateAxisLabel("Y");
+		_zLabel = CreateAxisLabel("Z");
+
+		_xLabel.TextColor = UiAxisColors.X;
+		_yLabel.TextColor = UiAxisColors.Y;
+		_zLabel.TextColor = UiAxisColors.Z;
+
 		_row = new StackPanel(UiOrientation.Horizontal)
 		{
 			Spacing = 4f
 		};
 
+		_row.Add(_xLabel);
 		_row.Add(_x);
+		_row.Add(_yLabel);
 		_row.Add(_y);
+		_row.Add(_zLabel);
 		_row.Add(_z);
+
 		Add(_row);
 	}
 
@@ -50,6 +73,50 @@ public sealed class Vector3Field : Widget
 			_value = value;
 			RefreshFields();
 			ValueChanged?.Invoke(this);
+		}
+	}
+
+	public float Minimum
+	{
+		get => _x.Minimum;
+		set
+		{
+			_x.Minimum = value;
+			_y.Minimum = value;
+			_z.Minimum = value;
+		}
+	}
+
+	public float Maximum
+	{
+		get => _x.Maximum;
+		set
+		{
+			_x.Maximum = value;
+			_y.Maximum = value;
+			_z.Maximum = value;
+		}
+	}
+
+	public float Step
+	{
+		get => _x.Step;
+		set
+		{
+			_x.Step = value;
+			_y.Step = value;
+			_z.Step = value;
+		}
+	}
+
+	public string Format
+	{
+		get => _x.Format;
+		set
+		{
+			_x.Format = value;
+			_y.Format = value;
+			_z.Format = value;
 		}
 	}
 
@@ -92,6 +159,17 @@ public sealed class Vector3Field : Widget
 				contentBounds.Height));
 	}
 
+	private static Label CreateAxisLabel(string axis)
+	{
+		return new Label(axis)
+		{
+			Width = UiLength.Points(12f),
+			MinWidth = 10f,
+			VerticalAlignment = UiAlignment.Center,
+			TextAlignment = Volt.Ui.Text.UiTextAlignment.Start
+		};
+	}
+
 	private NumericField CreateComponent(string name)
 	{
 		NumericField field = new()
@@ -100,7 +178,7 @@ public sealed class Vector3Field : Widget
 			Step = 0.1f,
 			MinHeight = 20f,
 			Name = name,
-			MinWidth = 40f,
+			MinWidth = 34f,
 			FlexGrow = 1f,
 			FlexShrink = 1f
 		};
@@ -137,4 +215,21 @@ public sealed class Vector3Field : Widget
 			_updating = false;
 		}
 	}
+}
+
+/// <summary>
+/// The conventional axis colors used by transform editors.
+/// </summary>
+/// <remarks>
+/// The values are muted so a row of three colored letters reads as a
+/// hint rather than as three competing accents. They intentionally
+/// match the viewport gizmo axes: red X, green Y, blue Z.
+/// </remarks>
+public static class UiAxisColors
+{
+	public static UiColor X => UiColor.FromRgb(0xD96A6A);
+
+	public static UiColor Y => UiColor.FromRgb(0x7CC98A);
+
+	public static UiColor Z => UiColor.FromRgb(0x6AA2E0);
 }

@@ -1,6 +1,10 @@
 using System.Numerics;
+using Volt.Ecs.Components.Rendering;
 using Volt.Ecs.Components.Spatial;
 using Volt.Editor.Core.Runtime;
+using Volt.Editor.Core.Scenes;
+using Volt.Editor.Rendering;
+using Volt.Rendering.Components;
 using Volt.Rendering.Transforms;
 using Volt.Ui;
 using Volt.Ui.Input;
@@ -12,31 +16,63 @@ using Volt.Ui.Widgets;
 namespace Volt.Editor.Viewport;
 
 /// <summary>
-/// Presents the disposable runtime ECS world in the Game tab.
+/// The running game's view, rendered from the runtime world.
 /// </summary>
 /// <remarks>
-/// As with the Scene preview, this milestone draws runtime transforms
-/// and bounds with Volt.Ui geometry rather than binding the scene to
-/// a mesh render target. The data is the real runtime world: pausing,
-/// stepping, and stopping visibly affect only this view.
+/// <para>
+/// This view renders the disposable ECS world the same way the scene
+/// view renders the authored scene: meshes and depth into an offscreen
+/// target, sampled by the UI. The difference is where the data comes
+/// from and which camera looks at it, which is exactly what makes the
+/// two tabs different views rather than two copies of one image.
+/// </para>
+/// <para>
+/// Gameplay input is only consumed while this view has focus, so
+/// typing in the inspector can never drive the game.
+/// </para>
 /// </remarks>
-public sealed class GameViewport : Widget
+internal sealed class GameViewport : Widget, IFrameTick
 {
 	private readonly EditorSession _session;
-	private bool _disposed;
+	private readonly IViewportRenderer? _renderer;
+	private readonly ViewportRenderRequest _request = new()
+	{
+		Kind = ViewportKind.Game,
+		ShowGrid = false
+	};
 
-	public GameViewport(EditorSession session)
+	private bool _disposed;
+	private float _dpiScale = 1f;
+
+	public GameViewport(
+		EditorSession session,
+		IViewportRenderer? renderer = null)
 	{
 		ArgumentNullException.ThrowIfNull(session);
+
 		_session = session;
+		_renderer = renderer;
 
 		IsFocusable = true;
 		FocusOnPointerPress = true;
 		ClipToBounds = true;
 		Cursor = UiCursor.Crosshair;
 
-		_session.RuntimeUpdated += OnRuntimeUpdated;
-		_session.PlayStateChanged += OnRuntimeUpdated;
+		_session.RuntimeUpdated += OnSessionChanged;
+		_session.PlayStateChanged += OnSessionChanged;
+	}
+
+	/// <inheritdoc />
+	public void Tick(double deltaSeconds, float dpiScale)
+	{
+		if (_disposed)
+		{
+			return;
+		}
+
+		_dpiScale = float.IsFinite(dpiScale) && dpiScale > 0f
+			? dpiScale
+			: 1f;
 	}
 
 	protected override UiSize MeasureContent(UiSize contentAvailable)
@@ -55,125 +91,64 @@ public sealed class GameViewport : Widget
 		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
 		UiRect bounds = GlobalVisualBounds;
 
+		if (bounds.Width <= 0f || bounds.Height <= 0f)
+		{
+			return;
+		}
+
 		drawList.AddRect(bounds, theme.Palette.WindowBackground);
 
+		PlayState state = _session.PlayState;
 		RuntimeScene? runtime = _session.Play?.Runtime;
 
 		if (runtime is null)
 		{
-			DrawMessage(
+			_renderer?.ClearRequest(ViewportKind.Game);
+
+			DrawCenteredText(
 				drawList,
-				"Press Play to run the scene.",
+				state == PlayState.Stopped
+					? "Press Play to run the scene."
+					: "No runtime world is available.",
 				bounds,
-				theme,
-				theme.Palette.TextMuted);
+				theme);
+
 			return;
 		}
 
-		Matrix4x4 viewProjection = CreateViewProjection(
-			runtime.Camera,
-			bounds);
+		float aspect = bounds.Width / bounds.Height;
 
-		DrawGround(drawList, bounds, viewProjection, theme);
+		(CameraComponent camera, Matrix4x4 view) = ResolveCamera(
+			runtime,
+			aspect);
 
-		foreach (RuntimeEntityInfo info in runtime.Entities)
+		PublishRequest(runtime, bounds, view, camera, aspect);
+
+		if (_renderer?.PrepareTexture(
+				ViewportKind.Game,
+				_renderer.FrameSlot) is UiTextureId texture)
 		{
-			Matrix4x4 world = GetWorld(runtime, info);
-
-			Vector3 origin = Vector3.Transform(Vector3.Zero, world);
-
-			if (!ViewportMath.TryProject(
-				viewProjection,
-				origin,
+			drawList.AddImage(
 				bounds,
-				out UiPoint screen))
-			{
-				continue;
-			}
-
-			bool selected = _session.Selection.Contains(info.AuthoredId);
-
-			if (runtime.World.HasComponent<Volt.Rendering.Components.MeshRendererComponent>(
-					info.Entity))
-			{
-				ViewportMath.DrawWireCube(
-					drawList,
-					world,
-					viewProjection,
-					bounds,
-					selected
-						? theme.Palette.Accent
-						: theme.Palette.TextMuted);
-			}
-
-			else
-			{
-				drawList.AddRoundedRect(
-					new UiRect(screen.X - 3f, screen.Y - 3f, 6f, 6f),
-					2f,
-					selected
-						? theme.Palette.Accent
-						: theme.Palette.BorderStrong);
-			}
-
-			UiTextLayoutResult label = UiTextLayout.Create(
-				info.Name,
-				theme.Fonts.Small,
-				160f,
-				UiTextWrap.NoWrap,
-				UiTextAlignment.Start);
-
-			drawList.AddText(
-				label,
-				new UiPoint(screen.X + 6f, screen.Y - label.Height),
-				selected
-					? theme.Palette.Accent
-					: theme.Palette.TextMuted);
+				texture,
+				new UiRect(0f, 0f, 1f, 1f),
+				UiColor.White);
 		}
 
-		PlayState state = _session.PlayState;
-		UiColor stateColor = state switch
-		{
-			PlayState.Playing => theme.Palette.Success,
-			PlayState.Paused => theme.Palette.Warning,
-			_ => theme.Palette.TextMuted
-		};
-
-		UiTextLayoutResult status = UiTextLayout.Create(
-			$"{state.ToString().ToUpperInvariant()}  " +
-			$"tick {runtime.TickCount}  " +
-			$"{runtime.Entities.Count} entities  " +
-			$"{runtime.RenderableCount} renderable",
-			theme.Fonts.Small,
-			MathF.Max(0f, bounds.Width - 20f),
-			UiTextWrap.NoWrap,
-			UiTextAlignment.Start);
-
-		drawList.AddText(
-			status,
-			new UiPoint(bounds.X + 10f, bounds.Y + 8f),
-			stateColor);
-
-		UiTextLayoutResult controls = UiTextLayout.Create(
-			"Click the viewport, then WASD to move input-driven objects.",
-			theme.Fonts.Small,
-			MathF.Max(0f, bounds.Width - 20f),
-			UiTextWrap.NoWrap,
-			UiTextAlignment.Start);
-
-		drawList.AddText(
-			controls,
-			new UiPoint(
-				bounds.X + 10f,
-				bounds.Bottom - controls.Height - 8f),
-			theme.Palette.TextDisabled);
+		DrawOverlay(drawList, runtime, bounds, theme);
 	}
 
 	protected override bool OnPointerDown(UiPointerEvent pointer)
 	{
 		Focus();
+
+		// The running game owns the primary action only while this view
+		// is the focused one.
 		_session.Input.PrimaryAction = true;
+		_session.ViewportNavigating = true;
+
 		CapturePointer(pointer.Button);
+
 		return true;
 	}
 
@@ -181,11 +156,17 @@ public sealed class GameViewport : Widget
 	{
 		_session.Input.PrimaryAction = false;
 		ReleasePointer();
+
 		return true;
 	}
 
 	protected override bool OnKeyDown(UiKeyEvent key)
 	{
+		if (key.Modifiers.HasFlag(UiKeyModifiers.Control))
+		{
+			return false;
+		}
+
 		return ApplyKey(key.Key, pressed: true);
 	}
 
@@ -211,86 +192,147 @@ public sealed class GameViewport : Widget
 		base.Dispose();
 	}
 
+	private void Unsubscribe()
+	{
+		_session.RuntimeUpdated -= OnSessionChanged;
+		_session.PlayStateChanged -= OnSessionChanged;
+	}
+
+	private void OnSessionChanged(EditorSession session)
+	{
+		InvalidateVisual();
+	}
+
 	private bool ApplyKey(UiKey key, bool pressed)
 	{
 		switch (key)
 		{
 			case UiKey.A:
 				_session.Input.MoveLeft = pressed;
-				return true;
+				break;
 
 			case UiKey.D:
 				_session.Input.MoveRight = pressed;
-				return true;
+				break;
 
 			case UiKey.W:
 				_session.Input.MoveForward = pressed;
-				return true;
+				break;
 
 			case UiKey.S:
 				_session.Input.MoveBackward = pressed;
-				return true;
-
-			case UiKey.Space:
-				_session.Input.PrimaryAction = pressed;
-				return true;
+				break;
 
 			default:
 				return false;
 		}
-	}
 
-	private static Matrix4x4 CreateViewProjection(
-		RuntimeCamera? camera,
-		UiRect bounds)
-	{
-		Vector3 position = camera?.Position ??
-			new Vector3(0f, 3f, 8f);
-
-		Quaternion rotation = camera?.Rotation ??
-			Quaternion.Identity;
-
-		Vector3 forward = Vector3.Transform(
-			-Vector3.UnitZ,
-			rotation);
-
-		Vector3 up = Vector3.Transform(Vector3.UnitY, rotation);
-
-		if (up.LengthSquared() < 1e-6f)
+		if (!pressed &&
+			!_session.Input.MoveLeft &&
+			!_session.Input.MoveRight &&
+			!_session.Input.MoveForward &&
+			!_session.Input.MoveBackward)
 		{
-			up = Vector3.UnitY;
+			// Once no game key is held, the tool shortcuts are free to
+			// use the same letters again.
+			_session.ViewportNavigating = false;
 		}
 
-		Matrix4x4 view = Matrix4x4.CreateLookAt(
-			position,
-			position + forward,
-			up);
-
-		float aspect = bounds.Height > 0f
-			? bounds.Width / bounds.Height
-			: 1f;
-
-		Matrix4x4 projection = Matrix4x4.CreatePerspectiveFieldOfView(
-			(camera?.FieldOfView ?? 60f) * (MathF.PI / 180f),
-			MathF.Max(0.01f, aspect),
-			MathF.Max(0.001f, camera?.Near ?? 0.1f),
-			MathF.Max(1f, camera?.Far ?? 1000f));
-
-		return view * projection;
+		return true;
 	}
 
-	private static Matrix4x4 GetWorld(
+	private void PublishRequest(
+		RuntimeScene runtime,
+		UiRect bounds,
+		Matrix4x4 view,
+		in CameraComponent camera,
+		float aspect)
+	{
+		if (_renderer is null)
+		{
+			return;
+		}
+
+		_request.PixelWidth = Math.Max(
+			1,
+			(int)MathF.Round(bounds.Width * _dpiScale));
+
+		_request.PixelHeight = Math.Max(
+			1,
+			(int)MathF.Round(bounds.Height * _dpiScale));
+
+		_request.View = view;
+
+		_request.Projection = Volt.Rendering.Cameras.CameraProjection
+			.CreatePerspective(
+				camera,
+				aspect,
+				Volt.Rendering.Cameras.ViewportYOrientation.YDown);
+
+		_request.HasContent = true;
+		_request.Instances.Clear();
+
+		SceneDocument? scene = _session.Scene;
+
+		foreach (RuntimeEntityInfo info in runtime.Entities)
+		{
+			if (!runtime.World.HasComponent<MeshRendererComponent>(
+					info.Entity))
+			{
+				continue;
+			}
+
+			_request.Instances.Add(new ViewportMeshInstance(
+				ResolveMeshId(scene, info.AuthoredId),
+				CreateWorld(runtime, info)));
+		}
+
+		_renderer.PublishRequest(_request);
+	}
+
+	/// <summary>
+	/// Resolves the mesh a runtime entity should be drawn with.
+	/// </summary>
+	/// <remarks>
+	/// The runtime world stores a resource handle, not an asset
+	/// reference, so the drawn mesh comes from the authored component
+	/// the runtime entity was built from. An authored reference this
+	/// build cannot draw falls back to the cube, which keeps a running
+	/// game visible instead of silently empty.
+	/// </remarks>
+	private static string ResolveMeshId(SceneDocument? scene, Guid authoredId)
+	{
+		if (scene?.Find(authoredId) is not SceneEntity entity)
+		{
+			return EditorMeshLibrary.Cube;
+		}
+
+		MeshRendererData? renderer =
+			entity.GetComponent<MeshRendererData>();
+
+		if (renderer is null)
+		{
+			return EditorMeshLibrary.Cube;
+		}
+
+		return EditorMeshLibrary.Resolve(renderer.Mesh) is
+			EditorMeshInfo mesh
+				? mesh.Id
+				: EditorMeshLibrary.Cube;
+	}
+
+	private static Matrix4x4 CreateWorld(
 		RuntimeScene runtime,
 		RuntimeEntityInfo info)
 	{
-		PositionComponent position = runtime.World
-			.GetComponent<PositionComponent>(info.Entity);
+		PositionComponent position =
+			runtime.World.GetComponent<PositionComponent>(info.Entity);
 
-		RotationComponent rotation = runtime.World
-			.GetComponent<RotationComponent>(info.Entity);
+		RotationComponent rotation =
+			runtime.World.GetComponent<RotationComponent>(info.Entity);
 
-		ScaleComponent scale = runtime.World
-			.GetComponent<ScaleComponent>(info.Entity);
+		ScaleComponent scale =
+			runtime.World.GetComponent<ScaleComponent>(info.Entity);
 
 		return TransformMatrices.CreateModelMatrix(
 			in position,
@@ -298,58 +340,86 @@ public sealed class GameViewport : Widget
 			in scale);
 	}
 
-	private static void DrawGround(
-		UiDrawList drawList,
-		UiRect bounds,
-		Matrix4x4 viewProjection,
-		UiTheme theme)
+	private static (CameraComponent Camera, Matrix4x4 View) ResolveCamera(
+		RuntimeScene runtime,
+		float aspect)
 	{
-		for (int index = -5; index <= 5; index++)
+		if (runtime.Camera is RuntimeCamera authored)
 		{
-			UiColor color = index == 0
-				? theme.Palette.GridAxisZ
-				: theme.Palette.Grid;
+			// Authored field of view is degrees; a projection component
+			// works in radians.
+			CameraComponent component = new(
+				authored.FieldOfView * (MathF.PI / 180f),
+				MathF.Max(0.001f, authored.Near),
+				MathF.Max(0.002f, authored.Far));
 
-			if (ViewportMath.TryProject(
-					viewProjection,
-					new Vector3(index, 0f, -5f),
-					bounds,
-					out UiPoint start) &&
-				ViewportMath.TryProject(
-					viewProjection,
-					new Vector3(index, 0f, 5f),
-					bounds,
-					out UiPoint end))
-			{
-				drawList.AddLine(start, end, 1f, color);
-			}
-
-			color = index == 0
-				? theme.Palette.GridAxisX
-				: theme.Palette.Grid;
-
-			if (ViewportMath.TryProject(
-					viewProjection,
-					new Vector3(-5f, 0f, index),
-					bounds,
-					out start) &&
-				ViewportMath.TryProject(
-					viewProjection,
-					new Vector3(5f, 0f, index),
-					bounds,
-					out end))
-			{
-				drawList.AddLine(start, end, 1f, color);
-			}
+			return (
+				component,
+				CameraComponent.CreateViewMatrix(
+					new PositionComponent(authored.Position),
+					new RotationComponent(authored.Rotation)));
 		}
+
+		CameraComponent fallback = CameraComponent.Default;
+
+		return (
+			fallback,
+			CameraComponent.CreateViewMatrix(
+				new PositionComponent(new Vector3(6f, 5f, -10f)),
+				new RotationComponent(
+					Quaternion.CreateFromYawPitchRoll(0.5f, -0.2f, 0f))));
 	}
 
-	private static void DrawMessage(
+	private void DrawOverlay(
+		UiDrawList drawList,
+		RuntimeScene runtime,
+		UiRect bounds,
+		UiTheme theme)
+	{
+		PlayState state = _session.PlayState;
+
+		UiColor stateColor = state switch
+		{
+			PlayState.Playing => theme.Palette.Success,
+			PlayState.Paused => theme.Palette.Warning,
+			_ => theme.Palette.TextMuted
+		};
+
+		UiTextLayoutResult status = UiTextLayout.Create(
+			$"{state.ToString().ToUpperInvariant()}   " +
+			$"tick {runtime.TickCount}   " +
+			$"{runtime.Entities.Count} entities   " +
+			$"{runtime.RenderableCount} renderable",
+			theme.Fonts.Small,
+			MathF.Max(0f, bounds.Width - 20f),
+			UiTextWrap.NoWrap,
+			UiTextAlignment.Start);
+
+		drawList.AddText(
+			status,
+			new UiPoint(bounds.X + 10f, bounds.Y + 8f),
+			stateColor);
+
+		UiTextLayoutResult controls = UiTextLayout.Create(
+			"Click this view, then W A S D to drive input behaviours.",
+			theme.Fonts.Small,
+			MathF.Max(0f, bounds.Width - 20f),
+			UiTextWrap.NoWrap,
+			UiTextAlignment.Start);
+
+		drawList.AddText(
+			controls,
+			new UiPoint(
+				bounds.X + 10f,
+				bounds.Bottom - controls.Height - 8f),
+			theme.Palette.TextDisabled);
+	}
+
+	private static void DrawCenteredText(
 		UiDrawList drawList,
 		string text,
 		UiRect bounds,
-		UiTheme theme,
-		UiColor color)
+		UiTheme theme)
 	{
 		UiTextLayoutResult layout = UiTextLayout.Create(
 			text,
@@ -363,17 +433,6 @@ public sealed class GameViewport : Widget
 			new UiPoint(
 				bounds.Center.X - (layout.Width * 0.5f),
 				bounds.Center.Y - (layout.Height * 0.5f)),
-			color);
-	}
-
-	private void OnRuntimeUpdated(EditorSession session)
-	{
-		InvalidateVisual();
-	}
-
-	private void Unsubscribe()
-	{
-		_session.RuntimeUpdated -= OnRuntimeUpdated;
-		_session.PlayStateChanged -= OnRuntimeUpdated;
+			theme.Palette.TextMuted);
 	}
 }

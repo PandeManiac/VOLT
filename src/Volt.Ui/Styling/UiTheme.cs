@@ -57,28 +57,80 @@ public sealed class UiTheme
 			new UiFontSet(dpiScale));
 	}
 
+	/// <summary>
+	/// Scales the palette and metrics by an interface scale factor
+	/// while keeping text rasterization tied to the display scale.
+	/// </summary>
+	/// <remarks>
+	/// A UI scale is not a DPI scale: it makes the whole interface
+	/// larger or smaller for reading comfort, including control sizes
+	/// and spacing, whereas the display scale already matches physical
+	/// pixels. The two multiply.
+	/// </remarks>
+	public UiTheme WithUiScale(float uiScale)
+	{
+		if (!float.IsFinite(uiScale) || uiScale <= 0f)
+		{
+			throw new ArgumentOutOfRangeException(nameof(uiScale));
+		}
+
+		UiMetrics m = Metrics;
+
+		return new UiTheme(
+			Palette,
+			m with
+			{
+				RowHeight = m.RowHeight * uiScale,
+				FieldHeight = m.FieldHeight * uiScale,
+				ButtonHeight = m.ButtonHeight * uiScale,
+				MenuBarHeight = m.MenuBarHeight * uiScale,
+				ToolbarHeight = m.ToolbarHeight * uiScale,
+				PanelHeaderHeight = m.PanelHeaderHeight * uiScale,
+				TabHeight = m.TabHeight * uiScale,
+				StatusBarHeight = m.StatusBarHeight * uiScale,
+				ScrollBarThickness = m.ScrollBarThickness * uiScale,
+				DockSplitterThickness = m.DockSplitterThickness * uiScale,
+				AccentBarThickness = m.AccentBarThickness * uiScale,
+				Spacing = m.Spacing * uiScale,
+				TightSpacing = m.TightSpacing * uiScale,
+				SectionSpacing = m.SectionSpacing * uiScale,
+				Padding = m.Padding * uiScale,
+				Gutter = m.Gutter * uiScale,
+				Indent = m.Indent * uiScale,
+				IconSize = m.IconSize * uiScale,
+				SmallIconSize = m.SmallIconSize * uiScale,
+				LargeIconSize = m.LargeIconSize * uiScale,
+				ToolButtonSize = m.ToolButtonSize * uiScale,
+				TileWidth = m.TileWidth * uiScale,
+				TileHeight = m.TileHeight * uiScale,
+				AxisLabelWidth = m.AxisLabelWidth * uiScale,
+				MinimumPanelWidth = m.MinimumPanelWidth * uiScale,
+				MinimumPanelHeight = m.MinimumPanelHeight * uiScale
+			},
+			new UiFontSet(DpiScale, uiScale));
+	}
+
 	public UiStyle GetButtonStyle(
 		UiWidgetState state,
 		bool selected = false)
 	{
 		UiColor background = state switch
 		{
-			UiWidgetState.Hovered => Palette.Hover,
-			UiWidgetState.Pressed => Palette.Pressed,
 			UiWidgetState.Disabled => Palette.Surface,
-			_ => selected ? Palette.Selection : Palette.SurfaceRaised
+			UiWidgetState.Pressed => selected
+				? Palette.AccentPressed
+				: Palette.Pressed,
+			UiWidgetState.Hovered => selected
+				? Palette.AccentHover
+				: Palette.Hover,
+			_ => selected ? Palette.AccentSurface : Palette.SurfaceRaised
 		};
-
-		if (selected && state == UiWidgetState.Hovered)
-		{
-			background = Palette.Selection;
-		}
 
 		return new UiStyle(
 			background,
 			state == UiWidgetState.Disabled
 				? Palette.TextDisabled
-				: selected ? Palette.Accent : Palette.Text,
+				: selected ? Palette.AccentText : Palette.Text,
 			selected ? Palette.Accent : Palette.Border,
 			Metrics.BorderWidth,
 			Metrics.SmallCornerRadius,
@@ -99,7 +151,7 @@ public sealed class UiTheme
 			background,
 			state == UiWidgetState.Disabled
 				? Palette.TextDisabled
-				: Palette.AccentText,
+				: Palette.TextOnAccent,
 			UiColor.Transparent,
 			0f,
 			Metrics.SmallCornerRadius,
@@ -111,7 +163,7 @@ public sealed class UiTheme
 		bool focused)
 	{
 		UiColor border = focused
-			? Palette.Accent
+			? Palette.FocusRing
 			: state == UiWidgetState.Hovered
 				? Palette.BorderStrong
 				: Palette.Border;
@@ -119,7 +171,7 @@ public sealed class UiTheme
 		return new UiStyle(
 			state == UiWidgetState.Disabled
 				? Palette.Surface
-				: Palette.WindowBackground,
+				: Palette.Well,
 			state == UiWidgetState.Disabled
 				? Palette.TextDisabled
 				: Palette.Text,
@@ -140,6 +192,34 @@ public sealed class UiTheme
 			default);
 	}
 
+	/// <summary>
+	/// Gets the style of the header strip above a panel's content.
+	/// </summary>
+	public UiStyle GetPanelHeaderStyle()
+	{
+		return new UiStyle(
+			Palette.Header,
+			Palette.TextMuted,
+			Palette.ChromeBorder,
+			Metrics.BorderWidth,
+			0f,
+			new UiThickness(10f, 0f));
+	}
+
+	/// <summary>
+	/// Gets the style of a collapsible component section header.
+	/// </summary>
+	public UiStyle GetSectionHeaderStyle(bool hovered)
+	{
+		return new UiStyle(
+			hovered ? Palette.SurfaceRaised : Palette.Header,
+			Palette.Text,
+			Palette.ChromeBorder,
+			Metrics.BorderWidth,
+			0f,
+			new UiThickness(8f, 3f));
+	}
+
 	public UiStyle GetRowStyle(bool selected, bool hovered)
 	{
 		UiColor background = selected
@@ -150,7 +230,7 @@ public sealed class UiTheme
 
 		return new UiStyle(
 			background,
-			selected ? Palette.Accent : Palette.Text,
+			selected ? Palette.Text : Palette.Text,
 			UiColor.Transparent,
 			0f,
 			Metrics.SmallCornerRadius,
@@ -161,24 +241,85 @@ public sealed class UiTheme
 	{
 		return new UiStyle(
 			selected
-				? Palette.SurfaceRaised
-				: hovered ? Palette.Hover : Palette.Header,
+				? Palette.Surface
+				: hovered ? Palette.SurfaceRaised : Palette.Header,
 			selected ? Palette.Text : Palette.TextMuted,
 			UiColor.Transparent,
 			0f,
 			0f,
-			new UiThickness(10f, 4f));
+			new UiThickness(12f, 4f));
+	}
+
+	/// <summary>
+	/// Gets the style of a square, icon-only control such as a toolbar
+	/// tool or a panel action.
+	/// </summary>
+	public UiStyle GetIconButtonStyle(
+		UiWidgetState state,
+		bool active)
+	{
+		UiColor background = state switch
+		{
+			UiWidgetState.Disabled => UiColor.Transparent,
+			UiWidgetState.Pressed => active
+				? Palette.AccentPressed
+				: Palette.Pressed,
+			UiWidgetState.Hovered => active
+				? Palette.AccentHover
+				: Palette.Hover,
+			_ => active ? Palette.AccentSurface : UiColor.Transparent
+		};
+
+		return new UiStyle(
+			background,
+			state == UiWidgetState.Disabled
+				? Palette.TextDisabled
+				: active ? Palette.AccentText : Palette.TextMuted,
+			active ? Palette.Accent : UiColor.Transparent,
+			active ? Metrics.BorderWidth : 0f,
+			Metrics.SmallCornerRadius,
+			new UiThickness(5f));
+	}
+
+	/// <summary>
+	/// Gets the style of an icon button that carries a text label.
+	/// </summary>
+	public UiStyle GetToolButtonStyle(
+		UiWidgetState state,
+		bool active)
+	{
+		UiColor background = state switch
+		{
+			UiWidgetState.Disabled => Palette.Header,
+			UiWidgetState.Pressed => active
+				? Palette.AccentPressed
+				: Palette.Pressed,
+			UiWidgetState.Hovered => active
+				? Palette.AccentHover
+				: Palette.Hover,
+			_ => active ? Palette.AccentSurface : Palette.Header
+		};
+
+		return new UiStyle(
+			background,
+			state == UiWidgetState.Disabled
+				? Palette.TextDisabled
+				: active ? Palette.AccentText : Palette.TextMuted,
+			active ? Palette.Accent : UiColor.Transparent,
+			active ? Metrics.BorderWidth : 0f,
+			Metrics.SmallCornerRadius,
+			new UiThickness(8f, 4f));
 	}
 
 	public UiStyle GetMenuStyle(bool hovered)
 	{
 		return new UiStyle(
 			hovered ? Palette.Hover : UiColor.Transparent,
-			Palette.Text,
+			hovered ? Palette.Text : Palette.TextMuted,
 			UiColor.Transparent,
 			0f,
 			Metrics.SmallCornerRadius,
-			new UiThickness(7f, 3f));
+			new UiThickness(9f, 3f));
 	}
 
 	public UiStyle GetPopupStyle()
@@ -195,12 +336,64 @@ public sealed class UiTheme
 	public UiStyle GetToolbarStyle()
 	{
 		return new UiStyle(
-			Palette.Header,
+			Palette.Chrome,
 			Palette.Text,
-			Palette.Border,
+			Palette.ChromeBorder,
 			Metrics.BorderWidth,
 			0f,
 			new UiThickness(8f, 4f));
+	}
+
+	public UiStyle GetStatusBarStyle()
+	{
+		return new UiStyle(
+			Palette.Chrome,
+			Palette.TextMuted,
+			Palette.ChromeBorder,
+			Metrics.BorderWidth,
+			0f,
+			new UiThickness(10f, 0f));
+	}
+
+	/// <summary>
+	/// Gets the style of a floating control cluster over a viewport.
+	/// </summary>
+	public UiStyle GetOverlayStyle()
+	{
+		return new UiStyle(
+			Palette.Overlay,
+			Palette.Text,
+			Palette.OverlayBorder,
+			Metrics.BorderWidth,
+			Metrics.SmallCornerRadius,
+			new UiThickness(4f));
+	}
+
+	/// <summary>
+	/// Gets the style of a project browser tile.
+	/// </summary>
+	public UiStyle GetTileStyle(bool selected, bool hovered)
+	{
+		return new UiStyle(
+			selected
+				? Palette.Selection
+				: hovered ? Palette.TileHover : Palette.Tile,
+			selected ? Palette.Text : Palette.Text,
+			selected ? Palette.Accent : Palette.ChromeBorder,
+			Metrics.BorderWidth,
+			Metrics.SmallCornerRadius,
+			new UiThickness(4f));
+	}
+
+	public UiStyle GetScrollThumbStyle(bool hovered)
+	{
+		return new UiStyle(
+			hovered ? Palette.ScrollThumbHover : Palette.ScrollThumb,
+			Palette.Text,
+			UiColor.Transparent,
+			0f,
+			Metrics.CornerRadius,
+			default);
 	}
 
 	public UiStyle GetTooltipStyle()
@@ -212,5 +405,19 @@ public sealed class UiTheme
 			Metrics.BorderWidth,
 			Metrics.SmallCornerRadius,
 			new UiThickness(8f, 4f));
+	}
+
+	/// <summary>
+	/// Gets a filled badge style in a semantic tint.
+	/// </summary>
+	public UiStyle GetBadgeStyle(UiColor tint)
+	{
+		return new UiStyle(
+			tint.ScaleAlpha(0.18f),
+			tint,
+			tint.ScaleAlpha(0.45f),
+			Metrics.BorderWidth,
+			Metrics.SmallCornerRadius,
+			new UiThickness(6f, 1f));
 	}
 }

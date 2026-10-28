@@ -65,6 +65,16 @@ jobs:
       - name: Test
         run: dotnet test Volt.slnx -c Release --no-restore
 
+      - name: Test documentation tooling
+        run: python3 tools/tests/test-compare-editor-docs.py
+
+      # The editor guide's screenshots are captured headlessly and
+      # compared with a per-channel and pixel tolerance, so harmless
+      # platform antialiasing drift does not fail the build while a
+      # stale image does.
+      - name: Verify documentation screenshots
+        run: ./tools/capture-editor-docs.sh --check --no-build
+
       - name: Verify formatting
         run: dotnet format Volt.slnx --verify-no-changes --severity warn
 

@@ -5,6 +5,7 @@ using Volt.Graphics.Vulkan.Commands;
 using Volt.Graphics.Vulkan.Devices;
 using Volt.Graphics.Vulkan.Instance;
 using Volt.Graphics.Vulkan.Memory;
+using Volt.Graphics.Vulkan.Rendering;
 using Volt.Graphics.Vulkan.Swapchain;
 using Volt.Ui.Rendering;
 using Volt.Ui.Text;
@@ -41,6 +42,16 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 	private const ulong InitialVertexBytes = 2 * 1024 * 1024;
 	private const ulong InitialIndexBytes = 1024 * 1024;
 
+	/// <summary>
+	/// Largest number of sampled colour images one renderer accepts.
+	/// </summary>
+	/// <remarks>
+	/// A descriptor pool is sized when it is created, so the limit is
+	/// fixed rather than grown. Eight viewports is far more than the
+	/// editor uses and still leaves the pool tiny.
+	/// </remarks>
+	private const int MaximumRegisteredImages = 8;
+
 	private readonly VulkanInstance _instance;
 	private readonly VulkanLogicalDevice _device;
 	private readonly PhysicalDevice _physicalDevice;
@@ -52,6 +63,7 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 	private readonly VulkanBuffer[] _indexBuffers;
 	private readonly Dictionary<UiFont, int> _fontLayers = [];
 	private readonly Dictionary<UiFont, int> _uploadedRevisions = [];
+	private readonly Dictionary<int, ImageBinding> _images = [];
 	private UiVertex[] _clipSpaceVertices = [];
 
 	private RenderPass _renderPass;
@@ -169,6 +181,112 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 	public Extent2D Extent => _extent;
 
 	/// <summary>
+	/// Registers a sampled colour image under a caller-chosen
+	/// identifier.
+	/// </summary>
+	/// <param name="image">The image to sample.</param>
+	/// <param name="id">
+	/// The identifier that image draw commands and geometry batches use.
+	/// Identifiers start at one; zero is the renderer's own white texel.
+	/// </param>
+	/// <exception cref="ArgumentNullException">
+	/// <paramref name="image"/> is null.
+	/// </exception>
+	/// <exception cref="ArgumentOutOfRangeException">
+	/// <paramref name="id"/> is the white identifier.
+	/// </exception>
+	/// <exception cref="InvalidOperationException">
+	/// The identifier is already registered, or the renderer already
+	/// holds the maximum number of images.
+	/// </exception>
+	/// <remarks>
+	/// The image is not owned by the renderer and must outlive it. Its
+	/// layout is managed through <see cref="IVulkanSampledImage"/>: the
+	/// renderer records the transition to a sampleable layout at the
+	/// start of every pass that draws its geometry, so a producer only
+	/// has to leave the image in a layout the transition helper knows.
+	/// </remarks>
+	public void RegisterImage(IVulkanSampledImage image, UiTextureId id)
+	{
+		ThrowIfDisposed();
+		ArgumentNullException.ThrowIfNull(image);
+
+		if (id.IsWhite)
+		{
+			throw new ArgumentOutOfRangeException(
+				nameof(id),
+				"Image texture identifiers start at one.");
+		}
+
+		if (_images.ContainsKey(id.Value))
+		{
+			throw new InvalidOperationException(
+				$"Texture {id.Value} is already registered.");
+		}
+
+		if (_images.Count >= MaximumRegisteredImages)
+		{
+			throw new InvalidOperationException(
+				$"At most {MaximumRegisteredImages} image textures can " +
+				"be registered with one UI renderer.");
+		}
+
+		DescriptorSet set = AllocateDescriptorSet();
+		UpdateImageDescriptorSet(set, image);
+
+		_images.Add(id.Value, new ImageBinding(image, set));
+	}
+
+	/// <summary>
+	/// Re-points a registered image at a different view.
+	/// </summary>
+	/// <param name="id">The identifier to update.</param>
+	/// <param name="image">The image the identifier should sample.</param>
+	/// <returns>
+	/// True when the identifier was registered, false otherwise.
+	/// </returns>
+	/// <remarks>
+	/// The caller must establish that no submitted frame can still be
+	/// reading the descriptor set, because rewriting a set that is in
+	/// use is a validation error and a GPU race.
+	/// </remarks>
+	public bool UpdateImage(UiTextureId id, IVulkanSampledImage image)
+	{
+		ThrowIfDisposed();
+		ArgumentNullException.ThrowIfNull(image);
+
+		if (!_images.TryGetValue(id.Value, out ImageBinding binding))
+		{
+			return false;
+		}
+
+		UpdateImageDescriptorSet(binding.Set, image);
+
+		_images[id.Value] = new ImageBinding(image, binding.Set);
+
+		return true;
+	}
+
+	/// <summary>
+	/// Releases a registered image identifier.
+	/// </summary>
+	/// <param name="id">The identifier to release.</param>
+	/// <returns>
+	/// True when the identifier was registered, false otherwise.
+	/// </returns>
+	/// <remarks>
+	/// The identifier's descriptor set returns to the pool only when
+	/// the renderer is destroyed, so an identifier should be registered
+	/// once per renderer.
+	/// </remarks>
+	public bool UnregisterImage(UiTextureId id)
+	{
+		ThrowIfDisposed();
+
+		return _images.Remove(id.Value);
+	}
+
+	/// <summary>
 	/// Records a complete UI pass into an acquired swapchain image.
 	/// </summary>
 	/// <param name="frameSlot">
@@ -215,6 +333,14 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 				ToClipSpace(vertices, _extent));
 
 			_indexBuffers[slot].Write(indices);
+
+			// Registered images are transitioned before the render pass
+			// begins, because a pipeline barrier cannot be recorded
+			// inside one. The producer left them attachment-optimal.
+			foreach (ImageBinding binding in _images.Values)
+			{
+				binding.Image.EnsureSampled(commandBuffer);
+			}
 		}
 
 		if (HasNewGlyphs())
@@ -257,7 +383,10 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 				PipelineBindPoint.Graphics,
 				_pipeline);
 
-			DescriptorSet descriptorSet = _descriptorSet;
+			// The atlas set is bound once as the default; a batch that
+			// samples a registered image rebinds before it draws.
+			DescriptorSet boundSet = _descriptorSet;
+			DescriptorSet descriptorSet = boundSet;
 
 			_api.CmdBindDescriptorSets(
 				commandBuffer,
@@ -326,15 +455,36 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 					1,
 					&scissor);
 
-				float layer = ResolveLayer(batch.Texture);
+				ResolvedTexture resolved = ResolveTexture(batch.Texture);
+
+				if (resolved.Set.Handle != boundSet.Handle)
+				{
+					DescriptorSet rebind = resolved.Set;
+
+					_api.CmdBindDescriptorSets(
+						commandBuffer,
+						PipelineBindPoint.Graphics,
+						_pipelineLayout,
+						firstSet: 0,
+						descriptorSetCount: 1,
+						&rebind,
+						dynamicOffsetCount: 0,
+						pDynamicOffsets: null);
+
+					boundSet = resolved.Set;
+				}
+
+				UiPushConstants constants = new(
+					resolved.Layer,
+					resolved.ImageMode);
 
 				_api.CmdPushConstants(
 					commandBuffer,
 					_pipelineLayout,
 					PushConstantStages,
 					0,
-					sizeof(float),
-					&layer);
+					PushConstantBytes,
+					&constants);
 
 				_api.CmdDrawIndexed(
 					commandBuffer,
@@ -585,16 +735,19 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 
 	private DescriptorPool CreateDescriptorPool()
 	{
+		// One set for the font atlas plus one per registerable image.
+		uint setCount = checked((uint)(1 + MaximumRegisteredImages));
+
 		DescriptorPoolSize size = new()
 		{
 			Type = DescriptorType.CombinedImageSampler,
-			DescriptorCount = 1
+			DescriptorCount = setCount
 		};
 
 		DescriptorPoolCreateInfo description = new()
 		{
 			SType = StructureType.DescriptorPoolCreateInfo,
-			MaxSets = 1,
+			MaxSets = setCount,
 			PoolSizeCount = 1,
 			PPoolSizes = &size
 		};
@@ -730,17 +883,20 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 	}
 
 	/// <summary>
-	/// Stage that reads the UI push constant.
+	/// Stages that read the UI push constants.
 	/// </summary>
 	/// <remarks>
-	/// `ui.vert` reads the atlas layer through a push constant and
-	/// `ui.frag` reads none, so the pipeline layout range and every
-	/// push must name the vertex stage. Naming the fragment stage
-	/// instead makes pipeline creation invalid and leaves the vertex
-	/// shader reading undefined data.
+	/// `ui.vert` reads the atlas layer and forwards both values, and
+	/// `ui.frag` reads the image-mode flag, so the pipeline layout range
+	/// and every push must name both stages.
 	/// </remarks>
 	private const ShaderStageFlags PushConstantStages =
-		ShaderStageFlags.VertexBit;
+		ShaderStageFlags.VertexBit | ShaderStageFlags.FragmentBit;
+
+	/// <summary>
+	/// Push-constant size: the atlas layer and the image-mode flag.
+	/// </summary>
+	private const uint PushConstantBytes = 2 * sizeof(float);
 
 	private PipelineLayout CreatePipelineLayout()
 	{
@@ -748,7 +904,7 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		{
 			StageFlags = PushConstantStages,
 			Offset = 0,
-			Size = sizeof(float)
+			Size = PushConstantBytes
 		};
 
 		DescriptorSetLayout layout = _descriptorSetLayout;
@@ -1271,6 +1427,63 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		return _clipSpaceVertices.AsSpan(0, vertices.Length);
 	}
 
+	/// <summary>
+	/// Pushes one batch's texture selection: the atlas layer, the
+	/// image-mode flag, and the descriptor set that provides it.
+	/// </summary>
+	/// <remarks>
+	/// A batch that names an unregistered image identifier samples the
+	/// atlas white texel instead, which draws the vertex colour rather
+	/// than nothing. That keeps a viewport visible with a placeholder
+	/// fill while its target is being created or after it is released.
+	/// </remarks>
+	private ResolvedTexture ResolveTexture(UiTextureKey texture)
+	{
+		if (texture.Kind == UiTextureKind.Image &&
+			_images.TryGetValue(texture.ImageId, out ImageBinding binding))
+		{
+			return new ResolvedTexture(
+				binding.Set,
+				Layer: 0f,
+				ImageMode: 1f);
+		}
+
+		return new ResolvedTexture(
+			_descriptorSet,
+			ResolveLayer(texture),
+			ImageMode: 0f);
+	}
+
+	private void UpdateImageDescriptorSet(
+		DescriptorSet set,
+		IVulkanSampledImage image)
+	{
+		DescriptorImageInfo info = new()
+		{
+			Sampler = _sampler,
+			ImageView = image.View,
+			ImageLayout = ImageLayout.ShaderReadOnlyOptimal
+		};
+
+		WriteDescriptorSet write = new()
+		{
+			SType = StructureType.WriteDescriptorSet,
+			DstSet = set,
+			DstBinding = 0,
+			DstArrayElement = 0,
+			DescriptorCount = 1,
+			DescriptorType = DescriptorType.CombinedImageSampler,
+			PImageInfo = &info
+		};
+
+		_api.UpdateDescriptorSets(
+			_device.Handle,
+			1,
+			&write,
+			0,
+			null);
+	}
+
 	private float ResolveLayer(UiTextureKey texture)
 	{
 		if (texture.Kind == UiTextureKind.Font &&
@@ -1317,6 +1530,38 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 			_indexBuffers[slot] = CreateBuffer(
 				Math.Max(InitialIndexBytes, indexBytes * 2),
 				BufferUsageFlags.IndexBufferBit);
+		}
+	}
+
+	/// <summary>
+	/// One registered image and the descriptor set that samples it.
+	/// </summary>
+	private readonly record struct ImageBinding(
+		IVulkanSampledImage Image,
+		DescriptorSet Set);
+
+	/// <summary>
+	/// One batch's resolved texture binding.
+	/// </summary>
+	private readonly record struct ResolvedTexture(
+		DescriptorSet Set,
+		float Layer,
+		float ImageMode);
+
+	/// <summary>
+	/// One draw's push constants, in the order the shaders declare
+	/// them.
+	/// </summary>
+	[StructLayout(LayoutKind.Sequential)]
+	private readonly struct UiPushConstants
+	{
+		public readonly float Layer;
+		public readonly float ImageMode;
+
+		public UiPushConstants(float layer, float imageMode)
+		{
+			Layer = layer;
+			ImageMode = imageMode;
 		}
 	}
 

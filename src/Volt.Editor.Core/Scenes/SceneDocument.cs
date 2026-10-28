@@ -71,11 +71,20 @@ public sealed class SceneDocument
 
 	public SceneEntity CreateEntity(
 		string name,
-		Guid? parentId = null)
+		Guid? parentId = null,
+		Guid? id = null)
 	{
 		ValidateParentForNewEntity(parentId);
 
-		SceneEntity entity = new(Guid.NewGuid(), name);
+		Guid identity = id ?? Guid.NewGuid();
+
+		if (_byId.ContainsKey(identity))
+		{
+			throw new InvalidOperationException(
+				$"The scene already contains entity '{identity}'.");
+		}
+
+		SceneEntity entity = new(identity, name);
 		entity.ParentId = parentId;
 		Insert(entity, _entities.Count);
 		Changed?.Invoke(this, new SceneChange(

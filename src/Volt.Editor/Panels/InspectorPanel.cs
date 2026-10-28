@@ -2,6 +2,8 @@ using System.Numerics;
 using Volt.Editor.Core.Scenes;
 using Volt.Ui;
 using Volt.Ui.Layout;
+using Volt.Ui.Rendering;
+using Volt.Ui.Styling;
 using Volt.Ui.Widgets;
 using Volt.Ui.Widgets.Properties;
 
@@ -16,7 +18,9 @@ public sealed class InspectorPanel : Panel
 	private readonly TextField _name;
 	private readonly PropertyGrid _grid;
 	private readonly Dropdown _componentTypes;
-	private readonly Label _empty;
+	private readonly EmptyStateView _empty;
+	private readonly IconView _entityIcon;
+	private readonly Label _entitySubtitle;
 
 	private Guid? _boundEntityId;
 	private string _componentSignature = string.Empty;
@@ -35,11 +39,6 @@ public sealed class InspectorPanel : Panel
 			Spacing = 4f
 		};
 
-		Label nameLabel = new("Name")
-		{
-			Font = Context?.Theme.Fonts.Small
-		};
-
 		_name = new TextField
 		{
 			Height = UiLength.Points(26f)
@@ -47,8 +46,32 @@ public sealed class InspectorPanel : Panel
 
 		_name.EditingEnded += OnNameCommitted;
 
-		_stack.Add(nameLabel);
-		_stack.Add(_name);
+		_entityIcon = new IconView(UiIcon.Cube)
+		{
+			Width = UiLength.Points(22f),
+			Height = UiLength.Points(22f),
+			Color = Context?.Theme.Palette.Success,
+			VerticalAlignment = UiAlignment.Center
+		};
+
+		_entitySubtitle = new Label(string.Empty)
+		{
+			Font = Context?.Theme.Fonts.Small,
+			TextColor = Context?.Theme.Palette.TextMuted,
+			VerticalAlignment = UiAlignment.Center,
+			ClipToBounds = true
+		};
+
+		StackPanel nameRow = new(UiOrientation.Horizontal)
+		{
+			Spacing = 6f
+		};
+
+		nameRow.Add(_entityIcon);
+		nameRow.Add(_name);
+
+		_stack.Add(nameRow);
+		_stack.Add(_entitySubtitle);
 
 		_componentBar = new StackPanel
 		{
@@ -92,13 +115,10 @@ public sealed class InspectorPanel : Panel
 
 		_stack.Add(_grid);
 
-		_empty = new Label("Select an object to inspect it")
-		{
-			IsHitTestVisible = false,
-			HorizontalAlignment = UiAlignment.Center,
-			VerticalAlignment = UiAlignment.Center,
-			TextAlignment = Volt.Ui.Text.UiTextAlignment.Center
-		};
+		_empty = new EmptyStateView(
+			UiIcon.Inspector,
+			"Nothing selected",
+			"Select an object in the Hierarchy or Scene view to edit its components.");
 
 		Add(_stack);
 		Add(_empty);
@@ -155,6 +175,10 @@ public sealed class InspectorPanel : Panel
 			_name.Text = entity.Name;
 		}
 
+		// A box selection changes how many objects are selected without
+		// changing the object being edited.
+		UpdateSubtitle(entity);
+
 		_grid.RefreshValues();
 	}
 
@@ -191,10 +215,40 @@ public sealed class InspectorPanel : Panel
 
 		_name.Text = entity.Name;
 
+		UiPalette palette = Context?.Theme.Palette ??
+			UiTheme.CreateDark().Palette;
+
+		_entityIcon.Icon = EditorIcons.ForEntity(entity);
+		_entityIcon.Color = EditorIcons.EntityColor(entity, palette);
+		UpdateSubtitle(entity);
+
 		RebuildComponentBar(entity);
 		_grid.SetGroups(BuildGroups(entity));
 
 		_updating = false;
+	}
+
+	/// <summary>
+	/// Updates the line under the name: how many objects are selected,
+	/// what a transform edit reaches, and what this one is made of.
+	/// </summary>
+	/// <remarks>
+	/// The values in the grid are the active object's, but a transform
+	/// edit applies to the whole selection, so the line says so rather
+	/// than leaving the reach to guesswork.
+	/// </remarks>
+	private void UpdateSubtitle(SceneEntity entity)
+	{
+		int selectedCount = _session.Selection.Count;
+
+		string selected = selectedCount > 1
+			? $"{selectedCount} selected  ·  edits apply to all  ·  "
+			: string.Empty;
+
+		_entitySubtitle.Text =
+			$"{selected}{entity.Components.Count} component" +
+			$"{(entity.Components.Count == 1 ? string.Empty : "s")}" +
+			$"  ·  {entity.Id.ToString()[..8]}";
 	}
 
 	private void RebuildComponentBar(SceneEntity entity)
@@ -219,14 +273,18 @@ public sealed class InspectorPanel : Panel
 			{
 				FlexGrow = 1f,
 				VerticalAlignment = UiAlignment.Center,
-				TooltipText = component.TypeId
+				TooltipText = component.TypeId,
+				Font = Context?.Theme.Fonts.Small
 			};
 
-			Button remove = new("x")
+			IconButton remove = new(
+				UiIcon.Close,
+				$"Remove {component.DisplayName}")
 			{
-				MinWidth = 24f,
-				MinHeight = 20f,
-				TooltipText = $"Remove {component.DisplayName}"
+				Width = UiLength.Points(20f),
+				Height = UiLength.Points(20f),
+				MinWidth = 20f,
+				MinHeight = 20f
 			};
 
 			AuthoredComponent captured = component;
@@ -274,7 +332,10 @@ public sealed class InspectorPanel : Panel
 					transform.Scale = value))
 		];
 
-		groups.Add(new UiPropertyGroup("Transform", transformProperties));
+		groups.Add(new UiPropertyGroup("Transform", transformProperties)
+		{
+			Icon = UiIcon.Move
+		});
 
 		foreach (AuthoredComponent component in entity.Components)
 		{
@@ -319,7 +380,10 @@ public sealed class InspectorPanel : Panel
 
 			groups.Add(new UiPropertyGroup(
 				component.DisplayName,
-				properties));
+				properties)
+			{
+				Icon = EditorIcons.ForComponent(component.TypeId)
+			});
 		}
 
 		groups.Add(new UiPropertyGroup(
@@ -331,7 +395,10 @@ public sealed class InspectorPanel : Panel
 					() => entity.ParentId is Guid parent
 						? _session.Scene?.Find(parent)?.Name ?? parent.ToString()
 						: "None")
-			]));
+			])
+		{
+			Icon = UiIcon.Info
+		});
 
 		return groups;
 	}
@@ -453,7 +520,9 @@ public sealed class InspectorPanel : Panel
 
 			if (!next.Equals(entity.Transform))
 			{
-				_session.SetTransform(entity.Id, next);
+				// The rest of the selection follows the edited object,
+				// so a multi-object edit is still one undo step.
+				_session.SetSelectionTransform(entity.Id, next);
 			}
 		}
 

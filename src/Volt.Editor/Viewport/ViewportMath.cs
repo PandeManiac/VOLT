@@ -1,90 +1,44 @@
 using System.Numerics;
 using Volt.Editor.Core.Scenes;
 using Volt.Ui;
+using Volt.Ui.Rendering;
 
 namespace Volt.Editor.Viewport;
 
 /// <summary>
-/// An orbit camera used by the scene authoring preview.
+/// Projection, picking, and authoring math shared by the viewports.
 /// </summary>
-internal sealed class OrbitCamera
-{
-	private Vector3 _target = Vector3.Zero;
-	private float _yaw = 45f;
-	private float _pitch = -24f;
-	private float _distance = 14f;
-
-	public Vector3 Target => _target;
-
-	public float Distance => _distance;
-
-	public Vector3 Position
-	{
-		get
-		{
-			float yaw = _yaw * (MathF.PI / 180f);
-			float pitch = _pitch * (MathF.PI / 180f);
-			float horizontal = MathF.Cos(pitch) * _distance;
-			float vertical = MathF.Sin(-pitch) * _distance;
-
-			return _target + new Vector3(
-				MathF.Sin(yaw) * horizontal,
-				vertical,
-				MathF.Cos(yaw) * horizontal);
-		}
-	}
-
-	public void Orbit(float deltaX, float deltaY)
-	{
-		_yaw += deltaX * 0.3f;
-		_pitch = Math.Clamp(_pitch - (deltaY * 0.3f), -85f, 85f);
-	}
-
-	public void Zoom(float wheel)
-	{
-		_distance = Math.Clamp(
-			_distance * MathF.Pow(0.9f, wheel),
-			1.5f,
-			150f);
-	}
-
-	public void Focus(Vector3 target)
-	{
-		_target = target;
-	}
-
-	public Vector3 Forward => Vector3.Normalize(_target - Position);
-
-	public Vector3 Right => Vector3.Normalize(
-		Vector3.Cross(Forward, Vector3.UnitY));
-
-	public Vector3 Up => Vector3.Normalize(
-		Vector3.Cross(Right, Forward));
-
-	public Matrix4x4 CreateViewProjection(UiRect bounds)
-	{
-		Matrix4x4 view = Matrix4x4.CreateLookAt(
-			Position,
-			_target,
-			Vector3.UnitY);
-
-		float aspect = bounds.Width > 0f && bounds.Height > 0f
-			? bounds.Width / bounds.Height
-			: 1f;
-
-		Matrix4x4 projection =
-			Matrix4x4.CreatePerspectiveFieldOfView(
-				MathF.PI / 3f,
-				MathF.Max(0.01f, aspect),
-				0.05f,
-				1000f);
-
-		return view * projection;
-	}
-}
-
+/// <remarks>
+/// Everything here is pure math over value types, so viewport
+/// behaviour can be tested without a window, a GPU, or a widget tree.
+/// Matrices follow the engine convention: right-handed, +Y up, -Z
+/// forward, with row-vector composition
+/// (<c>scale * rotation * translation</c>).
+/// </remarks>
 internal static class ViewportMath
 {
+	/// <summary>
+	/// Width of one gizmo handle in pixels, measured from the object's
+	/// origin. It is deliberately generous: the handles are drawn 1-2
+	/// pixels wide, so the pick test has to be more forgiving than the
+	/// drawing.
+	/// </summary>
+	public const float GizmoPickTolerancePixels = 8f;
+
+	/// <summary>
+	/// Projects a world point into viewport pixels.
+	/// </summary>
+	/// <param name="viewProjection">
+	/// A view-projection built with <c>yDown: false</c>, which is what
+	/// this mapping assumes.
+	/// </param>
+	/// <param name="world">The world-space point.</param>
+	/// <param name="bounds">The viewport rectangle in UI units.</param>
+	/// <param name="screen">Receives the point in UI units.</param>
+	/// <returns>
+	/// False when the point is behind the camera or far outside the
+	/// viewport.
+	/// </returns>
 	public static bool TryProject(
 		in Matrix4x4 viewProjection,
 		Vector3 world,
@@ -117,6 +71,315 @@ internal static class ViewportMath
 		return true;
 	}
 
+	/// <summary>
+	/// Builds a world-space ray through a viewport pixel.
+	/// </summary>
+	/// <param name="viewProjection">
+	/// A view-projection built with <c>yDown: false</c>.
+	/// </param>
+	/// <param name="bounds">The viewport rectangle in UI units.</param>
+	/// <param name="point">The pointer position in UI units.</param>
+	/// <param name="origin">Receives the ray origin on the near plane.</param>
+	/// <param name="direction">Receives the unit ray direction.</param>
+	/// <returns>False when the matrices are not invertible.</returns>
+	public static bool TryCreateRay(
+		in Matrix4x4 viewProjection,
+		UiRect bounds,
+		UiPoint point,
+		out Vector3 origin,
+		out Vector3 direction)
+	{
+		origin = default;
+		direction = default;
+
+		if (bounds.Width <= 0f || bounds.Height <= 0f)
+		{
+			return false;
+		}
+
+		if (!Matrix4x4.Invert(viewProjection, out Matrix4x4 inverse))
+		{
+			return false;
+		}
+
+		float ndcX = (((point.X - bounds.X) / bounds.Width) * 2f) - 1f;
+		float ndcY = 1f - (((point.Y - bounds.Y) / bounds.Height) * 2f);
+
+		Vector4 near = Vector4.Transform(
+			new Vector4(ndcX, ndcY, 0f, 1f),
+			inverse);
+
+		Vector4 far = Vector4.Transform(
+			new Vector4(ndcX, ndcY, 1f, 1f),
+			inverse);
+
+		if (near.W == 0f || far.W == 0f ||
+			!float.IsFinite(near.W) || !float.IsFinite(far.W))
+		{
+			return false;
+		}
+
+		Vector3 nearPoint = new(near.X, near.Y, near.Z);
+		Vector3 farPoint = new(far.X, far.Y, far.Z);
+
+		nearPoint /= near.W;
+		farPoint /= far.W;
+
+		Vector3 delta = farPoint - nearPoint;
+
+		if (delta.LengthSquared() < 1e-12f)
+		{
+			return false;
+		}
+
+		origin = nearPoint;
+		direction = Vector3.Normalize(delta);
+
+		return true;
+	}
+
+	/// <summary>
+	/// Tests a ray against an oriented box and reports the nearest
+	/// front hit.
+	/// </summary>
+	/// <param name="world">The box's world transform.</param>
+	/// <param name="center">The box centre in local space.</param>
+	/// <param name="halfExtent">The box half extent in local space.</param>
+	/// <param name="rayOrigin">The ray origin in world space.</param>
+	/// <param name="rayDirection">The unit ray direction.</param>
+	/// <param name="distance">
+	/// Receives the distance from the ray origin to the hit point.
+	/// </param>
+	/// <returns>False when the ray misses the box.</returns>
+	/// <remarks>
+	/// The ray is transformed into the box's local space, which makes
+	/// the test exact for any rotation and any non-degenerate scale,
+	/// and the hit point is transformed back so the reported distance
+	/// is measured in world units and can be compared between objects.
+	/// </remarks>
+	public static bool TryIntersectBox(
+		in Matrix4x4 world,
+		Vector3 center,
+		Vector3 halfExtent,
+		Vector3 rayOrigin,
+		Vector3 rayDirection,
+		out float distance)
+	{
+		distance = 0f;
+
+		if (!Matrix4x4.Invert(world, out Matrix4x4 inverse))
+		{
+			return false;
+		}
+
+		Vector3 localOrigin = Vector3.Transform(rayOrigin, inverse);
+		Vector3 localDirection = Vector3.TransformNormal(rayDirection, inverse);
+
+		if (localDirection.LengthSquared() < 1e-12f)
+		{
+			return false;
+		}
+
+		Vector3 minimum = center - halfExtent;
+		Vector3 maximum = center + halfExtent;
+
+		float near = float.NegativeInfinity;
+		float far = float.PositiveInfinity;
+
+		for (int axis = 0; axis < 3; axis++)
+		{
+			float origin = Component(localOrigin, axis);
+			float direction = Component(localDirection, axis);
+			float low = Component(minimum, axis);
+			float high = Component(maximum, axis);
+
+			if (MathF.Abs(direction) < 1e-9f)
+			{
+				// The ray stays in this slab's span; outside it there
+				// is no intersection at all.
+				if (origin < low || origin > high)
+				{
+					return false;
+				}
+
+				continue;
+			}
+
+			float inverseDirection = 1f / direction;
+
+			float first = (low - origin) * inverseDirection;
+			float second = (high - origin) * inverseDirection;
+
+			if (first > second)
+			{
+				(first, second) = (second, first);
+			}
+
+			near = MathF.Max(near, first);
+			far = MathF.Min(far, second);
+
+			if (near > far)
+			{
+				return false;
+			}
+		}
+
+		// A hit behind the ray origin is not visible; a ray that
+		// starts inside the box reports the exit as its first surface.
+		float localDistance = near >= 0f ? near : far;
+
+		if (localDistance < 0f)
+		{
+			return false;
+		}
+
+		Vector3 localHit = localOrigin + (localDirection * localDistance);
+		Vector3 worldHit = Vector3.Transform(localHit, world);
+
+		distance = Vector3.Distance(rayOrigin, worldHit);
+
+		return true;
+	}
+
+	/// <summary>
+	/// Projects a pointer onto an axis line in world space.
+	/// </summary>
+	/// <param name="rayOrigin">The ray origin in world space.</param>
+	/// <param name="rayDirection">The unit ray direction.</param>
+	/// <param name="cameraPosition">
+	/// The camera position, used to choose a plane that faces it.
+	/// </param>
+	/// <param name="axisOrigin">A point on the axis.</param>
+	/// <param name="axisDirection">The unit axis direction.</param>
+	/// <param name="distance">
+	/// Receives the signed distance along the axis from
+	/// <paramref name="axisOrigin"/> to the projected point.
+	/// </param>
+	/// <returns>
+	/// False when the axis is nearly parallel to the view direction, in
+	/// which case the projection would be unstable.
+	/// </returns>
+	/// <remarks>
+	/// This is the standard constrained-drag solve: the pointer ray is
+	/// intersected with the plane that contains the axis and faces the
+	/// camera as squarely as possible, and the hit is projected onto the
+	/// axis. Dragging therefore follows the pointer exactly, and an axis
+	/// pointing almost straight at the camera is rejected instead of
+	/// producing a wild jump.
+	/// </remarks>
+	public static bool TryProjectOntoAxis(
+		Vector3 rayOrigin,
+		Vector3 rayDirection,
+		Vector3 cameraPosition,
+		Vector3 axisOrigin,
+		Vector3 axisDirection,
+		out float distance)
+	{
+		distance = 0f;
+
+		if (axisDirection.LengthSquared() < 1e-9f)
+		{
+			return false;
+		}
+
+		Vector3 axis = Vector3.Normalize(axisDirection);
+		Vector3 toCamera = cameraPosition - axisOrigin;
+		Vector3 planar = toCamera - (axis * Vector3.Dot(toCamera, axis));
+
+		if (planar.LengthSquared() < 1e-6f)
+		{
+			return false;
+		}
+
+		Vector3 normal = Vector3.Normalize(planar);
+
+		float denominator = Vector3.Dot(rayDirection, normal);
+
+		if (MathF.Abs(denominator) < 1e-4f)
+		{
+			return false;
+		}
+
+		float t = Vector3.Dot(axisOrigin - rayOrigin, normal) / denominator;
+
+		if (!float.IsFinite(t))
+		{
+			return false;
+		}
+
+		Vector3 hit = rayOrigin + (rayDirection * t);
+
+		distance = Vector3.Dot(hit - axisOrigin, axis);
+
+		return float.IsFinite(distance);
+	}
+
+	/// <summary>
+	/// Measures the distance from a point to a line segment in screen
+	/// space.
+	/// </summary>
+	public static float DistanceToSegment(
+		UiPoint point,
+		UiPoint start,
+		UiPoint end)
+	{
+		float dx = end.X - start.X;
+		float dy = end.Y - start.Y;
+
+		float lengthSquared = (dx * dx) + (dy * dy);
+
+		if (lengthSquared < 1e-6f)
+		{
+			return Distance(point, start);
+		}
+
+		float t = (
+			((point.X - start.X) * dx) +
+			((point.Y - start.Y) * dy)) / lengthSquared;
+
+		t = Math.Clamp(t, 0f, 1f);
+
+		UiPoint closest = new(
+			start.X + (dx * t),
+			start.Y + (dy * t));
+
+		return Distance(point, closest);
+	}
+
+	/// <summary>
+	/// Computes how many world units one vertical pixel covers at a
+	/// given distance from the camera.
+	/// </summary>
+	/// <param name="verticalFieldOfView">The field of view in radians.</param>
+	/// <param name="viewportHeightPixels">The viewport height in pixels.</param>
+	/// <param name="distance">The distance from the camera.</param>
+	/// <remarks>
+	/// Gizmos use this to keep a constant on-screen size, which is what
+	/// makes their handles reachable at any zoom level.
+	/// </remarks>
+	public static float WorldPerPixel(
+		float verticalFieldOfView,
+		float viewportHeightPixels,
+		float distance)
+	{
+		if (!float.IsFinite(distance) || distance <= 0f ||
+			viewportHeightPixels <= 0f)
+		{
+			return 0f;
+		}
+
+		float halfHeight = MathF.Tan(verticalFieldOfView * 0.5f) * distance;
+
+		return (halfHeight * 2f) / viewportHeightPixels;
+	}
+
+	/// <summary>
+	/// Builds every authored entity's world matrix in hierarchy order.
+	/// </summary>
+	/// <remarks>
+	/// A child inherits its parent's transform, and the order comes from
+	/// the document so a parent is always resolved before its children.
+	/// </remarks>
 	public static Dictionary<Guid, Matrix4x4> BuildWorldMatrices(
 		SceneDocument scene)
 	{
@@ -125,6 +388,7 @@ internal static class ViewportMath
 		foreach (SceneEntity entity in scene.BuildHierarchyOrder())
 		{
 			Matrix4x4 local = CreateLocalMatrix(entity.Transform);
+
 			matrices[entity.Id] = entity.ParentId is Guid parentId &&
 				matrices.TryGetValue(parentId, out Matrix4x4 parent)
 					? local * parent
@@ -134,6 +398,9 @@ internal static class ViewportMath
 		return matrices;
 	}
 
+	/// <summary>
+	/// Builds one local transform matrix.
+	/// </summary>
 	public static Matrix4x4 CreateLocalMatrix(TransformData transform)
 	{
 		return Matrix4x4.CreateScale(transform.Scale) *
@@ -141,40 +408,61 @@ internal static class ViewportMath
 			Matrix4x4.CreateTranslation(transform.Position);
 	}
 
-	public static void DrawWireCube(
-		Volt.Ui.Rendering.UiDrawList drawList,
-		Matrix4x4 world,
+	/// <summary>
+	/// Extracts one component of a vector by index.
+	/// </summary>
+	public static float Component(Vector3 value, int axis)
+	{
+		return axis switch
+		{
+			0 => value.X,
+			1 => value.Y,
+			2 => value.Z,
+			_ => throw new ArgumentOutOfRangeException(nameof(axis))
+		};
+	}
+
+	/// <summary>
+	/// Draws a wire box for one entity's bounds.
+	/// </summary>
+	/// <param name="drawList">The draw list to append to.</param>
+	/// <param name="world">The entity's world transform.</param>
+	/// <param name="viewProjection">The overlay view-projection.</param>
+	/// <param name="bounds">The viewport rectangle.</param>
+	/// <param name="color">The line colour.</param>
+	/// <param name="center">The box centre in local space.</param>
+	/// <param name="halfExtent">The box half extent in local space.</param>
+	/// <param name="thickness">The line thickness in pixels.</param>
+	public static void DrawWireBox(
+		UiDrawList drawList,
+		in Matrix4x4 world,
 		in Matrix4x4 viewProjection,
 		UiRect bounds,
-		Volt.Ui.UiColor color,
-		float size = 1f)
+		UiColor color,
+		Vector3 center,
+		Vector3 halfExtent,
+		float thickness)
 	{
-		const int VertexCount = 8;
-
-		Span<Vector3> local = stackalloc Vector3[VertexCount]
+		Span<Vector3> local = stackalloc Vector3[8]
 		{
-			new(-0.5f, -0.5f, -0.5f),
-			new(0.5f, -0.5f, -0.5f),
-			new(0.5f, 0.5f, -0.5f),
-			new(-0.5f, 0.5f, -0.5f),
-			new(-0.5f, -0.5f, 0.5f),
-			new(0.5f, -0.5f, 0.5f),
-			new(0.5f, 0.5f, 0.5f),
-			new(-0.5f, 0.5f, 0.5f)
+			center + new Vector3(-halfExtent.X, -halfExtent.Y, -halfExtent.Z),
+			center + new Vector3(halfExtent.X, -halfExtent.Y, -halfExtent.Z),
+			center + new Vector3(halfExtent.X, halfExtent.Y, -halfExtent.Z),
+			center + new Vector3(-halfExtent.X, halfExtent.Y, -halfExtent.Z),
+			center + new Vector3(-halfExtent.X, -halfExtent.Y, halfExtent.Z),
+			center + new Vector3(halfExtent.X, -halfExtent.Y, halfExtent.Z),
+			center + new Vector3(halfExtent.X, halfExtent.Y, halfExtent.Z),
+			center + new Vector3(-halfExtent.X, halfExtent.Y, halfExtent.Z)
 		};
 
-		Span<UiPoint> projected = stackalloc UiPoint[VertexCount];
-		Span<bool> visible = stackalloc bool[VertexCount];
+		Span<UiPoint> projected = stackalloc UiPoint[8];
+		Span<bool> visible = stackalloc bool[8];
 
-		for (int index = 0; index < VertexCount; index++)
+		for (int index = 0; index < 8; index++)
 		{
-			Vector3 worldPoint = Vector3.Transform(
-				local[index] * size,
-				world);
-
 			visible[index] = TryProject(
 				viewProjection,
-				worldPoint,
+				Vector3.Transform(local[index], world),
 				bounds,
 				out projected[index]);
 		}
@@ -199,8 +487,42 @@ internal static class ViewportMath
 			drawList.AddLine(
 				projected[from],
 				projected[to],
-				1.2f,
+				thickness,
 				color);
 		}
+	}
+
+	/// <summary>
+	/// Draws a wire box with the unit-primitive extent.
+	/// </summary>
+	/// <remarks>
+	/// Kept for callers that only know an entity's transform, such as
+	/// viewports without a resolved mesh.
+	/// </remarks>
+	public static void DrawWireCube(
+		UiDrawList drawList,
+		in Matrix4x4 world,
+		in Matrix4x4 viewProjection,
+		UiRect bounds,
+		UiColor color,
+		float size = 1f)
+	{
+		DrawWireBox(
+			drawList,
+			world,
+			viewProjection,
+			bounds,
+			color,
+			Vector3.Zero,
+			new Vector3(size * 0.5f),
+			1f);
+	}
+
+	private static float Distance(UiPoint first, UiPoint second)
+	{
+		float dx = first.X - second.X;
+		float dy = first.Y - second.Y;
+
+		return MathF.Sqrt((dx * dx) + (dy * dy));
 	}
 }

@@ -7,10 +7,12 @@ layout(location = 2) in vec4 inColor;
 layout(location = 0) out vec2 fragUv;
 layout(location = 1) out vec4 fragColor;
 layout(location = 2) flat out float fragLayer;
+layout(location = 3) flat out float fragImageMode;
 
 layout(push_constant) uniform PushConstants
 {
 	float layer;
+	float imageMode;
 } push;
 
 void main()
@@ -19,4 +21,5 @@ void main()
 	fragUv = inUv;
 	fragColor = inColor;
 	fragLayer = push.layer;
+	fragImageMode = push.imageMode;
 }

@@ -72,6 +72,73 @@ public sealed class DeleteEntityCommand : IEditorCommand
 	}
 }
 
+/// <summary>
+/// Copies an object, and everything under it, as one undoable step.
+/// </summary>
+/// <remarks>
+/// The copy is created on the first execute, so its new ids and names
+/// are what the scene produced. Undo removes that copy's subtree, and
+/// redo restores exactly the entities that were removed, keeping the
+/// ids stable across a redo.
+/// </remarks>
+public sealed class DuplicateEntityCommand : IEditorCommand
+{
+	private readonly SceneDocument _scene;
+	private readonly Guid _sourceId;
+	private RemovedEntityBatch _removed = RemovedEntityBatch.Empty;
+	private SceneEntity? _copy;
+
+	public DuplicateEntityCommand(SceneDocument scene, Guid sourceId)
+	{
+		ArgumentNullException.ThrowIfNull(scene);
+
+		SceneEntity source = scene.Find(sourceId) ??
+			throw new KeyNotFoundException(
+				$"No entity '{sourceId}' exists in the scene.");
+
+		_scene = scene;
+		_sourceId = sourceId;
+		Description = $"Duplicate {source.Name}";
+	}
+
+	public string Description { get; }
+
+	/// <summary>
+	/// Gets the object this command copies.
+	/// </summary>
+	public Guid SourceId => _sourceId;
+
+	/// <summary>
+	/// Gets the copy created by <see cref="Execute"/>.
+	/// </summary>
+	public SceneEntity? Copy => _copy;
+
+	public void Execute()
+	{
+		if (_copy is null)
+		{
+			_copy = _scene.DuplicateEntity(_sourceId);
+			return;
+		}
+
+		if (!_removed.IsEmpty)
+		{
+			_scene.RestoreRemoved(_removed);
+			_removed = RemovedEntityBatch.Empty;
+		}
+	}
+
+	public void Undo()
+	{
+		if (_copy is null || _scene.Find(_copy.Id) is null)
+		{
+			return;
+		}
+
+		_removed = _scene.RemoveEntity(_copy.Id);
+	}
+}
+
 public sealed class RenameEntityCommand : IEditorCommand
 {
 	private readonly SceneDocument _scene;

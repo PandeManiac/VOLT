@@ -41,6 +41,18 @@ public sealed class EditorSession : IDisposable
 
 	public event Action<EditorSession>? LogChanged;
 
+	/// <summary>
+	/// Raised when a setting the whole editor shares changed: the
+	/// active tool, the gizmo space, grid snapping, or the snap
+	/// increment.
+	/// </summary>
+	/// <remarks>
+	/// The toolbar and a viewport's floating chrome both edit these, so
+	/// every surface listens instead of assuming it is the only one the
+	/// user touches.
+	/// </remarks>
+	public event Action<EditorSession>? SettingsChanged;
+
 	public EditorProject? Project { get; private set; }
 
 	public SceneDocument? Scene { get; private set; }
@@ -57,13 +69,84 @@ public sealed class EditorSession : IDisposable
 
 	public Guid? ActiveEntityId { get; private set; }
 
-	public EditorTool Tool { get; set; } = EditorTool.Translate;
+	private EditorTool _tool = EditorTool.Translate;
+	private bool _localTransform = true;
+	private bool _gridSnapping;
+	private float _snapStep = 0.25f;
 
-	public bool LocalTransform { get; set; } = true;
+	public EditorTool Tool
+	{
+		get => _tool;
+		set
+		{
+			if (_tool == value)
+			{
+				return;
+			}
 
-	public bool GridSnapping { get; set; }
+			_tool = value;
+			SettingsChanged?.Invoke(this);
+		}
+	}
 
-	public float SnapStep { get; set; } = 0.25f;
+	public bool LocalTransform
+	{
+		get => _localTransform;
+		set
+		{
+			if (_localTransform == value)
+			{
+				return;
+			}
+
+			_localTransform = value;
+			SettingsChanged?.Invoke(this);
+		}
+	}
+
+	public bool GridSnapping
+	{
+		get => _gridSnapping;
+		set
+		{
+			if (_gridSnapping == value)
+			{
+				return;
+			}
+
+			_gridSnapping = value;
+			SettingsChanged?.Invoke(this);
+		}
+	}
+
+	/// <summary>
+	/// Gets or sets whether a viewport currently owns the camera keys.
+	/// </summary>
+	/// <remarks>
+	/// Tool shortcuts are suppressed while a viewport is navigating, so
+	/// flying the scene camera with W A S D cannot also switch tools.
+	/// The viewport sets this while its look button is held.
+	/// </remarks>
+	public bool ViewportNavigating { get; set; }
+
+	public float SnapStep
+	{
+		get => _snapStep;
+		set
+		{
+			float next = float.IsFinite(value)
+				? MathF.Max(0.001f, value)
+				: _snapStep;
+
+			if (MathF.Abs(next - _snapStep) < 1e-6f)
+			{
+				return;
+			}
+
+			_snapStep = next;
+			SettingsChanged?.Invoke(this);
+		}
+	}
 
 	public string Status { get; private set; } = "Ready";
 
@@ -304,18 +387,198 @@ public sealed class EditorSession : IDisposable
 		return true;
 	}
 
+	/// <summary>
+	/// Deletes every selected object as one undo step.
+	/// </summary>
+	/// <remarks>
+	/// A selected object that sits inside another selected object is
+	/// left to its parent: removing the parent already removes the
+	/// subtree, so only the roots of the selection carry a command.
+	/// </remarks>
+	/// <returns>The number of delete commands executed.</returns>
+	public int DeleteSelection()
+	{
+		if (Scene is not SceneDocument scene || _selection.Count == 0)
+		{
+			return 0;
+		}
+
+		List<SceneEntity> targets = [.. SceneSelection.Roots(scene, _selection)];
+
+		if (targets.Count == 0)
+		{
+			return 0;
+		}
+
+		List<IEditorCommand> commands = [];
+
+		foreach (SceneEntity entity in targets)
+		{
+			commands.Add(new DeleteEntityCommand(scene, entity.Id));
+		}
+
+		Undo.Execute(commands.Count == 1
+			? commands[0]
+			: new CompositeCommand(
+				$"Delete {commands.Count} objects",
+				commands));
+
+		ClearSelection();
+
+		SetStatus(commands.Count == 1
+			? $"Deleted {targets[0].Name}"
+			: $"Deleted {commands.Count} objects");
+
+		return commands.Count;
+	}
+
 	public SceneEntity? DuplicateActiveEntity()
 	{
-		if (Scene is null || ActiveEntityId is not Guid id)
+		if (Scene is not SceneDocument scene || ActiveEntity is not SceneEntity active)
 		{
 			return null;
 		}
 
-		SceneEntity copy = Scene.DuplicateEntity(id);
-		Select(copy.Id);
-		SetStatus($"Duplicated {copy.Name}");
+		IReadOnlyList<SceneEntity> copies = DuplicateEntities(scene, [active]);
 
-		return copy;
+		if (copies.Count == 0)
+		{
+			return null;
+		}
+
+		Select(copies[0].Id);
+		SetStatus($"Duplicated {copies[0].Name}");
+
+		return copies[0];
+	}
+
+	/// <summary>
+	/// Selects every object in the scene.
+	/// </summary>
+	/// <remarks>
+	/// The active object stays active when it is still part of the
+	/// scene, so a selection command does not move the inspector to an
+	/// unrelated object.
+	/// </remarks>
+	/// <returns>The number of objects selected.</returns>
+	public int SelectAll()
+	{
+		if (Scene is not SceneDocument scene)
+		{
+			return 0;
+		}
+
+		SelectMany(
+			scene.Entities.Select(entity => entity.Id),
+			ActiveEntityId);
+
+		SetStatus($"Selected {_selection.Count} objects");
+
+		return _selection.Count;
+	}
+
+	/// <summary>
+	/// Clears the selection, as the Select None command does.
+	/// </summary>
+	public void SelectNone()
+	{
+		ClearSelection();
+		SetStatus("Selection cleared");
+	}
+
+	/// <summary>
+	/// Inverts the selection: every unselected object becomes selected
+	/// and every selected one is dropped.
+	/// </summary>
+	/// <remarks>
+	/// The objects keep scene order, so the hierarchy, the inspector,
+	/// and any later group edit see the same list a Select All would.
+	/// </remarks>
+	/// <returns>The number of objects selected afterwards.</returns>
+	public int InvertSelection()
+	{
+		if (Scene is not SceneDocument scene)
+		{
+			return 0;
+		}
+
+		List<Guid> inverted = [.. scene.Entities
+			.Where(entity => !_selection.Contains(entity.Id))
+			.Select(entity => entity.Id)];
+
+		SelectMany(inverted, ActiveEntityId);
+
+		SetStatus($"Selected {_selection.Count} objects");
+
+		return _selection.Count;
+	}
+
+	/// <summary>
+	/// Duplicates every selected object as one undo step.
+	/// </summary>
+	/// <remarks>
+	/// A selected object that sits inside another selected object is
+	/// left to its parent: duplicating the parent already copies the
+	/// subtree. The copies become the selection, so a second duplicate
+	/// or a follow-up transform acts on what the developer just made.
+	/// </remarks>
+	/// <returns>The copies, in the order their sources were selected.</returns>
+	public IReadOnlyList<SceneEntity> DuplicateSelection()
+	{
+		if (Scene is not SceneDocument scene || _selection.Count == 0)
+		{
+			return [];
+		}
+
+		List<SceneEntity> roots = [.. SceneSelection.Roots(scene, _selection)];
+		IReadOnlyList<SceneEntity> copies = DuplicateEntities(scene, roots);
+
+		if (copies.Count == 0)
+		{
+			return copies;
+		}
+
+		// Copies come back in source order, so the copy of the active
+		// object is the one at the active source's position.
+		int activeIndex = roots.FindIndex(
+			source => source.Id == ActiveEntityId);
+
+		Guid? activeCopy = activeIndex >= 0
+			? copies[activeIndex].Id
+			: null;
+
+		SelectMany(copies.Select(copy => copy.Id), activeCopy);
+
+		SetStatus(copies.Count == 1
+			? $"Duplicated {copies[0].Name}"
+			: $"Duplicated {copies.Count} objects");
+
+		return copies;
+	}
+
+	private IReadOnlyList<SceneEntity> DuplicateEntities(
+		SceneDocument scene,
+		IReadOnlyList<SceneEntity> sources)
+	{
+		List<DuplicateEntityCommand> commands = [];
+
+		foreach (SceneEntity source in sources)
+		{
+			commands.Add(new DuplicateEntityCommand(scene, source.Id));
+		}
+
+		if (commands.Count == 0)
+		{
+			return [];
+		}
+
+		Undo.Execute(commands.Count == 1
+			? commands[0]
+			: new CompositeCommand(
+				$"Duplicate {commands.Count} objects",
+				commands));
+
+		return [.. commands.Select(command => command.Copy!)];
 	}
 
 	public void RenameActiveEntity(string name)
@@ -346,6 +609,57 @@ public sealed class EditorSession : IDisposable
 		SetStatus("Reparented entity");
 	}
 
+	/// <summary>
+	/// Re-parents several objects as one undo step.
+	/// </summary>
+	/// <remarks>
+	/// An object that would create a cycle, or that already has the
+	/// requested parent, is skipped rather than aborting the whole
+	/// move: dragging a mixed selection onto one of its own members
+	/// still moves the rest.
+	/// </remarks>
+	/// <param name="entityIds">The objects to move.</param>
+	/// <param name="parentId">The new parent, or null for the root.</param>
+	/// <returns>The number of objects re-parented.</returns>
+	public int ReparentEntities(
+		IEnumerable<Guid> entityIds,
+		Guid? parentId)
+	{
+		ArgumentNullException.ThrowIfNull(entityIds);
+
+		SceneDocument scene = RequireScene();
+		List<IEditorCommand> commands = [];
+
+		foreach (Guid id in entityIds)
+		{
+			if (scene.Find(id) is not SceneEntity entity ||
+				entity.ParentId == parentId ||
+				!scene.CanReparent(id, parentId))
+			{
+				continue;
+			}
+
+			commands.Add(new ReparentEntityCommand(scene, id, parentId));
+		}
+
+		if (commands.Count == 0)
+		{
+			return 0;
+		}
+
+		Undo.Execute(commands.Count == 1
+			? commands[0]
+			: new CompositeCommand(
+				$"Reparent {commands.Count} objects",
+				commands));
+
+		SetStatus(commands.Count == 1
+			? "Reparented object"
+			: $"Reparented {commands.Count} objects");
+
+		return commands.Count;
+	}
+
 	public void SetTransform(Guid entityId, TransformData transform)
 	{
 		SceneDocument scene = RequireScene();
@@ -358,16 +672,124 @@ public sealed class EditorSession : IDisposable
 	/// </summary>
 	public void CommitTransform(Guid entityId, TransformData before)
 	{
+		ArgumentNullException.ThrowIfNull(before);
+
 		SceneDocument scene = RequireScene();
-		SceneEntity entity = scene.Find(entityId) ??
+
+		if (scene.Find(entityId) is null)
+		{
 			throw new InvalidOperationException(
 				"The transformed entity no longer exists.");
+		}
 
-		Undo.Execute(new SetTransformCommand(
-			scene,
-			entityId,
-			entity.Transform,
-			before));
+		CommitTransforms(new Dictionary<Guid, TransformData>
+		{
+			[entityId] = before
+		});
+	}
+
+	/// <summary>
+	/// Commits a viewport gesture that previewed several objects at
+	/// once. The whole gesture is a single undo step.
+	/// </summary>
+	/// <param name="before">
+	/// Every transformed object's transform when the gesture began.
+	/// </param>
+	public void CommitTransforms(
+		IReadOnlyDictionary<Guid, TransformData> before)
+	{
+		ArgumentNullException.ThrowIfNull(before);
+
+		SceneDocument scene = RequireScene();
+		List<IEditorCommand> commands = [];
+
+		foreach (KeyValuePair<Guid, TransformData> entry in before)
+		{
+			ArgumentNullException.ThrowIfNull(entry.Value);
+
+			if (scene.Find(entry.Key) is not SceneEntity entity ||
+				entity.Transform.Equals(entry.Value))
+			{
+				continue;
+			}
+
+			commands.Add(new SetTransformCommand(
+				scene,
+				entry.Key,
+				entity.Transform,
+				entry.Value));
+		}
+
+		if (commands.Count == 0)
+		{
+			return;
+		}
+
+		Undo.Execute(commands.Count == 1
+			? commands[0]
+			: new CompositeCommand(
+				$"Transform {commands.Count} objects",
+				commands));
+	}
+
+	/// <summary>
+	/// Applies one object's new transform to the whole selection.
+	/// </summary>
+	/// <remarks>
+	/// The edit is replayed as a delta, so the other objects keep their
+	/// own placement instead of collapsing onto the edited one. An
+	/// object nested inside another selected object is left out: its
+	/// parent already carries it, and transforming both would move it
+	/// twice.
+	/// </remarks>
+	/// <param name="sourceId">The object the developer edited.</param>
+	/// <param name="transform">Its new authored transform.</param>
+	/// <returns>The number of objects the edit changed.</returns>
+	public int SetSelectionTransform(Guid sourceId, TransformData transform)
+	{
+		ArgumentNullException.ThrowIfNull(transform);
+
+		SceneDocument scene = RequireScene();
+		SceneEntity source = scene.Find(sourceId) ??
+			throw new InvalidOperationException(
+				"The edited entity no longer exists.");
+
+		TransformDelta delta = TransformDelta.Between(
+			source.Transform,
+			transform);
+
+		List<IEditorCommand> commands =
+		[
+			new SetTransformCommand(scene, sourceId, transform)
+		];
+
+		foreach (SceneEntity other in SceneSelection.Roots(scene, _selection))
+		{
+			if (other.Id == sourceId)
+			{
+				continue;
+			}
+
+			TransformData next = other.Transform.Clone();
+			delta.ApplyTo(next);
+
+			if (!next.Equals(other.Transform))
+			{
+				commands.Add(new SetTransformCommand(scene, other.Id, next));
+			}
+		}
+
+		if (commands.Count == 1)
+		{
+			Undo.Execute(commands[0]);
+			return 1;
+		}
+
+		Undo.Execute(new CompositeCommand(
+			$"Transform {commands.Count} objects",
+			commands));
+
+		return commands.Count;
 	}
 
 	public void SetComponentProperty(

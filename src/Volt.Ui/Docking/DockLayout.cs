@@ -97,6 +97,27 @@ public sealed class DockLayout
 		return layout;
 	}
 
+	/// <summary>
+	/// Restores the canonical editor arrangement and split ratios.
+	/// </summary>
+	/// <remarks>
+	/// Panel content widgets are not touched: this only rewrites the
+	/// layout model, so "Reset Layout" repairs a workspace without
+	/// discarding the state inside an open panel.
+	/// </remarks>
+	public void ResetToEditorDefault()
+	{
+		DockLayout canonical = CreateEditorDefault();
+		Root = canonical.Root;
+
+		foreach (DockPanel panel in _panels.Values)
+		{
+			panel.IsOpen = canonical.IsOpen(panel.Id);
+		}
+
+		Changed?.Invoke(this);
+	}
+
 	public DockTabsNode? FindTabs(string panelId)
 	{
 		ArgumentNullException.ThrowIfNull(panelId);

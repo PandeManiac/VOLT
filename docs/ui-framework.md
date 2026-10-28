@@ -184,6 +184,50 @@ popups, tooltips, color and vector fields, and a data-driven
 ECS components through ordinary public APIs and expose them as
 properties without making the UI framework depend on the ECS.
 
+## Styling, metrics, and icons
+
+`UiTheme` is palette plus metrics plus fonts, and every widget resolves
+its appearance from the theme in its `UiContext`. An application can
+replace any of the three without subclassing a widget.
+
+- `UiPalette` names surfaces by role — window background, chrome,
+panel, raised control, overlay, well, borders — and interaction states
+(hover, pressed, selection, focus ring) rather than by widget.
+- `UiMetrics` owns spacing, control heights, icon and tile sizes, and
+panel minimums, so the whole interface tightens or loosens in one
+place.
+- `UiFontSet` exposes role fonts (`Small`, `Body`, `Large`, `Heading`,
+`Title`, `PanelHeader`, `Mono`, `MonoSmall`) and separates the
+*display* scale — physical pixels per logical unit — from the
+*interface* scale, a reading preference. Fonts rasterize at the product
+of the two, so a 150% interface on a 1.5x display is sharp rather
+than resampled. `UiTheme.WithUiScale` scales metrics and rasterization
+together; logical measurements stay scale-invariant.
+
+`UiIconPainter` draws the `UiIcon` vocabulary with the primitives
+widgets already use: fills are scanline-converted polygons and
+outlines are polylines, so icons inherit clipping, batching, and theme
+tinting and allocate nothing per frame. The vocabulary covers what an
+editor needs — tools and transport, panels, asset kinds, diagnostics,
+and viewport display toggles such as `Grid`, `Snap`, `Local`/`World`,
+and `Frame`.
+
+Editor-grade controls built on those primitives:
+
+| Widget | Purpose |
+| --- | --- |
+| `IconButton` | Square icon-only action with hover, active, focus, and disabled states |
+| `ToolButton` | Icon plus caption, for named tools and labeled actions |
+| `IconView` | Sizes and tints one icon |
+| `IconTileView` | Asset tile with kind tint, selection, and activation |
+| `TileWrapPanel` | Fixed-size tiles laid into rows that wrap to the width |
+| `EmptyStateView` | Icon, title, and description for a panel with nothing to show |
+
+The property system is reusable too: `PropertyGrid` draws each group as
+a titled section header that can carry an icon, and `Vector3Field`
+labels its components with the conventional axis colors so a transform
+row reads at a glance.
+
 ## Docking
 
 Docking is layered on top of the widget system, not built into every
@@ -231,6 +275,37 @@ in use.
 A different backend only needs to consume `UiDrawList` or
 `UiGeometry`; neither contains API-specific types. The UI framework
 itself contains no Vulkan reference.
+
+## Headless rasterization
+
+`UiRasterizer.Render` draws a completed `UiDrawList` into a
+`UiRasterImage` on the CPU: rectangles, rounded rectangles, borders,
+lines, and glyph coverage all composite into RGBA pixels, honouring the
+same clips the GPU path uses. `UiRasterImage.EncodePng` and `SavePng`
+write the result with the runtime's own zlib stream, so screenshots need
+no image dependency. Width, height, and scanlines come from the draw
+list's surface, and the optional `scale` renders at another pixel
+density.
+
+Image commands carry a texture identifier, and `UiRasterizer.Render`
+accepts a texture map for those identifiers. Supplied textures are
+sampled bilinearly over the command's rectangle and UV sub-rectangle,
+with the command colour acting as a tint; an identifier that was not
+supplied draws the neutral placeholder so a draw list built for a GPU
+target still renders. The editor uses this to pass CPU-rendered scene
+and game images into the headless capture: `SoftwareSceneRenderer`
+implements the same viewport-renderer contract as the Vulkan renderer,
+clips meshes and the ground grid against the view frustum, depth-tests
+them, applies the scene's directional light, and supersamples before
+box-filtering down. The editor exposes the path as `--snapshot <file>`:
+it lays out the shell, simulates three frames, rasterizes 3D content and
+the draw list, and writes the PNG without a window or a GPU. Tests in
+`tests/Volt.Ui.Tests/Rendering/UiRasterizerTests.cs` cover geometry,
+clipping, text coverage, image sampling, scale, and the PNG container,
+`tests/Volt.Editor.Tests/SoftwareSceneRendererTests.cs` covers the CPU
+scene renderer and its viewport wiring, and
+`tests/Volt.Editor.Tests/EditorSnapshotTests.cs` covers a whole shell
+frame.
 
 ## Testing
 
@@ -291,9 +366,11 @@ What these numbers support, and what they do not:
 
 ## Current limitations
 
-- The editor's scene and game viewports draw grid, axes, entity
-  markers, and transform gizmos into Volt.Ui drawing commands. They do
-  not yet composite an offscreen 3D mesh render target.
+- The editor's scene and game viewports composite a rendered offscreen
+  target and then draw grid, selection outlines, entity labels, and
+  transform gizmos into Volt.Ui drawing commands on top of it. That
+  rendering is one depth-tested pass per viewport, with no shadows,
+  antialiasing, or post-processing.
 - Text shaping, bidirectional text, and IME candidate windows are
   documented above.
 - Icons are drawn procedurally (glyphs and rectangles); no icon font

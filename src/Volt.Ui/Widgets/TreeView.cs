@@ -22,12 +22,24 @@ public sealed class TreeView : Widget
 	private readonly Dictionary<TreeViewItem, int> _visibleIndices = [];
 	private readonly List<TreeViewItem> _selection = [];
 
+	/// <summary>
+	/// How far the pointer must travel before a press on a row becomes
+	/// a drag.
+	/// </summary>
+	private const float DragThresholdPixels = 4f;
+
 	private bool _flattenDirty = true;
 	private float _scrollOffset;
 	private float _maximumScroll;
 	private float _rowHeight;
 	private int _hoveredRow = -1;
 	private TreeViewItem? _selectionAnchor;
+	private TreeViewItem? _dragSource;
+	private UiPoint _dragStart;
+	private UiKeyModifiers _dragModifiers;
+	private bool _dragging;
+	private TreeViewItem? _dropTarget;
+	private bool _dropIntoRoot;
 
 	public TreeView()
 	{
@@ -41,6 +53,17 @@ public sealed class TreeView : Widget
 	public event Action<TreeView, TreeViewItem, UiPoint>? ContextMenuRequested;
 
 	public event Action<TreeView, TreeViewItem>? ItemActivated;
+
+	/// <summary>
+	/// Raised when a row is dropped after a drag.
+	/// </summary>
+	/// <remarks>
+	/// The target is the row under the pointer, or null when the drop
+	/// landed on the empty area below the rows, which means the root.
+	/// The dragged row's own subtree is never reported as a target: the
+	/// highlight and the drop are both suppressed for it.
+	/// </remarks>
+	public event Action<TreeView, TreeViewItem, TreeViewItem?>? ItemDropped;
 
 	public IReadOnlyList<TreeViewItem> Roots => _roots;
 
@@ -245,6 +268,20 @@ public sealed class TreeView : Widget
 					drawList.AddRect(row, theme.Palette.Hover);
 				}
 
+				if (_dragging &&
+					item == _dropTarget &&
+					IsValidDropTarget(item))
+				{
+					drawList.AddRect(
+						row,
+						theme.Palette.Selection.WithAlpha(0.55f));
+
+					drawList.AddBorder(
+						row,
+						theme.Palette.Accent,
+						1.5f);
+				}
+
 				float x = content.X + 4f + (item.Depth * 16f);
 				UiColor foreground = item.IsSelected
 					? theme.Palette.Accent
@@ -262,7 +299,28 @@ public sealed class TreeView : Widget
 
 				x += 14f;
 
-				if (item.IconColor is UiColor icon)
+				if (item.Icon != UiIcon.None)
+				{
+					float glyph = MathF.Min(14f, _rowHeight - 6f);
+
+					UiIconPainter.Draw(
+						drawList,
+						item.Icon,
+						new UiRect(
+							x,
+							y + ((_rowHeight - glyph) * 0.5f),
+							glyph,
+							glyph),
+						item.IconColor ??
+							(item.IsSelected
+								? theme.Palette.Accent
+								: theme.Palette.TextMuted),
+						1.4f);
+
+					x += glyph + 6f;
+				}
+
+				else if (item.IconColor is UiColor icon)
 				{
 					drawList.AddRoundedRect(
 						new UiRect(
@@ -288,6 +346,19 @@ public sealed class TreeView : Widget
 					item.IsSelected
 						? foreground
 						: theme.Palette.Text);
+			}
+
+			if (_dragging && _dropIntoRoot)
+			{
+				float rowsBottom = content.Y +
+					(_visible.Count * _rowHeight) -
+					_scrollOffset;
+
+				float y = MathF.Min(rowsBottom, content.Bottom) - 2f;
+
+				drawList.AddRect(
+					new UiRect(content.X, y, content.Width, 2f),
+					theme.Palette.Accent);
 			}
 		}
 
@@ -349,6 +420,14 @@ public sealed class TreeView : Widget
 			return true;
 		}
 
+		_dragSource = item;
+		_dragStart = pointer.GlobalPosition;
+		_dragModifiers = pointer.Modifiers;
+		_dragging = false;
+		_dropTarget = null;
+		_dropIntoRoot = false;
+		CapturePointer(pointer.Button);
+
 		bool control =
 			(pointer.Modifiers & UiKeyModifiers.Control) != 0 ||
 			(pointer.Modifiers & UiKeyModifiers.Super) != 0;
@@ -381,9 +460,63 @@ public sealed class TreeView : Widget
 			SelectionChanged?.Invoke(this, _selection);
 		}
 
-		else
+		else if (!item.IsSelected || _selection.Count == 1)
 		{
 			SelectSingle(item);
+		}
+
+		else
+		{
+			// Keep a multi-selection intact so a drag moves all of it;
+			// a release without a drag collapses it to this row.
+			_selectionAnchor = item;
+		}
+
+		return true;
+	}
+
+	protected internal override bool OnPointerUp(UiPointerEvent pointer)
+	{
+		if (pointer.Button != UiMouseButton.Left || _dragSource is null)
+		{
+			return false;
+		}
+
+		TreeViewItem source = _dragSource;
+		TreeViewItem? target = _dropTarget;
+		UiKeyModifiers modifiers = _dragModifiers;
+		bool dragging = _dragging;
+		bool validTarget = dragging && IsValidDropTarget(target);
+		bool intoRoot = dragging && _dropIntoRoot;
+
+		_dragSource = null;
+		_dragging = false;
+		_dragModifiers = UiKeyModifiers.None;
+		_dropTarget = null;
+		_dropIntoRoot = false;
+		InvalidateVisual();
+
+		if (dragging)
+		{
+			if (validTarget || intoRoot)
+			{
+				ItemDropped?.Invoke(
+					this,
+					source,
+					validTarget ? target : null);
+			}
+
+			return true;
+		}
+
+		bool plain = (modifiers &
+			(UiKeyModifiers.Control |
+				UiKeyModifiers.Super |
+				UiKeyModifiers.Shift)) == 0;
+
+		if (plain)
+		{
+			SelectSingle(source);
 		}
 
 		return true;
@@ -399,6 +532,26 @@ public sealed class TreeView : Widget
 
 	protected internal override bool OnPointerMove(UiPointerEvent pointer)
 	{
+		if (_dragSource is not null)
+		{
+			if (!_dragging)
+			{
+				float dx = pointer.GlobalPosition.X - _dragStart.X;
+				float dy = pointer.GlobalPosition.Y - _dragStart.Y;
+
+				if ((dx * dx) + (dy * dy) <
+					DragThresholdPixels * DragThresholdPixels)
+				{
+					return true;
+				}
+
+				_dragging = true;
+			}
+
+			UpdateDropTarget(pointer.GlobalPosition);
+			return true;
+		}
+
 		TreeViewItem? item = HitItem(pointer.GlobalPosition);
 		int row = item is null
 			? -1
@@ -564,6 +717,61 @@ public sealed class TreeView : Widget
 		}
 
 		_selection.Clear();
+	}
+
+	private void UpdateDropTarget(UiPoint position)
+	{
+		_dropTarget = null;
+		_dropIntoRoot = false;
+
+		UiRect content = GlobalContentBounds;
+
+		if (content.Contains(position))
+		{
+			TreeViewItem? target = HitItem(position);
+
+			if (target is not null)
+			{
+				_dropTarget = target;
+			}
+
+			else
+			{
+				// Empty space below the rows drops into the root, which
+				// is what an author expects from the end of the list.
+				float rowsBottom = content.Y +
+					(_visible.Count * _rowHeight) -
+					_scrollOffset;
+
+				_dropIntoRoot = position.Y >= rowsBottom;
+			}
+		}
+
+		InvalidateVisual();
+	}
+
+	private bool IsValidDropTarget(TreeViewItem? target)
+	{
+		return target is not null &&
+			target != _dragSource &&
+			(_dragSource is null || !IsInSubtree(target, _dragSource));
+	}
+
+	private static bool IsInSubtree(
+		TreeViewItem item,
+		TreeViewItem ancestor)
+	{
+		for (TreeViewItem? current = item.Parent;
+			current is not null;
+			current = current.Parent)
+		{
+			if (current == ancestor)
+			{
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	private TreeViewItem? HitItem(UiPoint globalPosition)

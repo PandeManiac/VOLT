@@ -1,3 +1,4 @@
+using Volt.Ui.Rendering;
 using Volt.Ui.Text;
 
 namespace Volt.Ui.Widgets;
@@ -37,6 +38,12 @@ public sealed class TreeViewItem
 	public object? Tag { get; set; }
 
 	public UiColor? IconColor { get; set; }
+
+	/// <summary>
+	/// Gets or sets the vector icon shown before the label. When set,
+	/// it replaces the plain kind dot.
+	/// </summary>
+	public UiIcon Icon { get; set; }
 
 	public bool IsExpanded { get; set; }
 

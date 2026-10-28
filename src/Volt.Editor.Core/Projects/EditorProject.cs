@@ -277,15 +277,33 @@ public sealed class EditorProject
 		return fullPath;
 	}
 
+	/// <summary>
+	/// The starter camera's identity, fixed so a new project and a
+	/// documentation capture are reproducible.
+	/// </summary>
+	private static readonly Guid StarterCameraId =
+		new("5f0e7a1c-3b2d-4c8e-9f6a-1b2c3d4e5f60");
+
+	/// <summary>
+	/// The starter cube's identity, fixed for the same reason.
+	/// </summary>
+	private static readonly Guid StarterCubeId =
+		new("9a7b6c5d-4e3f-4a2b-8c1d-0e9f8a7b6c5d");
+
 	private static SceneDocument CreateStarterScene(EditorProject project)
 	{
 		SceneDocument scene = new("Main");
 
-		SceneEntity camera = scene.CreateEntity("Main Camera");
+		SceneEntity camera = scene.CreateEntity(
+			"Main Camera",
+			id: StarterCameraId);
+
 		camera.Transform.Position = new System.Numerics.Vector3(0f, 1.5f, 6f);
 		camera.AddComponent(new CameraData());
 
-		SceneEntity cube = scene.CreateEntity("Cube");
+		SceneEntity cube = scene.CreateEntity(
+			"Cube",
+			id: StarterCubeId);
 		cube.AddComponent(new MeshRendererData
 		{
 			Mesh = "builtin:cube",

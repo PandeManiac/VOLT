@@ -51,6 +51,29 @@ public sealed class DockHost : Widget
 		InvalidateMeasure();
 	}
 
+	/// <summary>
+	/// Discards every cached panel widget and recreates it.
+	/// </summary>
+	/// <remarks>
+	/// Changing the theme's interface scale changes font objects and
+	/// metrics, which existing widgets captured at construction. A
+	/// shell rebuilds its panels through this method so the new scale
+	/// applies everywhere instead of only to widgets created later.
+	/// </remarks>
+	public void ResetContents()
+	{
+		foreach (Widget content in _contents.Values)
+		{
+			if (!content.IsDisposed)
+			{
+				content.Dispose();
+			}
+		}
+
+		_contents.Clear();
+		Rebuild();
+	}
+
 	public override void Dispose()
 	{
 		Layout.Changed -= OnLayoutChanged;

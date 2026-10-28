@@ -1,8 +1,9 @@
 # VOLT Editor
 
 `Volt.Editor` is a standalone graphical editor built entirely from
-`Volt.Ui` widgets and presented by the engine's Vulkan backend. It does
-not embed ImGui, Avalonia, WPF, WinForms, or Qt.
+`Volt.Ui` widgets and presented by the engine's Vulkan backend. Itdoes not embed ImGui, Avalonia, WPF, WinForms, or Qt.
+
+![The VOLT editor workspace with a starter scene open](images/editor-workspace.png)
 
 ## Running
 
@@ -25,6 +26,60 @@ Optional flags:
 | `--validation` | Enables Vulkan validation layers |
 | `--project <folder>` | Opens a project with a `project.volt.json` |
 | `--frames <count>` | Runs a fixed number of frames, then exits |
+| `--width <pixels>` | Opens at a specific width (minimum 640) |
+| `--height <pixels>` | Opens at a specific height (minimum 480) |
+| `--ui-scale <factor>` | Interface scale: `0.75`, `1`, `1.25`, `1.5`, `2` |
+| `--snapshot <file>` | Writes the whole editor to a PNG and exits, without a window or a GPU |
+| `--snapshot-state <state>` | Snapshot preset: `workspace` (default), `authoring`, or `start` |
+
+`--snapshot` lays the shell out headlessly at `--width` by `--height`,
+simulates three frames so the dock and every panel reach their steady
+state, and rasterizes the resulting draw list on the CPU. Without
+`--project` it uses a temporary starter project, so the image shows the
+real workspace rather than the start screen. The Scene view publishes
+the same render request a window would, and `SoftwareSceneRenderer`
+rasterizes its meshes and ground grid on the CPU with clipping, a depth
+buffer, the scene's directional light, and supersampled edges, so the
+capture contains real 3D content instead of a placeholder. Game view
+content appears the same way while Play Mode has a running world.
+Everything the UI draws itself — surfaces, borders, icons, labels,
+gizmos, and overlays — is real too. This is how the interface can be
+reviewed or diffed on a machine with no display server, and
+`tests/Volt.Editor.Tests/EditorSnapshotTests.cs` asserts that a whole
+shell frame renders, encodes, and honours the interface scale.
+
+Two captures are also golden-image regression tests:
+`tests/Volt.Editor.Tests/GoldenSnapshotTests.cs` compares them against
+the PNG baselines in `tests/Volt.Editor.Tests/Baselines`, allowing a
+small per-channel difference and a fraction of a percent of differing
+pixels so a new runtime does not fail the build while a moved panel, a
+lost label, or a wrong colour does. After an intentional interface
+change, rewrite the baselines with
+`VOLT_UPDATE_SNAPSHOTS=1 dotnet test tests/Volt.Editor.Tests --filter GoldenSnapshotTests`
+and review the new images before committing them.
+
+`--snapshot-state` selects what a capture shows. `workspace` is the
+default: a temporary starter project with no selection. `authoring`
+selects the first mesh object and activates Move, so the hierarchy,
+scene gizmo, and populated inspector all appear. `start` captures the
+start screen before any project is open and cannot be combined with
+`--project`; its folder field shows `~/VoltGame` so the image does not
+depend on the checkout's path.
+
+The images embedded in this guide are generated from that same command
+at 1440 by 900 and committed under `docs/images`. Regenerate them with:
+
+```bash
+./tools/capture-editor-docs.sh
+```
+
+Pass `--check` to capture into a temporary directory and compare each
+committed image using a per-channel and differing-pixel tolerance, the
+same rule as the golden baselines. That lets harmless platform
+antialiasing differences pass while a moved panel, a changed label, or
+a wrong colour fails. The hosted CI build runs this check. After an
+intentional visual change, regenerate the images and review them before
+committing.
 
 The editor requires a working SDL3 video backend and a Vulkan device
 with presentation support. It compiles and its logic is unit tested on
@@ -37,6 +92,8 @@ the manual `vulkan-gpu` CI job), which documents its runner
 prerequisites; see `tools/README.md`.
 
 ## First project
+
+![The VOLT start screen](images/editor-start.png)
 
 The start screen asks for a project folder and a project name. It
 creates:
@@ -56,14 +113,15 @@ scene. Paths are project-relative and may not escape the project root.
 ## Layout
 
 ```text
-Menu bar
-Toolbar (Select, Move, Rotate, Scale, Play, Pause, Step, Stop)
+Menu bar (File, Edit, Assets, GameObject, Component, Window, Help)
+Toolbar (VOLT mark | Select Move Rotate Scale | Play Pause Step Stop
+         | Local/World, grid snap and its increment)
 +-----------+-----------------------------+------------+
 | Hierarchy | Scene / Game tabs           | Inspector  |
 |           +-----------------------------+            |
 |           | Project / Console / Profiler|            |
 +-----------+-----------------------------+------------+
-Status bar
+Status bar (scene, last action, play state, object count, frame rate)
 ```
 
 The menu bar, toolbar, and status bar are fixed-height rows of one
@@ -82,26 +140,138 @@ close or reopen panels. The layout is serialized to
 `<project>/.volt/workspace.json` when the editor closes and restored
 the next time that project is opened.
 
+## Interface design
+
+The shell is styled by one design system in `Volt.Ui` rather than by
+per-panel colors, so the chrome, the docked panels, the popups, and
+the viewport overlays share a palette and a type scale.
+
+- **Surfaces step by role.** Chrome (menu bar, toolbar, status bar) is
+darker than panel surfaces, raised controls are lighter than the
+panels that host them, and sunken areas — the scene viewport, text
+fields, list wells — are darkest. That gradient carries the visual
+hierarchy, so most elements need no border at all.
+- **The accent marks state, not decoration:** the active tool, the
+selected row, the focused field, the current tab, and the primary
+button.
+- **Interaction states are distinguishable** on every control. Hover,
+pressed, selected, focused (an accent ring), and disabled each resolve
+to a different style; icon-only controls carry tooltips.
+- **Icons are vector geometry.** `UiIconPainter` draws the whole
+vocabulary from polygons and polylines, so icons stay sharp at any
+interface scale and need no image assets. Toolbar tools, panel
+actions, hierarchy rows, asset tiles, and console severities map to it
+through `EditorIcons`.
+- **Empty states are deliberate.** A panel with nothing to show draws
+an icon, a title, and a sentence instead of an empty rectangle: no
+scene, no objects, no matches, no project, nothing selected, an empty
+folder, or a filtered-out console.
+- **Typography is a role scale** (`Small`, `Body`, `Large`, `Heading`,
+`Title`, `PanelHeader`, `Mono`, `MonoSmall`). Body text is 14 logical
+units; numeric fields use the monospace face so digits align down a
+column, and inspector rows label their X/Y/Z components in the
+conventional muted red, green, and blue.
+
+The tool strip groups tools, transport, and view context, and the
+status bar reports the scene and its dirty marker, the last action,
+the play state, the live object count, and a smoothed frame rate.
+
+### Interface scale
+
+**Window → Interface Scale** (also in **Edit → Preferences…**) sets the
+whole interface to 75%, 100%, 125%, 150%, or 200%; `--ui-scale` sets
+the same value at startup. Fonts rasterize at the scaled size instead
+of being magnified, and panel widgets are rebuilt so the new metrics
+apply everywhere. Project, scene, workspace, and undo state live in
+the session, so scaling loses nothing.
+
+**Window → Reset Layout** restores the default arrangement and split
+ratios without discarding the state inside open panels.
+
 ## Authoring
+
+![The starter cube selected in the Scene view with the Move tool active](images/editor-authoring.png)
 
 - **Hierarchy** lists the authored scene. Select one or more objects,
   rename them, and create, duplicate, or delete them from the context
-  menu or the menus.
+  menu or the menus. Deleting a multi-selection removes every selected
+  object in one undo step, and a selected child is left to its selected
+  parent rather than being deleted twice. Duplicating does the same:
+  every selected object is copied with its children, the copies are
+  named uniquely and left selected, and the whole operation is one undo
+  step (redo recreates the same copies, ids included). Acting on a row
+  that already belongs to a selection keeps that selection, so its
+  commands reach all of it.
+
+  Drag a row onto another row to re-parent it, or onto the empty space
+  below the rows to move it back to the scene root. The row that will
+  receive it is outlined while the drag is in flight, a target inside
+  the dragged object's own subtree is refused instead of being offered,
+  and dragging one row of a selection moves the whole selection as a
+  single undo step. A press that never becomes a drag still selects the
+  row, so plain clicking is unchanged.
 - **Inspector** edits the selected object's transform and every
   supported component. Values are written through undoable commands;
   the vector, color, numeric, enum, and asset properties all come from
   the component catalog rather than hardcoded editor code.
-- **Scene view** supports orbit, pan, and zoom, click selection, and
-  translate, rotate, and scale gizmos. Transform gestures are committed
-  as one undo step instead of one step per drag frame.
+- **Scene view** is the authoring view. VOLT renders the scene's
+  meshes and the ground grid into an offscreen target with depth
+  testing, and the panel samples that image, so what it shows is real
+  rendered geometry. Selection outlines, labels, and gizmos are UI
+  overlays drawn on top of it.
+- **Selection works the way an editor's does.** A click takes one
+  object, shift-click adds another, and dragging on empty space with the
+  left button draws a box that takes every object its bounds touch
+  (shift keeps what was already selected). The hierarchy highlights the
+  whole selection, the inspector edits every selected object and says so
+  under the name, and the gizmo follows the active one. With more than
+  one object selected, the scene view also frames the selection's
+  combined extent in corner brackets labelled with the object count, so
+  the reach of a group edit is visible before it is applied.
+
+  A transform edit reaches the whole selection. Dragging a gizmo handle
+  or typing a position, rotation, or scale moves every selected object by
+  the same delta, so a group keeps its spacing, and the gesture is one
+  undo step rather than one per object. A child of another selected
+  object is left out of that delta: its parent already carries it, and
+  moving both would move it twice. A group rotation turns each object in
+  place instead of orbiting it around the active object.
+- **The scene view's floating chrome** carries the controls an author
+  reaches for without leaving the image: the four tools, the gizmo
+  space, grid snapping and its increment, the ground-grid toggle, and
+  frame-selection. It wraps onto a second row instead of running off a
+  narrow view, disables the tools while the scene is running, and
+  explains each control with a tooltip. The orientation compass in the
+  corner shows where the camera looks from and snaps it to an axis, or
+  back to the default angle from its centre, keeping the current zoom.
+
+  Navigate it like a first-person camera: hold the right mouse button
+  to look, keep it held and fly with `W`, `A`, `S`, `D`, `E` or `Space`
+  for up and `Q` for down, hold `Shift` to sprint, drag with the middle
+  button to pan, and scroll to dolly. `F` frames the selection, or the
+  whole scene when nothing is selected. Left-click selects, `Shift`
+  adds to the selection, and clicking empty space clears it.
+
+  Translate, rotate, and scale gizmos are drag handles drawn over the
+  render: drag one axis for that axis, or the square plane handle for
+  the XZ plane. A gesture previews live on every selected object and is
+  committed as one undo step instead of one step per drag frame.
 - **Project** browses the project folder through the asset catalog and
   can assign asset references in the inspector.
 - **Console** records editor actions and errors.
 - **Profiler** reports frame timing and runtime counts while the
   editor is running.
 
+Selection commands live in the **Edit** menu: **Select All**
+(`Ctrl+A`), **Select None** (`Ctrl+Shift+A`), and **Invert Selection**
+(`Ctrl+I`). They work on the whole scene regardless of the hierarchy's
+search filter, and they keep the active object active whenever it is
+still selected, so the inspector does not jump to an unrelated object.
+
 Keyboard shortcuts: `Ctrl+S` save, `Ctrl+Z` undo, `Ctrl+Y` or
-`Ctrl+Shift+Z` redo, `Delete` delete selection.
+`Ctrl+Shift+Z` redo, `Ctrl+D` duplicate selection, `Delete` delete
+selection, `Ctrl+A` select all, `Ctrl+Shift+A` select none, `Ctrl+I`
+invert selection.
 
 Saving writes a temporary file and moves it into place, so a failed
 save cannot truncate the previous scene. Unknown components are kept
@@ -171,9 +341,13 @@ not yet a mesh-rendering game framework.
 
 ## Current limitations
 
-- Scene and Game views draw engine-authored content as projected UI
-  primitives (grid, axes, markers, gizmos). They do not yet sample an
-  offscreen mesh render target into the panel.
+- Scene and Game views sample a rendered offscreen target, but that
+  rendering is one pass per viewport with no shadows or post-processing
+  in a window, and the only meshes a scene can reference are the
+  built-in primitives. A render target is recreated only when its
+  viewport's pixel size changes. The headless snapshot uses a separate
+  CPU rasterizer for the same requests; it is a review approximation of
+  the GPU image, not a pixel-exact copy of it.
 - Gameplay logic is currently composed from the built-in behaviours
   (`Spin`, `Move`) and authored component data. Loading user-authored
   C# assemblies into a separate runtime is not implemented.
@@ -186,7 +360,11 @@ not yet a mesh-rendering game framework.
 - The editor has no automated UI test that opens a native window.
   Session, scene, project, undo, play mode, dock layout, rendering
   geometry, and the whole shell's layout, clipping, and hit testing are
-  covered headlessly; only a window on a GPU shows pixels.
+  covered headlessly, and `--snapshot` rasterizes the chrome and the
+  scene's meshes and grid into a PNG. Only a window on a GPU exercises
+  the Vulkan scene pipeline; the CPU rasterizer approximates its edge
+  coverage and depth precision rather than matching it pixel for
+  pixel.
 - In a window shorter than a panel's minimum content, that panel clips
   its own overflow rather than scrolling it. The strict
   no-geometry-outside-the-window check therefore runs at the window the

@@ -1,4 +1,5 @@
 using System.Numerics;
+using Volt.Ui.Rendering;
 
 namespace Volt.Ui.Widgets.Properties;
 
@@ -265,4 +266,9 @@ public sealed class UiPropertyGroup
 	public string Name { get; }
 
 	public IReadOnlyList<UiProperty> Properties { get; }
+
+	/// <summary>
+	/// Gets or sets the icon shown in the group's section header.
+	/// </summary>
+	public UiIcon Icon { get; set; }
 }

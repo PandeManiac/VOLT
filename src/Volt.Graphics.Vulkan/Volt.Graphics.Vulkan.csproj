@@ -1,4 +1,3 @@
-
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
@@ -15,5 +14,18 @@
     <InternalsVisibleTo Include="Volt.Graphics.Vulkan.Tests" />
     <InternalsVisibleTo Include="Volt.Benchmarks" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Shaders/scene.vert.spv" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Shaders/scene.frag.spv" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CompileSceneShaders"
+          BeforeTargets="GetCopyToOutputDirectoryItems"
+          Inputs="Shaders/scene.vert;Shaders/scene.frag"
+          Outputs="Shaders/scene.vert.spv;Shaders/scene.frag.spv">
+    <Exec Command="glslangValidator -V &quot;$(MSBuildProjectDirectory)/Shaders/scene.vert&quot; -o &quot;$(MSBuildProjectDirectory)/Shaders/scene.vert.spv&quot;" />
+    <Exec Command="glslangValidator -V &quot;$(MSBuildProjectDirectory)/Shaders/scene.frag&quot; -o &quot;$(MSBuildProjectDirectory)/Shaders/scene.frag.spv&quot;" />
+  </Target>
 
 </Project>
