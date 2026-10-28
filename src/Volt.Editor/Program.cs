@@ -30,7 +30,6 @@ internal static class Program
 	private const string SnapshotStateArgument = "--snapshot-state";
 	private const string WorkspaceFolderName = ".volt";
 	private const string WorkspaceFileName = "workspace.json";
-	private const string SettingsFileName = "settings.json";
 
 	[STAThread]
 	private static int Main(string[] args)
@@ -122,10 +121,14 @@ internal static class Program
 		}
 
 		string? projectRoot = session.Project?.RootPath;
-		EditorSettings settings = LoadSettings(projectRoot);
+		EditorSettings settings = EditorPreferences.Load(projectRoot);
 		DockLayout layout = LoadWorkspace(projectRoot);
 
 		session.TargetFrameRate = settings.TargetFrameRate;
+
+		Volt.Platform.Windows.WindowSize initialWindowSize = new(
+			width ?? settings.WindowWidth,
+			height ?? settings.WindowHeight);
 
 		using VulkanUiHost host = new(
 			new VulkanUiHostOptions
@@ -133,9 +136,7 @@ internal static class Program
 				Title = "VOLT Editor",
 				EnableValidation = validation,
 				Theme = UiTheme.CreateDark(),
-				Size = new Volt.Platform.Windows.WindowSize(
-					width ?? settings.WindowWidth,
-					height ?? settings.WindowHeight)
+				Size = initialWindowSize
 			});
 
 		Console.WriteLine($"GPU: {host.DeviceName}");
@@ -148,6 +149,11 @@ internal static class Program
 			projectRoot,
 			layout,
 			sceneRenderer);
+
+		// The start screen can open a project after startup. Preferences
+		// follow whichever project is open so its saved settings are not
+		// replaced by the startup project's values on exit.
+		using EditorPreferences preferences = new(session, shell, settings);
 
 		if (sceneRenderer is not null)
 		{
@@ -184,10 +190,22 @@ internal static class Program
 			$"at interface scale {shell.UiScale * 100f:0}%");
 
 		int frames = 0;
+		int projectRevision = preferences.ProjectRevision;
+		Volt.Platform.Windows.WindowSize sizeAtProjectOpen = initialWindowSize;
 
 		host.Run(
 			ui =>
 			{
+				// A project opened from the start screen cannot resize the
+				// window that already exists. Remember the size it was
+				// opened at, so an unchanged window does not overwrite the
+				// size that project saved for its next launch.
+				if (preferences.ProjectRevision != projectRevision)
+				{
+					projectRevision = preferences.ProjectRevision;
+					sizeAtProjectOpen = host.Window.Size;
+				}
+
 				session.Update(ui.DeltaSeconds);
 				shell.Update(ui.DeltaSeconds, ui.DpiScale);
 
@@ -201,16 +219,22 @@ internal static class Program
 
 		// A maximized or minimized window does not report a useful restore
 		// size: the first would reopen a normal window at screen size, and
-		// the second may report no drawable area. Keep the saved size in
-		// both cases instead of overwriting it with a transient one.
-		int savedWidth = settings.WindowWidth;
-		int savedHeight = settings.WindowHeight;
+		// the second may report no drawable area. Keep the project's saved
+		// size in both cases. The same applies when the window still has
+		// the size it was created with, because a project opened from the
+		// start screen could not be resized to its own saved size mid-run.
+		int savedWidth = preferences.Current.WindowWidth;
+		int savedHeight = preferences.Current.WindowHeight;
 
 		if (!host.Window.IsMaximized)
 		{
 			Volt.Platform.Windows.WindowSize windowSize = host.Window.Size;
 
-			if (windowSize.IsPositive)
+			bool sizeChanged =
+				windowSize.Width != sizeAtProjectOpen.Width ||
+				windowSize.Height != sizeAtProjectOpen.Height;
+
+			if (windowSize.IsPositive && sizeChanged)
 			{
 				savedWidth = windowSize.Width;
 				savedHeight = windowSize.Height;
@@ -218,12 +242,7 @@ internal static class Program
 		}
 
 		SaveWorkspace(session.Project?.RootPath, shell.Layout);
-		SaveSettings(
-			session.Project?.RootPath,
-			session.TargetFrameRate,
-			shell.UiScale,
-			savedWidth,
-			savedHeight);
+		preferences.Save(savedWidth, savedHeight);
 
 		Console.WriteLine(
 			$"Presented {host.PresentedFrames} accepted frames.");
@@ -479,83 +498,6 @@ internal static class Program
 			projectRoot,
 			WorkspaceFolderName,
 			WorkspaceFileName);
-	}
-
-	private static EditorSettings LoadSettings(string? projectRoot)
-	{
-		if (projectRoot is null)
-		{
-			return new EditorSettings();
-		}
-
-		string path = SettingsPath(projectRoot);
-
-		if (!File.Exists(path))
-		{
-			return new EditorSettings();
-		}
-
-		try
-		{
-			return EditorSettings.Deserialize(File.ReadAllText(path));
-		}
-
-		catch (Exception exception)
-		{
-			Console.Error.WriteLine(
-				$"Ignoring unreadable editor settings: {exception.Message}");
-
-			return new EditorSettings();
-		}
-	}
-
-	private static void SaveSettings(
-		string? projectRoot,
-		int targetFrameRate,
-		float interfaceScale,
-		int windowWidth,
-		int windowHeight)
-	{
-		if (projectRoot is null)
-		{
-			return;
-		}
-
-		try
-		{
-			string path = SettingsPath(projectRoot);
-			string directory = Path.GetDirectoryName(path)
-				?? projectRoot;
-
-			Directory.CreateDirectory(directory);
-
-			EditorSettings settings = new()
-			{
-				TargetFrameRate = targetFrameRate,
-				InterfaceScale = interfaceScale,
-				WindowWidth = windowWidth,
-				WindowHeight = windowHeight
-			};
-
-			string temporary = path + ".tmp";
-
-			File.WriteAllText(temporary, settings.Serialize());
-			File.Move(temporary, path, overwrite: true);
-		}
-
-		catch (Exception exception)
-		{
-			Console.Error.WriteLine(
-				$"Could not save editor settings: {exception.Message}");
-		}
-	}
-
-	private static string SettingsPath(string projectRoot)
-	{
-		return Path.Combine(
-			projectRoot,
-			WorkspaceFolderName,
-			SettingsFileName);
 	}
 
 	private static bool TryParseArguments(

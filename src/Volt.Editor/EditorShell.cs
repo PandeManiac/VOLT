@@ -73,6 +73,7 @@ public sealed class EditorShell : Panel
 	private NumericField? _snapStep;
 
 	private float _uiScale = 1f;
+	private float? _pendingUiScale;
 	private double _frameSeconds;
 	private int _frameCount;
 	private float _fps;
@@ -211,6 +212,15 @@ public sealed class EditorShell : Panel
 	/// </param>
 	public void Update(double deltaSeconds, float dpiScale = 1f)
 	{
+		// A scale requested during input dispatch is applied now that
+		// the widgets that raised it are no longer on the stack. The
+		// rebuild below replaces them, which would be unsafe earlier.
+		if (_pendingUiScale is float pending)
+		{
+			_pendingUiScale = null;
+			ApplyUiScale(pending, announce: false);
+		}
+
 		_session.Update(deltaSeconds);
 		_session.RecordFrame(deltaSeconds);
 
@@ -252,6 +262,35 @@ public sealed class EditorShell : Panel
 	/// </remarks>
 	public void ApplyUiScale(float uiScale)
 	{
+		ApplyUiScale(uiScale, announce: true);
+	}
+
+	/// <summary>
+	/// Requests an interface scale for the next frame.
+	/// </summary>
+	/// <remarks>
+	/// Applying a scale replaces the chrome, so a request made while a
+	/// widget is handling input waits until that dispatch has returned.
+	/// Project settings use this when the start screen opens a project.
+	/// </remarks>
+	public void RequestUiScale(float uiScale)
+	{
+		if (!float.IsFinite(uiScale) || uiScale <= 0f)
+		{
+			return;
+		}
+
+		if (MathF.Abs(uiScale - _uiScale) < 0.001f)
+		{
+			_pendingUiScale = null;
+			return;
+		}
+
+		_pendingUiScale = uiScale;
+	}
+
+	private void ApplyUiScale(float uiScale, bool announce)
+	{
 		if (!float.IsFinite(uiScale) || uiScale <= 0f)
 		{
 			return;
@@ -270,7 +309,11 @@ public sealed class EditorShell : Panel
 		Context?.SetTheme(_theme);
 
 		RebuildChrome();
-		_session.SetStatus($"Interface scale {uiScale * 100f:0}%");
+
+		if (announce)
+		{
+			_session.SetStatus($"Interface scale {uiScale * 100f:0}%");
+		}
 	}
 
 	/// <summary>
