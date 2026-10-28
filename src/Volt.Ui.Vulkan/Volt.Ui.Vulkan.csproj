@@ -16,6 +16,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Volt.Ui.Vulkan.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="Shaders/ui.vert.spv" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Shaders/ui.frag.spv" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

@@ -43,8 +43,6 @@ public sealed class ConsolePanel : Panel
 
 		ClipToBounds = true;
 
-		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
-
 		StackPanel stack = new()
 		{
 			Spacing = 5f,
@@ -123,6 +121,13 @@ public sealed class ConsolePanel : Panel
 		Add(_emptyHost);
 
 		_session.LogChanged += OnLogChanged;
+	}
+
+	protected override void OnAttached()
+	{
+		// Rows carry the theme's fonts, so they are built once the panel
+		// knows which context (and therefore which font set) it belongs to.
+		// Rebuilding also replaces any row created while detached.
 		Rebuild();
 	}
 

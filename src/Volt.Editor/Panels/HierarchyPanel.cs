@@ -23,6 +23,7 @@ public sealed class HierarchyPanel : Panel
 {
 	private readonly EditorSession _session;
 	private readonly TreeView _tree;
+	private readonly Label _headerCaption;
 	private readonly TextField _search;
 	private readonly EmptyStateView _empty;
 	private readonly Panel _emptyHost;
@@ -49,8 +50,6 @@ public sealed class HierarchyPanel : Panel
 
 		ClipToBounds = true;
 
-		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
-
 		StackPanel stack = new()
 		{
 			Spacing = 6f,
@@ -63,13 +62,17 @@ public sealed class HierarchyPanel : Panel
 			Height = UiLength.Points(24f)
 		};
 
-		header.Add(new Label("Scene Objects")
+		// A panel is constructed before it is attached, so no context theme
+		// exists yet. Capturing a font here would create a private font set
+		// that the renderer has no atlas layer for, and its glyphs would
+		// paint as solid blocks. The font is applied on attach instead.
+		_headerCaption = new Label("Scene Objects")
 		{
-			Font = theme.Fonts.Small,
-			TextColor = theme.Palette.TextMuted,
 			FlexGrow = 1f,
 			VerticalAlignment = UiAlignment.Center
-		});
+		};
+
+		header.Add(_headerCaption);
 
 		header.Add(CreateAction(UiIcon.Plus, "Create an empty object", CreateEntity));
 
@@ -132,6 +135,14 @@ public sealed class HierarchyPanel : Panel
 
 		RefreshStructure(force: true);
 		UpdateActionStates();
+	}
+
+	protected override void OnAttached()
+	{
+		UiTheme theme = Context!.Theme;
+
+		_headerCaption.Font = theme.Fonts.Small;
+		_headerCaption.TextColor = theme.Palette.TextMuted;
 	}
 
 	protected override void OnDetached()
