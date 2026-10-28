@@ -493,6 +493,14 @@ public sealed class VulkanUiHost : IDisposable
 		_lastFrameSeconds = now;
 
 		DispatchInput(input, surface);
+
+		// Relative motion is pushed once per completed frame and pulled
+		// by whichever viewport is navigating, so a captured look uses
+		// real native movement instead of differences between absolute
+		// positions that the hidden cursor never updates.
+		_ui.PointerCapture?.AccumulateMotion(
+			new UiPoint(input.RelativeMotion.X, input.RelativeMotion.Y));
+
 		update(this);
 
 		_ui.BeginFrame(

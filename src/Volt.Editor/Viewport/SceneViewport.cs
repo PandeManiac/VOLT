@@ -84,6 +84,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 	private UiRect _selectionExtent = UiRect.Empty;
 
 	private bool _looking;
+	private bool _lookCaptureActive;
 	private bool _panning;
 	private bool _moveForward;
 	private bool _moveBackward;
@@ -176,6 +177,26 @@ internal sealed class SceneViewport : Widget, IFrameTick
 		{
 			return;
 		}
+
+		// Capture can be revoked without a pointer release reaching the
+		// viewport: a focus loss, a platform that dropped the mode, or a
+		// tab that hid this panel. Ending the look here keeps the cursor
+		// from staying hidden with nothing steering the camera.
+		if (_lookCaptureActive &&
+			(Context?.PointerCapture is not IUiPointerCapture activeCapture ||
+				!activeCapture.IsCaptured))
+		{
+			EndLook(releaseCapture: true);
+			return;
+		}
+
+		if (!IsVisible)
+		{
+			EndLook(releaseCapture: true);
+			return;
+		}
+
+		PumpLookMotion();
 
 		Vector3 before = _camera.Position;
 
@@ -295,8 +316,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 
 		if (pointer.Button == UiMouseButton.Right)
 		{
-			_looking = true;
-			CapturePointer(pointer.Button);
+			TryBeginLook(pointer.Button);
 			return true;
 		}
 
@@ -348,8 +368,16 @@ internal sealed class SceneViewport : Widget, IFrameTick
 	{
 		if (_looking)
 		{
-			_camera.Look(pointer.Delta.X, pointer.Delta.Y);
-			InvalidateVisual();
+			// A native capture supplies the look as one relative delta
+			// per frame in Tick. Absolute pointer movement is only the
+			// fallback for a platform that refused the capture, so the
+			// two sources can never be added together.
+			if (!_lookCaptureActive)
+			{
+				_camera.Look(pointer.Delta.X, pointer.Delta.Y);
+				InvalidateVisual();
+			}
+
 			return true;
 		}
 
@@ -418,9 +446,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 
 		if (_looking && pointer.Button == UiMouseButton.Right)
 		{
-			_looking = false;
-			_session.ViewportNavigating = false;
-			ReleasePointer();
+			EndLook(releaseCapture: true);
 			return true;
 		}
 
@@ -479,6 +505,15 @@ internal sealed class SceneViewport : Widget, IFrameTick
 
 		switch (key.Key)
 		{
+			case UiKey.Escape:
+				if (_looking)
+				{
+					EndLook(releaseCapture: true);
+					return true;
+				}
+
+				return false;
+
 			case UiKey.W:
 				_moveForward = true;
 				break;
@@ -558,6 +593,88 @@ internal sealed class SceneViewport : Widget, IFrameTick
 		return _looking;
 	}
 
+	/// <summary>
+	/// Starts free-look navigation and asks the platform to capture the
+	/// pointer.
+	/// </summary>
+	/// <remarks>
+	/// A refused capture is not a failed interaction: the viewport still
+	/// looks from ordinary pointer movement, which is what it did
+	/// before native capture existed. What must never happen is a
+	/// hidden cursor that no camera is using.
+	/// </remarks>
+	private void TryBeginLook(UiMouseButton button)
+	{
+		_looking = true;
+		CapturePointer(button);
+
+		IUiPointerCapture? capture = Context?.PointerCapture;
+
+		if (capture is null)
+		{
+			_lookCaptureActive = false;
+			return;
+		}
+
+		// Motion from before the mode change must not turn the view on
+		// the first captured frame.
+		capture.DiscardMotion();
+
+		_lookCaptureActive = capture.TryCapture();
+
+		capture.DiscardMotion();
+	}
+
+	/// <summary>
+	/// Ends free-look navigation and gives the pointer back.
+	/// </summary>
+	/// <param name="releaseCapture">
+	/// True to ask the platform to release the pointer.
+	/// </param>
+	private void EndLook(bool releaseCapture)
+	{
+		bool wasLooking = _looking;
+
+		_looking = false;
+		_lookCaptureActive = false;
+		_session.ViewportNavigating = false;
+
+		if (releaseCapture &&
+			Context?.PointerCapture is IUiPointerCapture capture)
+		{
+			capture.TryRelease();
+			capture.DiscardMotion();
+		}
+
+		if (wasLooking)
+		{
+			ReleasePointer();
+			InvalidateVisual();
+		}
+	}
+
+	/// <summary>
+	/// Applies one frame of captured relative motion to the camera.
+	/// </summary>
+	private void PumpLookMotion()
+	{
+		if (!_lookCaptureActive ||
+			Context?.PointerCapture is not IUiPointerCapture capture)
+		{
+			return;
+		}
+
+		UiPoint motion = capture.ConsumeMotion();
+
+		if (motion == UiPoint.Zero)
+		{
+			return;
+		}
+
+		_camera.Look(motion.X, motion.Y);
+		InvalidateVisual();
+	}
+
 	protected override void OnDetached()
 	{
 		Unsubscribe();
@@ -614,6 +731,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 
 	private void Unsubscribe()
 	{
+		EndLook(releaseCapture: true);
 		_session.SceneChanged -= OnSessionChanged;
 		_session.SelectionChanged -= OnSessionChanged;
 		_session.PlayStateChanged -= OnSessionChanged;

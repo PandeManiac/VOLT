@@ -1,5 +1,6 @@
 using Volt.Editor.Core.Projects;
 using Volt.Editor.Core.Scenes;
+using Volt.Editor.Input;
 using Volt.Editor.Rendering;
 using Volt.Ui.Docking;
 using Volt.Ui.Rendering;
@@ -165,6 +166,15 @@ internal static class Program
 
 		host.Ui.Add(shell);
 		shell.ExitRequested += host.RequestExit;
+
+		// Free-look asks for the window's native relative pointer mode
+		// through the UI context. The capture is disposed before the
+		// host, so the pointer is always given back while the window
+		// still exists.
+		using WindowPointerCapture pointerCapture =
+			WindowPointerCapture.Attach(host.Window);
+
+		host.Ui.PointerCapture = pointerCapture;
 
 		Console.WriteLine(
 			$"Window: {host.Ui.Surface.Width:0}x{host.Ui.Surface.Height:0} " +

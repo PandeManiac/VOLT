@@ -135,6 +135,20 @@ public sealed class UiContext : IDisposable
 
 	public IUiClipboard Clipboard { get; set; }
 
+	/// <summary>
+	/// Gets or sets the native pointer capture free-look navigation
+	/// uses, or null when the host has no such facility.
+	/// </summary>
+	/// <remarks>
+	/// The framework never captures the pointer on its own: a widget
+	/// asks through <see cref="IUiPointerCapture.TryCapture"/> while it
+	/// navigates, and the host pushes each frame's relative motion with
+	/// <see cref="IUiPointerCapture.AccumulateMotion"/>. Keeping the
+	/// platform behind this interface is what lets Volt.Ui stay free of
+	/// SDL.
+	/// </remarks>
+	public IUiPointerCapture? PointerCapture { get; set; }
+
 	public IList<UiShortcut> Shortcuts => _shortcuts;
 
 	public UiCursor Cursor
@@ -281,9 +295,20 @@ public sealed class UiContext : IDisposable
 		_pointer = position;
 		_pointerDelta = delta;
 		_modifiers = modifiers;
-		UpdateHover();
 
-		Widget? target = _captured ?? HitTest(position);
+		// A captured pointer is hidden and its position is meaningless,
+		// so hover state must not follow it: panels under the invisible
+		// cursor would otherwise light up and steal the tooltip while
+		// the developer is flying the scene camera.
+		bool nativeCapture = PointerCapture?.IsCaptured == true;
+
+		if (!nativeCapture)
+		{
+			UpdateHover();
+		}
+
+		Widget? target = _captured ??
+			(nativeCapture ? null : HitTest(position));
 
 		if (target is null)
 		{
@@ -563,6 +588,15 @@ public sealed class UiContext : IDisposable
 	/// </summary>
 	public void WindowFocusLost()
 	{
+		// Focus loss is exactly the moment a native capture must end:
+		// the pointer belongs to another window now, and leaving the
+		// mode enabled would keep the cursor hidden behind it.
+		if (PointerCapture is IUiPointerCapture pointerCapture)
+		{
+			pointerCapture.TryRelease();
+			pointerCapture.DiscardMotion();
+		}
+
 		if (_captured is not null)
 		{
 			ReleasePointer(_captured);
@@ -844,6 +878,11 @@ public sealed class UiContext : IDisposable
 		{
 			return;
 		}
+
+		// The host is still alive here, so this is the last chance to
+		// give the pointer back before the window goes away.
+		PointerCapture?.TryRelease();
+		PointerCapture = null;
 
 		_disposed = true;
 		_focused = null;
