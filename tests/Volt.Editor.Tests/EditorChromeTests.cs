@@ -850,6 +850,45 @@ public sealed class EditorChromeTests : IDisposable
 		Assert.Equal(cube.Name, name.Text);
 	}
 
+	[Fact]
+	public void ProjectBrowser_NewSceneMovesToItsFolder()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		IconButton create = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Create a new scene");
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		UiPoint center = create.GlobalVisualBounds.Center;
+
+		_context.PointerDown(UiMouseButton.Left, center);
+		_context.PointerUp(UiMouseButton.Left, center);
+
+		_context.BeginFrame(
+			0.2,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		Assert.Equal("Scenes/Scene1.volt.scene.json", _session.ScenePath);
+		Assert.Equal("Scene 1", _session.Scene!.Name);
+		Assert.Contains(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.Text == "Scene1.volt.scene.json");
+	}
+
 	private EditorShell BuildShell(float width, float height)
 	{
 		EditorShell shell = new(_session);

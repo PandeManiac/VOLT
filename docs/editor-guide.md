@@ -286,7 +286,9 @@ ratios without discarding the state inside open panels.
   the XZ plane. A gesture previews live on every selected object and is
   committed as one undo step instead of one step per drag frame.
 - **Project** browses the project folder through the asset catalog and
-  can assign asset references in the inspector.
+  can assign asset references in the inspector. Its **New Scene**
+  action opens the scene and moves the browser to the scene's folder
+  so the new tile is visible.
 - **Console** records editor actions and errors.
 - **Profiler** reports frame timing and runtime counts while the
   editor is running.

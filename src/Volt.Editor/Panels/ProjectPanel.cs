@@ -290,7 +290,11 @@ public sealed class ProjectPanel : Panel
 					relative,
 					$"Scene {index - 1}") is not null)
 			{
-				_folder = "Scenes";
+				// Creation opens the scene and raises SceneChanged while
+				// the panel still shows the old folder. Move to the new
+				// scene's folder and rebuild again so its tile is visible.
+				_folder = ParentFolder(relative);
+				Rebuild(force: true);
 			}
 		}
 
