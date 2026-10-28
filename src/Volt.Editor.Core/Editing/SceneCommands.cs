@@ -388,6 +388,102 @@ public sealed class RemoveComponentCommand : IEditorCommand
 	}
 }
 
+/// <summary>
+/// Inserts a prepared set of objects, with the hierarchy between
+/// them, as one undoable step.
+/// </summary>
+/// <remarks>
+/// The objects are created by the clipboard, so their identities and
+/// names are already decided by the time the command runs. Undo
+/// removes every inserted root and its subtree, and a redo restores
+/// exactly those objects, keeping their ids stable.
+/// </remarks>
+public sealed class PasteEntitiesCommand : IEditorCommand
+{
+	private readonly SceneDocument _scene;
+	private readonly List<SceneEntity> _entities;
+	private RemovedEntityBatch _removed = RemovedEntityBatch.Empty;
+	private bool _inserted;
+
+	public PasteEntitiesCommand(
+		SceneDocument scene,
+		IReadOnlyList<SceneEntity> entities)
+	{
+		ArgumentNullException.ThrowIfNull(scene);
+		ArgumentNullException.ThrowIfNull(entities);
+
+		if (entities.Count == 0)
+		{
+			throw new ArgumentException(
+				"A paste requires at least one object.",
+				nameof(entities));
+		}
+
+		_scene = scene;
+		_entities = [.. entities];
+		Roots = [.. _entities.Where(entity => entity.ParentId is null)];
+
+		Description = Roots.Count == 1
+			? $"Paste {Roots[0].Name}"
+			: $"Paste {Roots.Count} objects";
+	}
+
+	public string Description { get; }
+
+	/// <summary>
+	/// Gets the inserted objects that have no inserted parent.
+	/// </summary>
+	public IReadOnlyList<SceneEntity> Roots { get; }
+
+	/// <summary>
+	/// Gets the identities of the inserted roots, for selecting them.
+	/// </summary>
+	public IReadOnlyList<Guid> RootIds =>
+		[.. Roots.Select(entity => entity.Id)];
+
+	public void Execute()
+	{
+		if (!_inserted)
+		{
+			// The clipboard hands over parents first, so every parent
+			// a child names is already part of the scene.
+			foreach (SceneEntity entity in _entities)
+			{
+				_scene.AddEntity(entity);
+			}
+
+			_inserted = true;
+			return;
+		}
+
+		if (!_removed.IsEmpty)
+		{
+			_scene.RestoreRemoved(_removed);
+			_removed = RemovedEntityBatch.Empty;
+		}
+	}
+
+	public void Undo()
+	{
+		if (!_inserted)
+		{
+			return;
+		}
+
+		List<RemovedSceneEntity> removed = [];
+
+		// Removing the last root first keeps the recorded insertion
+		// indices consistent with the scene they came from.
+		for (int index = Roots.Count - 1; index >= 0; index--)
+		{
+			RemovedEntityBatch batch = _scene.RemoveEntity(Roots[index].Id);
+			removed.AddRange(batch.Entities);
+		}
+
+		_removed = new RemovedEntityBatch(removed);
+	}
+}
+
 public sealed class ComponentPropertyCommand : IEditorCommand
 {
 	private readonly SceneDocument _scene;

@@ -26,6 +26,8 @@ public sealed class HierarchyPanel : Panel
 	private readonly TextField _search;
 	private readonly EmptyStateView _empty;
 	private readonly Panel _emptyHost;
+	private readonly IconButton _duplicateButton;
+	private readonly IconButton _deleteButton;
 
 	private readonly Dictionary<Guid, TreeViewItem> _items = [];
 	private readonly HashSet<Guid> _expanded = [];
@@ -65,8 +67,19 @@ public sealed class HierarchyPanel : Panel
 		});
 
 		header.Add(CreateAction(UiIcon.Plus, "Create an empty object", CreateEntity));
-		header.Add(CreateAction(UiIcon.Duplicate, "Duplicate the selection", Duplicate));
-		header.Add(CreateAction(UiIcon.Trash, "Delete the selection", Delete));
+
+		_duplicateButton = CreateAction(
+			UiIcon.Duplicate,
+			"Duplicate the selection",
+			Duplicate);
+
+		_deleteButton = CreateAction(
+			UiIcon.Trash,
+			"Delete the selection",
+			Delete);
+
+		header.Add(_duplicateButton);
+		header.Add(_deleteButton);
 
 		_search = new TextField
 		{
@@ -113,6 +126,7 @@ public sealed class HierarchyPanel : Panel
 		_session.SelectionChanged += OnSessionChanged;
 
 		RefreshStructure(force: true);
+		UpdateActionStates();
 	}
 
 	protected override void OnDetached()
@@ -226,7 +240,20 @@ public sealed class HierarchyPanel : Panel
 
 	private void OnSessionChanged(EditorSession session)
 	{
+		UpdateActionStates();
 		RefreshStructure(force: false);
+	}
+
+	/// <summary>
+	/// Keeps the header's selection commands disabled while there is
+	/// nothing for them to act on.
+	/// </summary>
+	private void UpdateActionStates()
+	{
+		bool hasSelection = _session.Selection.Count > 0;
+
+		_duplicateButton.IsEnabled = hasSelection;
+		_deleteButton.IsEnabled = hasSelection;
 	}
 
 	private void RefreshStructure(bool force)

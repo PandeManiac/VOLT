@@ -556,6 +556,92 @@ public sealed class EditorSession : IDisposable
 		return copies;
 	}
 
+	/// <summary>
+	/// Gets the entity clipboard shared by every scene the editor
+	/// opens, so objects can be copied from one scene and pasted into
+	/// another.
+	/// </summary>
+	public EntityClipboard Clipboard { get; } = new();
+
+	/// <summary>
+	/// Copies the selected objects, and everything under them, to the
+	/// clipboard.
+	/// </summary>
+	/// <returns>The number of copied objects, including children.</returns>
+	public int CopySelection()
+	{
+		if (Scene is not SceneDocument scene || _selection.Count == 0)
+		{
+			return 0;
+		}
+
+		int copied = Clipboard.Capture(scene, _selection);
+
+		SetStatus(copied == 1
+			? "Copied 1 object"
+			: $"Copied {copied} objects");
+
+		return copied;
+	}
+
+	/// <summary>
+	/// Copies the selected objects and deletes them.
+	/// </summary>
+	/// <remarks>
+	/// The copy is taken before the delete, so an undo of the cut
+	/// restores the objects while the clipboard still holds them.
+	/// </remarks>
+	/// <returns>The number of copied objects, including children.</returns>
+	public int CutSelection()
+	{
+		if (Scene is not SceneDocument scene || _selection.Count == 0)
+		{
+			return 0;
+		}
+
+		int cut = Clipboard.Capture(scene, _selection);
+		DeleteSelection();
+
+		if (cut > 0)
+		{
+			SetStatus(cut == 1
+				? "Cut 1 object"
+				: $"Cut {cut} objects");
+		}
+
+		return cut;
+	}
+
+	/// <summary>
+	/// Pastes the clipboard into the open scene as one undo step.
+	/// </summary>
+	/// <returns>The pasted objects, in the clipboard's order.</returns>
+	public IReadOnlyList<SceneEntity> PasteClipboard()
+	{
+		SceneDocument scene = RequireScene();
+
+		if (Clipboard.IsEmpty)
+		{
+			return [];
+		}
+
+		PasteEntitiesCommand command = new(scene, Clipboard.CreateEntities());
+
+		Undo.Execute(command);
+
+		Guid? active = command.RootIds.Count > 0
+			? command.RootIds[0]
+			: null;
+
+		SelectMany(command.RootIds, active);
+
+		SetStatus(command.Roots.Count == 1
+			? $"Pasted {command.Roots[0].Name}"
+			: $"Pasted {command.Roots.Count} objects");
+
+		return command.Roots;
+	}
+
 	private IReadOnlyList<SceneEntity> DuplicateEntities(
 		SceneDocument scene,
 		IReadOnlyList<SceneEntity> sources)

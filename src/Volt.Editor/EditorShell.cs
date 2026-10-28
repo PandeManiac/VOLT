@@ -48,6 +48,7 @@ public sealed class EditorShell : Panel
 	private readonly Dictionary<EditorTool, IconButton> _toolButtons = [];
 	private readonly Dictionary<PanelTab, MenuItem> _windowMenuItems = [];
 	private readonly Dictionary<float, MenuItem> _scaleMenuItems = [];
+	private readonly List<(MenuItem Item, Func<bool> CanExecute)> _menuCommands = [];
 
 	private UiTheme _theme = UiTheme.CreateDark();
 
@@ -388,6 +389,7 @@ public sealed class EditorShell : Panel
 		_toolButtons.Clear();
 		_windowMenuItems.Clear();
 		_scaleMenuItems.Clear();
+		_menuCommands.Clear();
 		_frameTicks.Clear();
 
 		Build();
@@ -430,15 +432,17 @@ public sealed class EditorShell : Panel
 		file.AddChild(new MenuItem("New Project…", ShowStartScreen));
 		file.AddChild(new MenuItem("Open Project…", ShowStartScreen));
 		file.AddChild(MenuItem.Separator);
-		file.AddChild(new MenuItem(
+		AddCommand(
+			file,
 			"New Scene",
-			() => Guard("New scene", CreateNewScene)));
-		file.AddChild(new MenuItem(
+			() => Guard("New scene", CreateNewScene),
+			() => _session.Project is not null);
+		AddCommand(
+			file,
 			"Save Scene",
-			() => Guard("Save scene", _session.SaveScene))
-		{
-			Shortcut = "Ctrl+S"
-		});
+			() => Guard("Save scene", _session.SaveScene),
+			() => _session.Scene is not null,
+			"Ctrl+S");
 		file.AddChild(MenuItem.Separator);
 		file.AddChild(new MenuItem(
 			"Exit",
@@ -446,106 +450,141 @@ public sealed class EditorShell : Panel
 
 		MenuItem edit = bar.AddMenu("Edit");
 
-		edit.AddChild(new MenuItem(
+		AddCommand(
+			edit,
 			"Undo",
-			() => Guard("Undo", _session.UndoLast))
-		{
-			Shortcut = "Ctrl+Z"
-		});
+			() => Guard("Undo", _session.UndoLast),
+			() => _session.Undo.CanUndo,
+			"Ctrl+Z");
 
-		edit.AddChild(new MenuItem(
+		AddCommand(
+			edit,
 			"Redo",
-			() => Guard("Redo", _session.RedoLast))
-		{
-			Shortcut = "Ctrl+Y"
-		});
+			() => Guard("Redo", _session.RedoLast),
+			() => _session.Undo.CanRedo,
+			"Ctrl+Y");
 
 		edit.AddChild(MenuItem.Separator);
 
-		edit.AddChild(new MenuItem(
+		AddCommand(
+			edit,
+			"Cut",
+			() => Guard("Cut", () => _session.CutSelection()),
+			() => _session.Selection.Count > 0,
+			"Ctrl+X");
+
+		AddCommand(
+			edit,
+			"Copy",
+			() => Guard("Copy", () => _session.CopySelection()),
+			() => _session.Selection.Count > 0,
+			"Ctrl+C");
+
+		AddCommand(
+			edit,
+			"Paste",
+			() => Guard("Paste", () => _session.PasteClipboard()),
+			() => !_session.Clipboard.IsEmpty,
+			"Ctrl+V");
+
+		edit.AddChild(MenuItem.Separator);
+
+		AddCommand(
+			edit,
 			"Duplicate Selection",
-			() => Guard("Duplicate", () => _session.DuplicateSelection()))
-		{
-			Shortcut = "Ctrl+D"
-		});
+			() => Guard("Duplicate", () => _session.DuplicateSelection()),
+			() => _session.Selection.Count > 0,
+			"Ctrl+D");
 
-		edit.AddChild(new MenuItem(
+		AddCommand(
+			edit,
 			"Delete Selection",
-			() => Guard("Delete", () => _session.DeleteSelection()))
-		{
-			Shortcut = "Del"
-		});
+			() => Guard("Delete", () => _session.DeleteSelection()),
+			() => _session.Selection.Count > 0,
+			"Del");
 
 		edit.AddChild(MenuItem.Separator);
 
-		edit.AddChild(new MenuItem(
+		AddCommand(
+			edit,
 			"Select All",
-			() => Guard("Select all", () => _session.SelectAll()))
-		{
-			Shortcut = "Ctrl+A"
-		});
+			() => Guard("Select all", () => _session.SelectAll()),
+			() => _session.Scene is { EntityCount: > 0 },
+			"Ctrl+A");
 
-		edit.AddChild(new MenuItem(
+		AddCommand(
+			edit,
 			"Select None",
-			() => Guard("Select none", _session.SelectNone))
-		{
-			Shortcut = "Ctrl+Shift+A"
-		});
+			() => Guard("Select none", _session.SelectNone),
+			() => _session.Selection.Count > 0,
+			"Ctrl+Shift+A");
 
-		edit.AddChild(new MenuItem(
+		AddCommand(
+			edit,
 			"Invert Selection",
-			() => Guard("Invert selection", () => _session.InvertSelection()))
-		{
-			Shortcut = "Ctrl+I"
-		});
-
-		edit.AddChild(MenuItem.Separator);
-
-		// Entity clipboard operations are not implemented: the editor
-		// has a duplicate command, but no cross-scene clipboard yet.
-		edit.AddChild(new MenuItem("Cut") { IsEnabled = false });
-		edit.AddChild(new MenuItem("Copy") { IsEnabled = false });
-		edit.AddChild(new MenuItem("Paste") { IsEnabled = false });
+			() => Guard("Invert selection", () => _session.InvertSelection()),
+			() => _session.Scene is { EntityCount: > 0 },
+			"Ctrl+I");
 
 		edit.AddChild(MenuItem.Separator);
 		edit.AddChild(new MenuItem("Preferences…", ShowPreferences));
 
 		MenuItem assets = bar.AddMenu("Assets");
 
-		assets.AddChild(new MenuItem(
+		AddCommand(
+			assets,
 			"Refresh Asset Catalog",
 			() => Guard("Refresh assets", () =>
 			{
-				_session.Project?.AssetCatalog.Refresh();
-				_session.SetStatus("Asset catalog refreshed");
-			})));
+				EditorProject project = _session.Project ??
+					throw new InvalidOperationException(
+						"No project is open.");
 
-		assets.AddChild(new MenuItem(
+				project.AssetCatalog.Refresh();
+				_session.SetStatus("Asset catalog refreshed");
+			}),
+			() => _session.Project is not null);
+
+		AddCommand(
+			assets,
 			"New Scene",
-			() => Guard("New scene", CreateNewScene)));
+			() => Guard("New scene", CreateNewScene),
+			() => _session.Project is not null);
 
 		MenuItem create = bar.AddMenu("GameObject");
 
-		create.AddChild(new MenuItem(
+		AddCommand(
+			create,
 			"Create Empty",
 			() => Guard("Create object", () =>
-				_session.CreateEntity("GameObject"))));
+				_session.CreateEntity("GameObject")),
+			() => _session.Scene is not null);
 
 		create.AddChild(MenuItem.Separator);
 
-		create.AddChild(new MenuItem(
+		AddCommand(
+			create,
 			"Create Cube",
-			() => CreatePrimitive("Cube", "builtin:cube", withSpin: false)));
+			() => CreatePrimitive("Cube", "builtin:cube", withSpin: false),
+			() => _session.Scene is not null);
 
-		create.AddChild(new MenuItem(
+		AddCommand(
+			create,
 			"Create Sphere",
-			() => CreatePrimitive("Sphere", "builtin:sphere", withSpin: false)));
+			() => CreatePrimitive("Sphere", "builtin:sphere", withSpin: false),
+			() => _session.Scene is not null);
 
-		create.AddChild(new MenuItem(
+		AddCommand(
+			create,
 			"Create Plane",
-			() => CreatePrimitive("Plane", "builtin:plane", withSpin: false)));
+			() => CreatePrimitive("Plane", "builtin:plane", withSpin: false),
+			() => _session.Scene is not null);
 
-		create.AddChild(new MenuItem("Create Camera", CreateCamera));
+		AddCommand(
+			create,
+			"Create Camera",
+			CreateCamera,
+			() => _session.Scene is not null);
 
 		create.AddChild(MenuItem.Separator);
 
@@ -560,7 +599,8 @@ public sealed class EditorShell : Panel
 		{
 			EditorComponentDescriptor captured = descriptor;
 
-			component.AddChild(new MenuItem(
+			AddCommand(
+				component,
 				$"Add {descriptor.DisplayName}",
 				() => Guard("Add component", () =>
 				{
@@ -571,7 +611,9 @@ public sealed class EditorShell : Panel
 					}
 
 					_session.AddComponent(id, captured.TypeId);
-				})));
+				}),
+				() => _session.ActiveEntity?.HasComponent(
+					captured.TypeId) == false);
 		}
 
 		MenuItem window = bar.AddMenu("Window");
@@ -633,10 +675,47 @@ public sealed class EditorShell : Panel
 			() => _session.Log(
 				"Q/W/E/R select, Ctrl+S save, Ctrl+Z undo, Ctrl+Y redo, " +
 				"Ctrl+D duplicate, Del delete. In a viewport: hold the " +
-				"right mouse button to look, WASD/E/Q to fly, Shift to " +
-				"sprint, middle drag to pan, wheel to dolly, F to frame.")));
+				"right mouse button to look, WASD/E/Q to fly, Shift to " +			" sprint, middle drag to pan, wheel to dolly, F to frame.")));
+
+		RefreshCommandStates();
 
 		return bar;
+	}
+
+	private MenuItem AddCommand(
+		MenuItem parent,
+		string label,
+		Action action,
+		Func<bool>? canExecute = null,
+		string shortcut = "")
+	{
+		MenuItem item = new(label, action) { Shortcut = shortcut };
+		parent.AddChild(item);
+
+		if (canExecute is not null)
+		{
+			_menuCommands.Add((item, canExecute));
+		}
+
+		return item;
+	}
+
+	/// <summary>
+	/// Updates every command's availability from the editor's state.
+	/// </summary>
+	/// <remarks>
+	/// An entry shown as usable has to work. The commands whose
+	/// precondition moves (a selection, undo history, an open scene, a
+	/// clipboard) register a predicate here, and the shell refreshes
+	/// them whenever that state can have changed, so the menu never
+	/// offers a click that does nothing or only reports an error.
+	/// </remarks>
+	private void RefreshCommandStates()
+	{
+		foreach ((MenuItem item, Func<bool> canExecute) in _menuCommands)
+		{
+			item.IsEnabled = canExecute();
+		}
 	}
 
 	private Panel BuildToolbar()
@@ -1070,6 +1149,24 @@ public sealed class EditorShell : Panel
 			UiKeyModifiers.None,
 			() => Guard("Delete", () => _session.DeleteSelection()),
 			() => _session.Selection.Count > 0));
+
+		AddShortcut(new UiShortcut(
+			UiKey.C,
+			UiKeyModifiers.Control,
+			() => Guard("Copy", () => _session.CopySelection()),
+			() => _session.Selection.Count > 0));
+
+		AddShortcut(new UiShortcut(
+			UiKey.X,
+			UiKeyModifiers.Control,
+			() => Guard("Cut", () => _session.CutSelection()),
+			() => _session.Selection.Count > 0));
+
+		AddShortcut(new UiShortcut(
+			UiKey.V,
+			UiKeyModifiers.Control,
+			() => Guard("Paste", () => _session.PasteClipboard()),
+			() => !_session.Clipboard.IsEmpty));
 
 		// Selection commands follow the familiar editor layout. A
 		// focused text field gets these keys first, so select-all still
@@ -1554,23 +1651,30 @@ public sealed class EditorShell : Panel
 
 	private void OnProjectChanged(EditorSession session)
 	{
+		RefreshCommandStates();
 		UpdateStartVisibility();
 		UpdateStatus();
 	}
 
 	private void OnSceneChanged(EditorSession session)
 	{
+		RefreshCommandStates();
 		UpdateStatus();
 	}
 
 	private void OnPlayStateChanged(EditorSession session)
 	{
+		RefreshCommandStates();
 		UpdatePlayButtons();
 		UpdateStatus();
 	}
 
 	private void OnStatusChanged(EditorSession session)
 	{
+		// Clipboard and selection commands report through the status
+		// line, so refreshing here keeps Paste and friends honest the
+		// moment their precondition changes.
+		RefreshCommandStates();
 		UpdateStatus();
 	}
 

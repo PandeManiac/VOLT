@@ -270,6 +270,7 @@ public sealed class ProjectPanel : Panel
 	{
 		if (_session.Project is not EditorProject project)
 		{
+			_session.SetStatus("Open a project to create a scene");
 			return;
 		}
 
@@ -329,6 +330,8 @@ public sealed class ProjectPanel : Panel
 			_list.Clear();
 			_breadcrumb.Text = "No project open";
 			_details.Text = string.Empty;
+			_refreshButton.IsEnabled = false;
+			_newSceneButton.IsEnabled = false;
 			_empty.Title = "No project open";
 			_empty.Description =
 				"Create or open a project to browse its assets.";
@@ -358,6 +361,8 @@ public sealed class ProjectPanel : Panel
 			: $"{project.Name}  /  {_folder.Replace("/", "  /  ")}";
 
 		_upButton.IsEnabled = _folder.Length > 0;
+		_refreshButton.IsEnabled = true;
+		_newSceneButton.IsEnabled = true;
 
 		int total = _gridMode
 			? _tiles.Children.Count
