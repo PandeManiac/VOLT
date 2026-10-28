@@ -141,6 +141,8 @@ internal static class Program
 				Title = "VOLT Editor",
 				EnableValidation = validation,
 				Theme = UiTheme.CreateDark(),
+				DiagnosticSink = message =>
+					Console.Error.WriteLine($"Vulkan: {message}"),
 				Size = initialWindowSize,
 				Position = initialWindowPosition
 			});
@@ -192,9 +194,15 @@ internal static class Program
 
 		host.Ui.PointerCapture = pointerCapture;
 
+		// The UI surface has no layout size until the first frame, so the
+		// startup line reports the window geometry SDL already knows.
+		UiSurfaceMetrics geometry = host.SurfaceMetrics;
+
 		Console.WriteLine(
-			$"Window: {host.Ui.Surface.Width:0}x{host.Ui.Surface.Height:0} " +
-			$"at interface scale {shell.UiScale * 100f:0}%");
+			$"Window: {geometry.PhysicalWidth}x{geometry.PhysicalHeight} " +
+			$"physical, {geometry.LogicalWidth}x{geometry.LogicalHeight} " +
+			$"logical at interface scale {shell.UiScale * 100f:0}% " +
+			$"(display scale {geometry.DisplayScale:0.##}x)");
 
 		int frames = 0;
 		int projectRevision = preferences.ProjectRevision;
