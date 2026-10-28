@@ -218,6 +218,68 @@ public sealed class EditorProject
 	}
 
 	/// <summary>
+	/// Creates a folder beneath Assets or Scenes.
+	/// </summary>
+	/// <remarks>
+	/// Only project-visible roots are accepted. The parent folder must
+	/// already exist, and an existing file or directory at the target
+	/// path refuses the operation. An empty folder is a real project
+	/// folder: refreshing the catalog records it and the browser shows
+	/// it before anything is added.
+	/// </remarks>
+	/// <returns>The normalized project-relative folder identity.</returns>
+	public string CreateFolder(string relativePath)
+	{
+		ArgumentNullException.ThrowIfNull(relativePath);
+
+		string id = ProjectAssetCatalog.NormalizeId(relativePath).TrimEnd('/');
+
+		if (id.Length == 0)
+		{
+			throw new ArgumentException(
+				"A folder path is required.",
+				nameof(relativePath));
+		}
+
+		string[] segments = id.Split('/');
+
+		if (segments.Length < 2 ||
+			(!string.Equals(segments[0], "Assets", StringComparison.OrdinalIgnoreCase) &&
+				!string.Equals(segments[0], "Scenes", StringComparison.OrdinalIgnoreCase)))
+		{
+			throw new ArgumentException(
+				"Folders can only be created inside Assets or Scenes.",
+				nameof(relativePath));
+		}
+
+		foreach (string segment in segments)
+		{
+			ValidateAssetName(segment, nameof(relativePath));
+		}
+
+		string destination = ResolvePath(id);
+
+		if (File.Exists(destination) || Directory.Exists(destination))
+		{
+			throw new IOException(
+				$"A file or folder already exists at '{id}'.");
+		}
+
+		string? parent = Path.GetDirectoryName(destination);
+
+		if (parent is null || !Directory.Exists(parent))
+		{
+			throw new DirectoryNotFoundException(
+				$"The parent folder for '{id}' does not exist.");
+		}
+
+		Directory.CreateDirectory(destination);
+		AssetCatalog.Refresh();
+
+		return id;
+	}
+
+	/// <summary>
 	/// Copies an asset to a numbered sibling in the same folder.
 	/// </summary>
 	/// <remarks>

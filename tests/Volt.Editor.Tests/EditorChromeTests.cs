@@ -965,6 +965,77 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_CreatesAndNavigatesToAnEmptyFolder()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		IconButton create = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Create a new folder");
+
+		Click(create);
+		Paint(0.2);
+
+		Assert.NotNull(_context.Modal);
+
+		TextField name = Assert.IsType<TextField>(_context.FocusedWidget);
+
+		Assert.Equal("New Folder", name.Text);
+
+		name.SetSelection(0, name.Text.Length);
+		_context.TextInput("Materials");
+		Paint(0.25);
+
+		Button submit = Descendants(_context.Modal!)
+			.OfType<Button>()
+			.Single(button => button.Text == "Create");
+
+		Click(submit);
+		Paint(0.3);
+
+		const string Folder = "Assets/Materials";
+
+		Assert.Null(_context.Modal);
+		Assert.True(Directory.Exists(
+			_session.Project!.ResolvePath(Folder)));
+		Assert.Contains(Folder, _session.Project.AssetCatalog.Folders);
+
+		IconTileView created = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Materials");
+
+		Assert.True(created.IsSelected);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem assets = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Assets");
+		TreeViewItem materials = assets.Children
+			.Single(item => item.Text == "Materials");
+
+		folders.SetSelection([materials]);
+		Paint(0.4);
+
+		Assert.Equal(Folder, folders.SelectedItem?.Tag);
+		Assert.Contains(
+			Descendants(project).OfType<Label>(),
+			label => label.Text == "Chrome  /  Assets  /  Materials");
+		Assert.DoesNotContain(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.Text == "Materials");
+	}
+
+	[Fact]
 	public void ProjectBrowser_ReturnsToTheNewProjectsRoot()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);

@@ -288,10 +288,14 @@ ratios without discarding the state inside open panels.
 - **Project** browses the project folder through the asset catalog and
   can assign asset references in the inspector. Its **New Scene**
   action opens the scene and moves the browser to the scene's folder
-  so the new tile is visible. Grid and list modes share the selected
-  asset, so switching views keeps the same item highlighted and moves
-  keyboard focus onto it, leaving `F2`, `Delete`, and arrow navigation
-  ready to use. The folder tree keeps the current folder selected and
+  so the new tile is visible. Its **New Folder** action creates a
+  directory in the current folder, leaves it selected, and shows empty
+  directories in both the folder tree and the contents so a new folder
+  does not disappear until a file is added. Grid and list modes share
+  the selected asset, so switching views keeps the same item
+  highlighted and moves keyboard focus onto it, leaving `F2`, `Delete`,
+  and arrow navigation ready to use. The folder tree keeps the current
+  folder selected and
   its collapsed branches collapsed as it rebuilds, and the selected
   item's details survive a refresh. Switching between tiles and the
   list scrolls the selected item into view, and the arrow keys move

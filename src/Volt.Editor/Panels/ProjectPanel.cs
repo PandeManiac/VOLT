@@ -45,6 +45,7 @@ public sealed class ProjectPanel : Panel
 	private readonly IconButton _listButton;
 	private readonly IconButton _refreshButton;
 	private readonly IconButton _newSceneButton;
+	private readonly IconButton _newFolderButton;
 	private readonly IconButton _upButton;
 
 	private readonly List<IconTileView> _tileViews = [];
@@ -98,6 +99,10 @@ public sealed class ProjectPanel : Panel
 
 		_refreshButton = CreateAction(UiIcon.Refresh, "Rescan the project folder", RefreshCatalog);
 		_newSceneButton = CreateAction(UiIcon.Plus, "Create a new scene", CreateScene);
+		_newFolderButton = CreateAction(
+			UiIcon.Folder,
+			"Create a new folder",
+			ShowCreateFolderDialog);
 		_tilesButton = CreateAction(
 			UiIcon.TileView,
 			"Show assets as tiles",
@@ -112,6 +117,7 @@ public sealed class ProjectPanel : Panel
 		header.Add(CreateSeparator());
 		header.Add(_refreshButton);
 		header.Add(_newSceneButton);
+		header.Add(_newFolderButton);
 		header.Add(_tilesButton);
 		header.Add(_listButton);
 
@@ -567,6 +573,121 @@ public sealed class ProjectPanel : Panel
 		}
 	}
 
+	private void ShowCreateFolderDialog()
+	{
+		if (_session.Project is not EditorProject project ||
+			Context is not UiContext context)
+		{
+			return;
+		}
+
+		string parent = _folder.Length == 0 ? "Assets" : _folder;
+		UiTheme theme = context.Theme;
+		Panel scrim = CreateAssetDialog(
+			theme,
+			"New folder",
+			400f,
+			out StackPanel content);
+
+		content.Add(new Label($"Create a folder in \"{parent}\".")
+		{
+			Font = theme.Fonts.Body,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		TextField name = new(NextFolderName(project, parent))
+		{
+			Height = UiLength.Points(28f),
+			Placeholder = "Folder name",
+			MaximumLength = 120,
+			TooltipText = "Folder name"
+		};
+
+		content.Add(name);
+
+		Label error = new(string.Empty)
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.Danger,
+			Wrap = UiTextWrap.Wrap
+		};
+
+		content.Add(error);
+
+		StackPanel buttons = new(UiOrientation.Horizontal)
+		{
+			Spacing = 6f
+		};
+
+		Button create = new("Create")
+		{
+			IsPrimary = true,
+			MinHeight = 28f
+		};
+
+		Button cancel = new("Cancel")
+		{
+			MinHeight = 28f
+		};
+
+		cancel.Clicked += _ => context.CloseModal();
+
+		create.Clicked += _ =>
+		{
+			try
+			{
+				string folder = project.CreateFolder($"{parent}/{name.Text}");
+
+				_folder = parent;
+				_folderSelectionActive = true;
+				_selectedId = folder;
+				_selectedIsFolder = true;
+
+				if (_search.Text.Length > 0)
+				{
+					_search.Text = string.Empty;
+				}
+
+				Rebuild(force: true);
+				_revealSelectionPending = true;
+				context.CloseModal();
+				_session.SetStatus(
+					$"Created folder {Path.GetFileName(folder)}");
+			}
+
+			catch (Exception exception)
+			{
+				error.Text = exception.Message;
+			}
+		};
+
+		buttons.Add(create);
+		buttons.Add(cancel);
+		content.Add(buttons);
+
+		context.ShowModal(scrim);
+		name.Focus();
+		name.SelectAll();
+	}
+
+	private static string NextFolderName(EditorProject project, string parent)
+	{
+		string candidate = "New Folder";
+
+		for (int index = 1; ; index++)
+		{
+			string path = $"{parent}/{candidate}";
+
+			if (!project.AssetCatalog.Folders.Any(folder =>
+				string.Equals(folder, path, StringComparison.OrdinalIgnoreCase)))
+			{
+				return candidate;
+			}
+
+			candidate = $"New Folder {index}";
+		}
+	}
+
 	private void GoUp()
 	{
 		if (_folder.Length == 0)
@@ -619,6 +740,7 @@ public sealed class ProjectPanel : Panel
 			_details.Text = string.Empty;
 			_refreshButton.IsEnabled = false;
 			_newSceneButton.IsEnabled = false;
+			_newFolderButton.IsEnabled = false;
 			_empty.Title = "No project open";
 			_empty.Description =
 				"Create or open a project to browse its assets.";
@@ -638,10 +760,11 @@ public sealed class ProjectPanel : Panel
 		_updating = true;
 
 		IReadOnlyList<ProjectAsset> assets = project.AssetCatalog.Assets;
+		IReadOnlyList<string> folders = project.AssetCatalog.Folders;
 		string filter = _search.Text.Trim();
 
-		RebuildFolders(assets, filter);
-		RebuildContents(assets, filter);
+		RebuildFolders(folders, filter);
+		RebuildContents(assets, folders, filter);
 
 		_breadcrumb.Text = _folder.Length == 0
 			? project.Name
@@ -650,6 +773,7 @@ public sealed class ProjectPanel : Panel
 		_upButton.IsEnabled = _folder.Length > 0;
 		_refreshButton.IsEnabled = true;
 		_newSceneButton.IsEnabled = true;
+		_newFolderButton.IsEnabled = true;
 
 		int total = _gridMode
 			? _tiles.Children.Count
@@ -680,7 +804,7 @@ public sealed class ProjectPanel : Panel
 	}
 
 	private void RebuildFolders(
-		IReadOnlyList<ProjectAsset> assets,
+		IReadOnlyList<string> folders,
 		string filter)
 	{
 		if (_skipFolderCapture)
@@ -699,29 +823,28 @@ public sealed class ProjectPanel : Panel
 		SortedDictionary<string, TreeViewItem> nodes =
 			new(StringComparer.OrdinalIgnoreCase);
 
-		foreach (ProjectAsset asset in assets)
+		foreach (string folder in folders)
 		{
-			string[] segments = asset.Id.Split('/');
-
-			if (segments.Length < 2)
-			{
-				continue;
-			}
-
+			string[] segments = folder.Split('/');
 			string path = string.Empty;
 			TreeViewItem? parent = null;
 
-			for (int index = 0; index < segments.Length - 1; index++)
+			foreach (string segment in segments)
 			{
+				if (segment.Length == 0)
+				{
+					continue;
+				}
+
 				path = path.Length == 0
-					? segments[index]
-					: $"{path}/{segments[index]}";
+					? segment
+					: $"{path}/{segment}";
 
 				if (!nodes.TryGetValue(path, out TreeViewItem? node))
 				{
 					node = new TreeViewItem(
 						$"folder:{path}",
-						segments[index],
+						segment,
 						path)
 					{
 						IsExpanded = filter.Length > 0 ||
@@ -823,6 +946,7 @@ public sealed class ProjectPanel : Panel
 
 	private void RebuildContents(
 		IReadOnlyList<ProjectAsset> assets,
+		IReadOnlyList<string> folders,
 		string filter)
 	{
 		for (int index = _tiles.Children.Count - 1; index >= 0; index--)
@@ -866,43 +990,29 @@ public sealed class ProjectPanel : Panel
 			visible.Add(asset);
 		}
 
-		SortedDictionary<string, string> folders =
+		SortedDictionary<string, string> childFolders =
 			new(StringComparer.OrdinalIgnoreCase);
 
-		foreach (ProjectAsset asset in assets)
+		foreach (string folder in folders)
 		{
-			if (filter.Length > 0)
-			{
-				continue;
-			}
-
-			if (_folder.Length > 0 &&
-				!asset.Id.StartsWith(
-					_folder + "/",
+			// A matching asset is enough while filtering; folder rows
+			// would make the result look less like a flat search.
+			if (filter.Length > 0 ||
+				!string.Equals(
+					ParentFolder(folder),
+					_folder,
 					StringComparison.OrdinalIgnoreCase))
 			{
 				continue;
 			}
 
-			string remainder = asset.Id[(_folder.Length == 0
-				? 0
-				: _folder.Length + 1)..];
-			int slash = remainder.IndexOf('/');
+			int slash = folder.LastIndexOf('/');
+			string name = slash < 0 ? folder : folder[(slash + 1)..];
 
-			if (slash <= 0)
-			{
-				continue;
-			}
-
-			string name = remainder[..slash];
-			string folderPath = _folder.Length == 0
-				? name
-				: $"{_folder}/{name}";
-
-			folders[folderPath] = name;
+			childFolders[folder] = name;
 		}
 
-		foreach (KeyValuePair<string, string> folder in folders)
+		foreach (KeyValuePair<string, string> folder in childFolders)
 		{
 			IconTileView tile = new(
 				UiIcon.Folder,
@@ -1545,6 +1655,11 @@ public sealed class ProjectPanel : Panel
 	{
 		System.Text.StringBuilder builder = new();
 		builder.Append(filter).Append('|').Append(folder).Append('|');
+
+		foreach (string item in project.AssetCatalog.Folders)
+		{
+			builder.Append(item).Append(';');
+		}
 
 		foreach (ProjectAsset asset in project.AssetCatalog.Assets)
 		{
