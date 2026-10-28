@@ -63,6 +63,7 @@ public sealed class EditorShell : Panel
 	private TextField? _projectPath;
 	private TextField? _projectName;
 	private Label? _startError;
+	private Button? _backToEditorButton;
 
 	private IconButton? _playButton;
 	private IconButton? _pauseButton;
@@ -152,6 +153,11 @@ public sealed class EditorShell : Panel
 	/// Gets the current interface scale.
 	/// </summary>
 	public float UiScale => _uiScale;
+
+	/// <summary>
+	/// Gets whether the start screen is covering the workspace.
+	/// </summary>
+	internal bool StartScreenVisible => _startOverlay?.IsVisible == true;
 
 	/// <summary>
 	/// Gets the menu bar. Layout tests assert the chrome edges with it.
@@ -445,6 +451,7 @@ public sealed class EditorShell : Panel
 		_statusRight = null;
 		_startOverlay = null;
 		_startError = null;
+		_backToEditorButton = null;
 		_projectPath = null;
 		_projectName = null;
 		_playButton = null;
@@ -1160,8 +1167,18 @@ public sealed class EditorShell : Panel
 
 		open.Clicked += _ => OpenProjectFromStart();
 
+		Button back = new("Back to Editor")
+		{
+			MinHeight = 28f,
+			IsVisible = _session.Project is not null
+		};
+
+		back.Clicked += _ => HideStartScreen();
+		_backToEditorButton = back;
+
 		buttons.Add(create);
 		buttons.Add(open);
+		buttons.Add(back);
 		content.Add(buttons);
 		content.Add(startError);
 
@@ -1975,6 +1992,11 @@ public sealed class EditorShell : Panel
 			error.Text = string.Empty;
 		}
 
+		if (_backToEditorButton is Button back)
+		{
+			back.IsVisible = _session.Project is not null;
+		}
+
 		if (_startOverlay is Panel overlay)
 		{
 			overlay.IsVisible = true;
@@ -2052,6 +2074,11 @@ public sealed class EditorShell : Panel
 		if (_startOverlay is Panel overlay)
 		{
 			overlay.IsVisible = _session.Project is null;
+		}
+
+		if (_backToEditorButton is Button back)
+		{
+			back.IsVisible = _session.Project is not null;
 		}
 	}
 

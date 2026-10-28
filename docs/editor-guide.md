@@ -110,6 +110,11 @@ The starter scene contains a camera and a cube with the built-in spin
 behaviour. `project.volt.json` is versioned and points at the startup
 scene. Paths are project-relative and may not escape the project root.
 
+When a project is already open, **File → New Project…**, **File →
+Open Project…**, and **Window → Start Screen** show this screen over
+the workspace. **Back to Editor** returns to the open scene without
+changing it, so opening the screen by mistake is harmless.
+
 ## Layout
 
 ```text

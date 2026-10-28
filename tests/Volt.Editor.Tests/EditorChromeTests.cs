@@ -561,6 +561,51 @@ public sealed class EditorChromeTests : IDisposable
 		Assert.NotNull(_context.Modal);
 	}
 
+	[Fact]
+	public void StartScreen_CanReturnToTheOpenProject()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneDocument scene = _session.Scene!;
+
+		MenuItem start = shell.MenuBarView.Menus
+			.Single(menu => menu.Label == "Window")
+			.Children
+			.Single(item => item.Label == "Start Screen");
+
+		start.Action!.Invoke();
+
+		_context.BeginFrame(
+			0.1,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		Assert.True(shell.StartScreenVisible);
+
+		Button back = Descendants(shell)
+			.OfType<Button>()
+			.Single(button => button.Text == "Back to Editor");
+
+		Assert.True(back.IsVisible);
+
+		UiPoint center = back.GlobalVisualBounds.Center;
+
+		_context.PointerDown(UiMouseButton.Left, center);
+		_context.PointerUp(UiMouseButton.Left, center);
+
+		_context.BeginFrame(
+			0.2,
+			new UiSize(1440f, 900f),
+			UiPoint.Zero);
+
+		_context.Draw();
+
+		Assert.False(shell.StartScreenVisible);
+		Assert.Same(scene, _session.Scene);
+		Assert.NotNull(_session.Project);
+	}
+
 	private EditorShell BuildShell(float width, float height)
 	{
 		EditorShell shell = new(_session);
