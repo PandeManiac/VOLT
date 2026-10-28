@@ -305,10 +305,14 @@ ratios without discarding the state inside open panels.
   clears those references instead of leaving them dangling.
   Duplicating writes a numbered sibling such as
   `Main 1.volt.scene.json`, selects it, and never overwrites an existing
-  file. Deleting asks for confirmation and is refused for the open or
-  startup scene, since either would leave the editor or project pointing
-  at a missing file. Scene shortcuts such as Delete and F2 stand down
-  while the browser has keyboard focus.
+  file. With a tile or list row focused, `F2` opens the same rename
+  dialog and `Delete` opens the same delete confirmation. Deleting asks
+  for confirmation and is refused for the open or startup scene, since
+  either would leave the editor or project pointing at a missing file.
+  Scene shortcuts such as Delete and F2 stand down while the browser
+  has keyboard focus; the asset shortcuts require the tile or row
+  itself to have focus, so the search field and folder tree keep their
+  keys.
 - **Console** records editor actions and errors.
 - **Profiler** reports frame timing and runtime counts while the
   editor is running.
@@ -322,7 +326,9 @@ still selected, so the inspector does not jump to an unrelated object.
 Keyboard shortcuts: `Ctrl+S` save, `Ctrl+Z` undo, `Ctrl+Y` or
 `Ctrl+Shift+Z` redo, `Ctrl+D` duplicate selection, `Delete` delete
 selection, `F2` rename the active object, `Ctrl+A` select all,
-`Ctrl+Shift+A` select none, `Ctrl+I` invert selection. While a text field has focus, `Ctrl+Z` and
+`Ctrl+Shift+A` select none, `Ctrl+I` invert selection. In the Project
+browser, `F2` renames and `Delete` deletes the focused asset. While a
+text field has focus, `Ctrl+Z` and
 `Ctrl+Y` undo and redo that field's text instead of the scene, and
 `Ctrl+S` applies the field before writing the scene. Closing the
 window applies it before deciding whether to prompt for unsaved work.

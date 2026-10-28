@@ -237,6 +237,59 @@ public sealed class ProjectPanel : Panel
 		};
 	}
 
+	protected override bool OnKeyDown(UiKeyEvent key)
+	{
+		// Asset shortcuts belong to the asset view. The folder tree
+		// and the search field can both own the keyboard while an
+		// asset is selected, so requiring focus here keeps Delete
+		// from acting on something the author cannot see.
+		if (!key.IsDown ||
+			key.IsRepeat ||
+			key.Modifiers != UiKeyModifiers.None ||
+			!AssetViewHasFocus() ||
+			_selectedId.Length == 0 ||
+			_selectedIsFolder)
+		{
+			return false;
+		}
+
+		if (_session.Project?.AssetCatalog.Find(_selectedId) is not ProjectAsset asset)
+		{
+			return false;
+		}
+
+		switch (key.Key)
+		{
+			case UiKey.F2:
+				ShowRenameAssetDialog(asset);
+				return true;
+
+			case UiKey.Delete:
+				ShowDeleteAssetDialog(asset);
+				return true;
+		}
+
+		return false;
+	}
+
+	private bool AssetViewHasFocus()
+	{
+		if (_list.HasFocus)
+		{
+			return true;
+		}
+
+		foreach (IconTileView tile in _tileViews)
+		{
+			if (tile.HasFocus)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	protected override void OnDetached()
 	{
 		Unsubscribe();

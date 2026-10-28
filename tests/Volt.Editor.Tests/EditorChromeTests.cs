@@ -1140,16 +1140,31 @@ public sealed class EditorChromeTests : IDisposable
 
 		Assert.Contains(Descendants(project), widget => widget.HasFocus);
 
+		string entityName = entity.Name;
 		int entities = scene.EntityCount;
 		int history = _session.Undo.UndoCount;
 
 		_context.KeyDown(UiKey.Delete);
-		_context.KeyDown(UiKey.F2);
 
 		Assert.Equal(entities, scene.EntityCount);
 		Assert.Equal(history, _session.Undo.UndoCount);
 		Assert.Contains(entity.Id, _session.Selection);
 		Assert.Contains(Descendants(project), widget => widget.HasFocus);
+
+		// F2 belongs to the focused asset now. It must open the asset
+		// rename dialog, not the inspector's scene-object rename.
+		Assert.True(_context.KeyDown(UiKey.F2));
+		Paint(0.35);
+
+		TextField name = Assert.IsType<TextField>(_context.FocusedWidget);
+
+		Assert.Equal("Main", name.Text);
+		Assert.Equal(entityName, entity.Name);
+
+		_context.KeyDown(UiKey.Escape);
+
+		Assert.Null(_context.Modal);
+		Assert.Equal(entityName, entity.Name);
 	}
 
 	[Fact]
@@ -1625,6 +1640,224 @@ public sealed class EditorChromeTests : IDisposable
 			_session.DeleteAsset("Scenes/Main.volt.scene.json"));
 		Assert.True(File.Exists(_session.Project.ResolvePath(
 			"Scenes/Main.volt.scene.json")));
+	}
+
+	[Fact]
+	public void ProjectBrowser_F2RenamesTheFocusedTile()
+	{
+		const string Main = "Scenes/Main.volt.scene.json";
+		const string Renamed = "Scenes/Start.volt.scene.json";
+
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView main = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Main.volt.scene.json");
+
+		Click(main);
+		Paint(0.25);
+
+		Assert.True(_context.KeyDown(UiKey.F2));
+		Paint(0.3);
+
+		TextField name = Assert.IsType<TextField>(_context.FocusedWidget);
+
+		Assert.Equal("Main", name.Text);
+		Assert.True(name.HasSelection);
+
+		_context.TextInput("Start");
+		Paint(0.35);
+
+		Button rename = Descendants(_context.Modal!)
+			.OfType<Button>()
+			.Single(button => button.Text == "Rename");
+
+		Click(rename);
+		Paint(0.4);
+
+		Assert.False(File.Exists(_session.Project!.ResolvePath(Main)));
+		Assert.True(File.Exists(_session.Project.ResolvePath(Renamed)));
+		Assert.Equal(Renamed, _session.ScenePath);
+		Assert.Null(_context.Modal);
+	}
+
+	[Fact]
+	public void ProjectBrowser_DeleteKeyDeletesTheFocusedListRow()
+	{
+		const string Main = "Scenes/Main.volt.scene.json";
+		const string Prop = "Scenes/Prop.volt.scene.json";
+
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+		Assert.NotNull(_session.CreateScene(Prop, "Prop"));
+		Assert.True(_session.OpenScene(Main));
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconButton listMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as a list");
+
+		Click(listMode);
+		Paint(0.3);
+
+		TreeView list = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(root => root.Tag is ProjectAsset));
+
+		TreeViewItem prop = list.Roots
+			.Single(item => item.Tag is ProjectAsset asset &&
+				asset.Id == Prop);
+
+		list.SetSelection([prop]);
+		list.Focus();
+		Paint(0.35);
+
+		Assert.True(_context.KeyDown(UiKey.Delete));
+		Paint(0.4);
+
+		Assert.NotNull(_context.Modal);
+		Assert.True(File.Exists(_session.Project!.ResolvePath(Prop)));
+
+		Button delete = Descendants(_context.Modal!)
+			.OfType<Button>()
+			.Single(button => button.Text == "Delete");
+
+		Click(delete);
+		Paint(0.5);
+
+		Assert.False(File.Exists(_session.Project.ResolvePath(Prop)));
+		Assert.False(_session.Project.AssetCatalog.FileExists(Prop));
+		Assert.Null(_context.Modal);
+		Assert.Equal(Main, _session.ScenePath);
+	}
+
+	[Fact]
+	public void ProjectBrowser_AssetShortcutsRequireAssetViewFocus()
+	{
+		const string Main = "Scenes/Main.volt.scene.json";
+		const string Prop = "Scenes/Prop.volt.scene.json";
+
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+		Assert.NotNull(_session.CreateScene(Prop, "Prop"));
+		Assert.True(_session.OpenScene(Main));
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView prop = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Prop.volt.scene.json");
+
+		Click(prop);
+		Paint(0.25);
+
+		// Returning to the root leaves the asset selected in the
+		// browser's state, but the folder tree owns the keyboard. A
+		// shortcut must not reach the hidden asset.
+		TreeViewItem root = folders.Roots[0];
+
+		folders.SetSelection([root]);
+		folders.Focus();
+		Paint(0.3);
+
+		_context.KeyDown(UiKey.Delete);
+		_context.KeyDown(UiKey.F2);
+
+		Assert.Null(_context.Modal);
+
+		IconTileView scenesTile = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Scenes");
+
+		Click(scenesTile);
+		Paint(0.35);
+
+		_context.KeyDown(UiKey.Delete);
+		_context.KeyDown(UiKey.F2);
+
+		Assert.Null(_context.Modal);
+
+		scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.4);
+
+		IconTileView main = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Main.volt.scene.json");
+
+		Click(main);
+		Paint(0.45);
+
+		TextField search = Descendants(project)
+			.OfType<TextField>()
+			.Single(field => field.Placeholder == "Search assets");
+
+		search.Focus();
+
+		_context.KeyDown(UiKey.Delete);
+		_context.KeyDown(UiKey.F2);
+
+		Assert.Null(_context.Modal);
+		Assert.True(File.Exists(_session.Project!.ResolvePath(Main)));
+		Assert.True(File.Exists(_session.Project.ResolvePath(Prop)));
 	}
 
 	private void Click(Widget widget)
