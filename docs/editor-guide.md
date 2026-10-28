@@ -291,7 +291,9 @@ ratios without discarding the state inside open panels.
   so the new tile is visible. Grid and list modes share the selected
   asset, so switching views keeps the same item highlighted. The
   folder tree keeps the current folder selected as it rebuilds, and
-  opening another project returns the browser to that project's root.
+  the selected item's details survive a refresh. Opening another
+  project returns the browser to that project's root and clears its
+  search filter.
 - **Console** records editor actions and errors.
 - **Profiler** reports frame timing and runtime counts while the
   editor is running.

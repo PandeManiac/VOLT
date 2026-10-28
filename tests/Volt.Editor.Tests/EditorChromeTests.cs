@@ -944,6 +944,90 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_ClearsSearchWhenTheProjectChanges()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TextField search = Descendants(project)
+			.OfType<TextField>()
+			.Single(field => field.Placeholder == "Search assets");
+
+		Assert.Contains(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.Text == "Scenes");
+
+		search.Text = "NoSuchAsset";
+		_session.SaveScene();
+		Paint(0.2);
+
+		Assert.DoesNotContain(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.Text == "Scenes");
+
+		Assert.True(_session.NewProject(
+			Path.Combine(_root, "Other"),
+			"Other"));
+
+		Paint(0.3);
+
+		Assert.Equal(string.Empty, search.Text);
+
+		Assert.Contains(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.Text == "Scenes");
+	}
+
+	[Fact]
+	public void ProjectBrowser_KeepsSelectedAssetDetailsAcrossRebuilds()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView main = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Main.volt.scene.json");
+
+		Click(main);
+		Paint(0.3);
+
+		Label details = Descendants(project)
+			.OfType<Label>()
+			.Single(label => label.Text.Contains("Main.volt.scene.json"));
+
+		Assert.Contains("Scene", details.Text);
+
+		_session.SaveScene();
+		Paint(0.4);
+
+		Assert.Contains("Main.volt.scene.json", details.Text);
+	}
+
+	[Fact]
 	public void ProjectBrowser_SelectionFollowsAssetsBetweenGridAndList()
 	{
 		const string Main = "Scenes/Main.volt.scene.json";

@@ -340,6 +340,7 @@ public sealed class ProjectPanel : Panel
 			_openProject = project;
 			_folder = string.Empty;
 			_folderSelectionActive = false;
+			_search.Text = string.Empty;
 			_selectedId = string.Empty;
 			_selectedIsFolder = false;
 			force = true;
@@ -400,6 +401,13 @@ public sealed class ProjectPanel : Panel
 		_details.Text = filter.Length > 0
 			? $"{total} of {assets.Count} assets"
 			: $"{total} items";
+
+		if (_selectedId.Length > 0 &&
+			(_selectedIsFolder ||
+				project.AssetCatalog.Find(_selectedId) is not null))
+		{
+			UpdateDetails();
+		}
 
 		_empty.Title = filter.Length > 0
 			? "No matching assets"
