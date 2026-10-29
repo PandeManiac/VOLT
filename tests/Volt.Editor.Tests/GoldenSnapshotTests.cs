@@ -1,3 +1,4 @@
+using Volt.Editor.Core.Scenes;
 using Volt.Ui;
 using Volt.Ui.Rendering;
 
@@ -75,6 +76,24 @@ public sealed class GoldenSnapshotTests : IDisposable
 			defaultProjectFolder: "~/VoltGame");
 
 		VerifyImage("editor-start.png", actual);
+	}
+
+	[Fact]
+	public void AuthoringState_MatchesItsBaseline()
+	{
+		// The state the editor is actually worked in: a selected mesh, the
+		// translate tool, and a populated inspector. The other baselines
+		// capture the default workspace and a rotate/snap variant, neither
+		// of which draws gizmo handles on a selection.
+		Guid meshId = _session.Scene!.Entities
+			.First(entity =>
+				entity.GetComponent<MeshRendererData>() is not null)
+			.Id;
+
+		_session.Select(meshId);
+		_session.Tool = EditorTool.Translate;
+
+		Verify("editor-authoring.png", 1440, 900);
 	}
 
 	[Fact]
