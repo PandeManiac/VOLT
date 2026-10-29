@@ -17,49 +17,55 @@ namespace Volt.Ui.Styling;
 /// than the panels that host them; that gradient is what gives the
 /// interface depth without shadows or gradients.
 /// </para>
+/// <para>
+/// Values are authored in sRGB, matching how they are measured against
+/// a screenshot. The renderer decodes them when the framebuffer format
+/// applies the sRGB transfer function, so these numbers are the bytes
+/// a developer sees rather than linear-light intermediates.
+/// </para>
 /// </remarks>
 public sealed record UiPalette
 {
 	// Chrome: window background, menu bar, toolbars, status bar.
 
-	public UiColor WindowBackground { get; init; } = UiColor.FromRgb(0x171B22);
+	public UiColor WindowBackground { get; init; } = UiColor.FromRgb(0x11151C);
 
-	public UiColor Chrome { get; init; } = UiColor.FromRgb(0x1D232C);
+	public UiColor Chrome { get; init; } = UiColor.FromRgb(0x151A22);
 
-	public UiColor ChromeBorder { get; init; } = UiColor.FromRgb(0x2C3541);
+	public UiColor ChromeBorder { get; init; } = UiColor.FromRgb(0x262E3A);
 
 	// Panels and containers.
 
-	public UiColor Surface { get; init; } = UiColor.FromRgb(0x202630);
+	public UiColor Surface { get; init; } = UiColor.FromRgb(0x1B212B);
 
-	public UiColor SurfaceRaised { get; init; } = UiColor.FromRgb(0x272E39);
+	public UiColor SurfaceRaised { get; init; } = UiColor.FromRgb(0x252D39);
 
-	public UiColor SurfaceOverlay { get; init; } = UiColor.FromRgb(0x2A3340);
+	public UiColor SurfaceOverlay { get; init; } = UiColor.FromRgb(0x29313D);
 
 	/// <summary>
 	/// Gets the fill of a panel header or tab strip.
 	/// </summary>
-	public UiColor Header { get; init; } = UiColor.FromRgb(0x1B2029);
+	public UiColor Header { get; init; } = UiColor.FromRgb(0x151A22);
 
 	/// <summary>
 	/// Gets the fill of a sunken area: the scene viewport, list wells,
 	/// and progress tracks.
 	/// </summary>
-	public UiColor Well { get; init; } = UiColor.FromRgb(0x12161C);
+	public UiColor Well { get; init; } = UiColor.FromRgb(0x10151D);
 
-	public UiColor WellBorder { get; init; } = UiColor.FromRgb(0x2A323D);
+	public UiColor WellBorder { get; init; } = UiColor.FromRgb(0x252D39);
 
-	public UiColor Border { get; init; } = UiColor.FromRgb(0x333D4A);
+	public UiColor Border { get; init; } = UiColor.FromRgb(0x303947);
 
-	public UiColor BorderStrong { get; init; } = UiColor.FromRgb(0x44505F);
+	public UiColor BorderStrong { get; init; } = UiColor.FromRgb(0x42505F);
 
 	// Text.
 
-	public UiColor Text { get; init; } = UiColor.FromRgb(0xE5EAF1);
+	public UiColor Text { get; init; } = UiColor.FromRgb(0xE7EDF5);
 
-	public UiColor TextMuted { get; init; } = UiColor.FromRgb(0xA8B3C1);
+	public UiColor TextMuted { get; init; } = UiColor.FromRgb(0xA8B4C3);
 
-	public UiColor TextDisabled { get; init; } = UiColor.FromRgb(0x748092);
+	public UiColor TextDisabled { get; init; } = UiColor.FromRgb(0x788595);
 
 	/// <summary>
 	/// Gets the text color that stays legible on the accent fill.
@@ -68,38 +74,38 @@ public sealed record UiPalette
 
 	// Accent and interaction.
 
-	public UiColor Accent { get; init; } = UiColor.FromRgb(0x35A9E0);
+	public UiColor Accent { get; init; } = UiColor.FromRgb(0x38B6E8);
 
-	public UiColor AccentHover { get; init; } = UiColor.FromRgb(0x54BCEA);
+	public UiColor AccentHover { get; init; } = UiColor.FromRgb(0x55C6F2);
 
-	public UiColor AccentPressed { get; init; } = UiColor.FromRgb(0x2A8FC0);
+	public UiColor AccentPressed { get; init; } = UiColor.FromRgb(0x2B93BF);
 
 	/// <summary>
 	/// Gets the fill of an activated toolbar control.
 	/// </summary>
-	public UiColor AccentSurface { get; init; } = UiColor.FromRgb(0x1F4A66);
+	public UiColor AccentSurface { get; init; } = UiColor.FromRgb(0x1B4258);
 
-	public UiColor AccentText { get; init; } = UiColor.FromRgb(0xEAF6FC);
+	public UiColor AccentText { get; init; } = UiColor.FromRgb(0xEAF7FD);
 
-	public UiColor Selection { get; init; } = UiColor.FromRgb(0x285B84);
+	public UiColor Selection { get; init; } = UiColor.FromRgb(0x245777);
 
-	public UiColor SelectionInactive { get; init; } = UiColor.FromRgb(0x2C3947);
+	public UiColor SelectionInactive { get; init; } = UiColor.FromRgb(0x2A3340);
 
-	public UiColor Hover { get; init; } = UiColor.FromRgb(0x313A47);
+	public UiColor Hover { get; init; } = UiColor.FromRgb(0x303B49);
 
-	public UiColor Pressed { get; init; } = UiColor.FromRgb(0x3B4655);
+	public UiColor Pressed { get; init; } = UiColor.FromRgb(0x3A4656);
 
 	/// <summary>
 	/// Gets the focus ring color drawn around the focused control.
 	/// </summary>
-	public UiColor FocusRing { get; init; } = UiColor.FromRgb(0x35A9E0);
+	public UiColor FocusRing { get; init; } = UiColor.FromRgb(0x38B6E8);
 
 	/// <summary>
 	/// Gets the fill of an asset tile.
 	/// </summary>
-	public UiColor Tile { get; init; } = UiColor.FromRgb(0x242B36);
+	public UiColor Tile { get; init; } = UiColor.FromRgb(0x1F2631);
 
-	public UiColor TileHover { get; init; } = UiColor.FromRgb(0x2C3542);
+	public UiColor TileHover { get; init; } = UiColor.FromRgb(0x28313E);
 
 	// Status.
 
@@ -113,7 +119,7 @@ public sealed record UiPalette
 
 	// Viewport and gizmos.
 
-	public UiColor Grid { get; init; } = UiColor.FromRgb(0x2A323D);
+	public UiColor Grid { get; init; } = UiColor.FromRgb(0x252D39);
 
 	public UiColor GridAxisX { get; init; } = UiColor.FromRgb(0xC86A6A);
 
@@ -131,15 +137,15 @@ public sealed record UiPalette
 	/// <summary>
 	/// Gets the translucent fill behind floating viewport controls.
 	/// </summary>
-	public UiColor Overlay { get; init; } = UiColor.FromArgb(0xE61B2129);
+	public UiColor Overlay { get; init; } = UiColor.FromArgb(0xE810141A);
 
-	public UiColor OverlayBorder { get; init; } = UiColor.FromRgb(0x394450);
+	public UiColor OverlayBorder { get; init; } = UiColor.FromRgb(0x38424F);
 
 	public UiColor Shadow { get; init; } = UiColor.FromArgb(0x88000000);
 
-	public UiColor ScrollThumb { get; init; } = UiColor.FromRgb(0x3B4655);
+	public UiColor ScrollThumb { get; init; } = UiColor.FromRgb(0x38414E);
 
-	public UiColor ScrollThumbHover { get; init; } = UiColor.FromRgb(0x4C5868);
+	public UiColor ScrollThumbHover { get; init; } = UiColor.FromRgb(0x4A5563);
 
 	public static UiPalette Dark => new();
 }

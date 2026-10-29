@@ -38,14 +38,14 @@ public sealed class UiFontSet
 
 		float raster = dpiScale * uiScale;
 
-		Small = new UiFont(UiFontKind.Sans, 12f, raster);
-		Body = new UiFont(UiFontKind.Sans, 14f, raster);
-		Large = new UiFont(UiFontKind.Sans, 16f, raster);
-		Heading = new UiFont(UiFontKind.Sans, 18f, raster);
-		Title = new UiFont(UiFontKind.Sans, 22f, raster);
-		PanelHeader = new UiFont(UiFontKind.Sans, 13f, raster);
-		MonoSmall = new UiFont(UiFontKind.Monospace, 12f, raster);
-		Mono = new UiFont(UiFontKind.Monospace, 13f, raster);
+		Small = new UiFont(UiFontKind.Sans, 13f, raster);
+		Body = new UiFont(UiFontKind.Sans, 15f, raster);
+		Large = new UiFont(UiFontKind.Sans, 17f, raster);
+		Heading = new UiFont(UiFontKind.Sans, 19f, raster);
+		Title = new UiFont(UiFontKind.Sans, 23f, raster);
+		PanelHeader = new UiFont(UiFontKind.Sans, 14f, raster);
+		MonoSmall = new UiFont(UiFontKind.Monospace, 13f, raster);
+		Mono = new UiFont(UiFontKind.Monospace, 14f, raster);
 	}
 
 	public float DpiScale { get; }

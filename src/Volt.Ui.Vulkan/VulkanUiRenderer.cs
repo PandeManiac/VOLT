@@ -66,6 +66,10 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 	private readonly Dictionary<int, ImageBinding> _images = [];
 	private UiVertex[] _clipSpaceVertices = [];
 
+	// 1 when the target applies the sRGB transfer function on write, so
+	// the fragment shader must decode its sRGB-authored colours first.
+	private readonly float _srgbTarget;
+
 	private RenderPass _renderPass;
 	private PipelineLayout _pipelineLayout;
 	private Pipeline _pipeline;
@@ -117,6 +121,7 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 		_physicalDevice = physicalDevice;
 		_api = instance.Api;
 		_format = swapchain.ImageFormat;
+		_srgbTarget = UiSurfaceColorSpace.IsSrgb(_format) ? 1f : 0f;
 		_extent = swapchain.Extent;
 		_framebuffers = new Framebuffer[imageViews.Count];
 		_vertexBuffers = new VulkanBuffer[FramesInFlight];
@@ -473,7 +478,8 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 
 				UiPushConstants constants = new(
 					resolved.Layer,
-					resolved.ImageMode);
+					resolved.ImageMode,
+					_srgbTarget);
 
 				_api.CmdPushConstants(
 					commandBuffer,
@@ -893,7 +899,7 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 	/// <summary>
 	/// Push-constant size: the atlas layer and the image-mode flag.
 	/// </summary>
-	private const uint PushConstantBytes = 2 * sizeof(float);
+	private const uint PushConstantBytes = 3 * sizeof(float);
 
 	private PipelineLayout CreatePipelineLayout()
 	{
@@ -1592,11 +1598,16 @@ public sealed unsafe class VulkanUiRenderer : IDisposable
 	{
 		public readonly float Layer;
 		public readonly float ImageMode;
+		public readonly float SrgbTarget;
 
-		public UiPushConstants(float layer, float imageMode)
+		public UiPushConstants(
+			float layer,
+			float imageMode,
+			float srgbTarget)
 		{
 			Layer = layer;
 			ImageMode = imageMode;
+			SrgbTarget = srgbTarget;
 		}
 	}
 
