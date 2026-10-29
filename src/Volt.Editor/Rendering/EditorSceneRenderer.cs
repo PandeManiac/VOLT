@@ -234,6 +234,22 @@ internal sealed class EditorSceneRenderer : IViewportRenderer, IDisposable
 
 		_disposed = true;
 
+		// The editor renderer is disposed before its host. The host's
+		// eventual shutdown wait therefore comes too late for resources
+		// referenced by the last submitted frame, especially this
+		// pipeline. Wait once at this ownership boundary before retiring
+		// any editor resources; this is shutdown-only, never per-frame.
+		try
+		{
+			_device.WaitIdle();
+		}
+
+		catch
+		{
+			// A lost device cannot complete queued work, but native
+			// resources should still be released during shutdown.
+		}
+
 		_pipeline?.Dispose();
 		_pipeline = null;
 
