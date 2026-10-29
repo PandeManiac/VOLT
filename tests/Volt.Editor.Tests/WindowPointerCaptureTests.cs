@@ -154,6 +154,30 @@ public sealed class WindowPointerCaptureTests
 	}
 
 	[Fact]
+	public void Dispose_RetriesWhenTheNativeReleaseIsRefused()
+	{
+		FakeNativeMouseMode native = new();
+		WindowPointerCapture capture = Create(native);
+
+		Assert.True(capture.TryCapture());
+		native.RefuseDisable = true;
+
+		capture.Dispose();
+
+		Assert.True(capture.IsCaptured);
+		Assert.True(capture.IsReleasePending);
+		Assert.True(native.LiveEnabled);
+
+		// A second disposal retries the pending native release instead
+		// of claiming cleanup succeeded on the previous attempt.
+		native.RefuseDisable = false;
+		capture.Dispose();
+
+		Assert.False(native.LiveEnabled);
+		Assert.False(capture.TryCapture());
+	}
+
+	[Fact]
 	public void NonFiniteMotion_IsIgnored()
 	{
 		FakeNativeMouseMode native = new();

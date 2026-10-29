@@ -229,7 +229,15 @@ internal sealed class WindowPointerCapture : IUiPointerCapture, IDisposable
 			return;
 		}
 
-		TryRelease();
+		// A backend can refuse the final release while still reporting
+		// that relative mode is active. Keep this object retryable in
+		// that case: marking it disposed would make every later release
+		// look successful without ever asking the window again.
+		if (!TryRelease())
+		{
+			return;
+		}
+
 		_disposed = true;
 	}
 }
