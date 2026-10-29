@@ -45,7 +45,7 @@ the opt-in native Vulkan tests that need a real device).
 | C. Rotation and scale gizmos | Done. Rotation is solved in world space and converted back through the authored rotation, so parent rotations do not tilt the object. Scale clamps at a positive minimum. |
 | D. Selection and manipulation consistency | Done. One selection set shared by hierarchy, viewport, and inspector; drag cancel restores transforms and adds no undo step; parent-and-child selections transform the parent once. |
 | E. Functional UI audit | Done, and recorded in `docs/editor-control-audit.md`. Every menu action is wired and disabled rather than inert when it cannot run (`EditorCommandAuditTests`). |
-| F. Core authoring workflow | Done. Create, select, rename, transform, inspect, duplicate, delete, undo/redo, save, reopen. |
+| F. Core authoring workflow | Done. Create, select, rename, transform, inspect, duplicate, delete, undo/redo, save, reopen. Project folders can be created and browsed while empty (recovered from `fix/editor-interaction-reliability`, commit `20884e6`). |
 | G. Vulkan shutdown cleanup | Fixed, awaiting hardware confirmation. `EditorSceneRenderer.Dispose` idles the device before destroying the pipeline, targets, and meshes, because the host's own idle runs later. |
 | H. Final verification | Partial. Build, full test suite, and headless snapshots pass in the cloud; the GPU session, native window input, and actual gizmo feel need a machine with a display. |
 
@@ -78,8 +78,20 @@ must be run locally and are **not** claimed as verified:
    under a rotated parent, and that one drag is one undo step.
 6. Click through the menus and panels named in the control inventory.
 
+## Recovered work still on the old branches
+
+`fix/editor-interaction-reliability` also has project-browser
+multi-selection, bulk duplication, and folder renaming, written against
+its own browser model. They were not carried over: master's browser uses
+a single selection, so those commits need a deliberate port rather than
+a cherry-pick. Folder creation was the only piece that applied cleanly
+and is now on this branch; the stale commit's multi-selection copy and
+snapshots were left out, and the golden baselines were regenerated from
+the current interface.
+
 ## Next actions
 
 - Verify the shutdown fix and input behaviour on hardware (list above).
-- Review the two older branches for any work worth carrying forward.
+- Port project-browser multi-selection, bulk duplication, and folder
+  renaming from the old branch if that workflow is still wanted.
 - Extend the control inventory if new panels or commands are added.
