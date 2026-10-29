@@ -45,7 +45,7 @@ the opt-in native Vulkan tests that need a real device).
 | C. Rotation and scale gizmos | Done. Rotation is solved in world space and converted back through the authored rotation, so parent rotations do not tilt the object. Scale clamps at a positive minimum. |
 | D. Selection and manipulation consistency | Done. One selection set shared by hierarchy, viewport, and inspector; drag cancel restores transforms and adds no undo step; parent-and-child selections transform the parent once. |
 | E. Functional UI audit | Done, and recorded in `docs/editor-control-audit.md`. Every menu action is wired and disabled rather than inert when it cannot run (`EditorCommandAuditTests`). |
-| F. Core authoring workflow | Done. Create, select, rename, transform, inspect, duplicate, delete, undo/redo, save, reopen. Project folders can be created and browsed while empty (recovered from `fix/editor-interaction-reliability`, commit `20884e6`). |
+| F. Core authoring workflow | Done. Create, select, rename, transform, inspect, duplicate, delete, undo/redo, save, reopen. Project folders can be created, browsed while empty, and renamed with scene and component references rewritten; the browser supports multi-selection, bulk deletion, and bulk duplication (recovered from `fix/editor-interaction-reliability`). |
 | G. Vulkan shutdown cleanup | Fixed, awaiting hardware confirmation. `EditorSceneRenderer.Dispose` idles the device before destroying the pipeline, targets, and meshes, because the host's own idle runs later. |
 | H. Final verification | Partial. Build, full test suite, and headless snapshots pass in the cloud; the GPU session, native window input, and actual gizmo feel need a machine with a display. |
 
@@ -78,20 +78,29 @@ must be run locally and are **not** claimed as verified:
    under a rotated parent, and that one drag is one undo step.
 6. Click through the menus and panels named in the control inventory.
 
-## Recovered work still on the old branches
+## Project-browser recovery
 
-`fix/editor-interaction-reliability` also has project-browser
-multi-selection, bulk duplication, and folder renaming, written against
-its own browser model. They were not carried over: master's browser uses
-a single selection, so those commits need a deliberate port rather than
-a cherry-pick. Folder creation was the only piece that applied cleanly
-and is now on this branch; the stale commit's multi-selection copy and
-snapshots were left out, and the golden baselines were regenerated from
-the current interface.
+`fix/editor-interaction-reliability` carried four sequential, tested
+commits on the same base as this branch: multi-selection with bulk
+deletion, bulk asset duplication, empty-folder creation, and folder
+renaming that rewrites scene and component asset references.
+
+Folder creation was first carried forward by hand (commit `b93cef7`) so
+the browser would not silently lose an empty folder; the remaining three
+were folded in by merging the branch (commit `cb7836e`). Merging kept the
+branch's own tests and history instead of retyping about 2,300 lines
+against a moved base. The only conflicts were the hunks where the
+hand-carried folder code met the branch's version of the same code (the
+branch side was taken) and the guide, where the two descriptions of asset
+selection were combined into one paragraph.
+
+A folder rename now rewrites asset paths inside scenes, including
+unknown component payloads, and repoints the startup scene, so autorings
+survive moving assets between folders. The browser keeps several selected
+assets across grid/list switches and interface-scale changes.
 
 ## Next actions
 
 - Verify the shutdown fix and input behaviour on hardware (list above).
-- Port project-browser multi-selection, bulk duplication, and folder
-  renaming from the old branch if that workflow is still wanted.
+- Review `fix/editor-vulkan-stability` for anything master still lacks.
 - Extend the control inventory if new panels or commands are added.

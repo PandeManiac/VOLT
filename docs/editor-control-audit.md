@@ -85,10 +85,18 @@ the editor camera.
 
 ## Project browser
 
-Folders, list and tile views, search, selection, keyboard navigation,
-rename, delete, duplicate (single and bulk), folder creation, context
-menus, and revealing the current scene are implemented. Scene asset
-references follow renames and stay valid after moves.
+Folders, list and tile views, search, multi-selection with Ctrl/Shift
+and Shift+arrow, keyboard navigation, rename, delete (single and bulk),
+duplicate (single and bulk), folder creation, folder rename, context
+menus, and revealing the current scene are implemented. The browser keeps
+every selected asset across grid/list switches and interface-scale
+changes and reports the count in the details line.
+
+Renaming a folder moves its contents and rewrites asset references in
+scenes, including unknown component payloads, and repoints the startup
+scene path, so a rename cannot orphan authored data. That path is covered
+by `EditorProjectTests.RenameFolder_*` and
+`EditorChromeTests.ProjectBrowser_RenamesAFolderFromItsTileMenu`.
 
 ## Console and Profiler
 
