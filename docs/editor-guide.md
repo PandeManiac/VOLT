@@ -289,13 +289,16 @@ ratios without discarding the state inside open panels.
   can assign asset references in the inspector. Its **New Scene**
   action opens the scene and moves the browser to the scene's folder
   so the new tile is visible. Its **New Folder** action creates a
-  directory in the current folder, leaves it selected, and shows empty
-  directories in both the folder tree and the contents so a new folder
-  does not disappear until a file is added. Grid and list modes share
-  the selected asset, so switching views keeps the same item
-  highlighted and moves keyboard focus onto it, leaving `F2`, `Delete`,
-  and arrow navigation ready to use. The folder tree keeps the current
-  folder selected and
+  directory in the current folder (or in `Assets` at the project root),
+  leaves it selected, and shows empty directories in both the folder
+  tree and the contents so a new folder does not disappear until a
+  file is added. Grid and list modes share the selected assets, so
+  switching views keeps every selected item highlighted and moves
+  keyboard focus onto the active one, leaving `F2`, `Delete`, and
+  arrow navigation ready to use. `Ctrl`-click toggles an item,
+  `Shift`-click selects a range, and `Shift`+arrow extends a range in
+  the grid. The details line reports how many assets are selected.
+  The folder tree keeps the current folder selected and
   its collapsed branches collapsed as it rebuilds, and the selected
   item's details survive a refresh. Switching between tiles and the
   list scrolls the selected item into view, and the arrow keys move
@@ -312,10 +315,18 @@ ratios without discarding the state inside open panels.
   clears those references instead of leaving them dangling.
   Duplicating writes a numbered sibling such as
   `Main 1.volt.scene.json`, selects it, and never overwrites an existing
-  file. With a tile or list row focused, `F2` opens the same rename
-  dialog and `Delete` opens the same delete confirmation. Deleting asks
-  for confirmation and is refused for the open or startup scene, since
-  either would leave the editor or project pointing at a missing file.
+  file. Duplicating a multi-selection copies every selected file into
+  numbered siblings in one action, selects the copies, and skips names
+  already taken by the selection or the folder. With a tile or list row
+  focused, `F2` opens the same rename dialog for one asset, `Ctrl+D`
+  duplicates the selection, and `Delete` removes the whole selection
+  through one confirmation. Deleting is refused if any selected file is
+  the open or startup scene, since either would leave the editor or
+  project pointing at a missing file. Right-click a folder tile or
+  folder-tree row for **Rename…**. Renaming moves the directory and
+  rewrites folder-prefixed asset references in every scene, including
+  unknown component data; the startup scene and the open scene keep
+  their new paths. The `Assets` and `Scenes` roots cannot be renamed.
   Scene shortcuts such as Delete and F2 stand down while the browser
   has keyboard focus; the asset shortcuts require the tile or row
   itself to have focus, so the search field and folder tree keep their
@@ -334,12 +345,13 @@ Keyboard shortcuts: `Ctrl+S` save, `Ctrl+Z` undo, `Ctrl+Y` or
 `Ctrl+Shift+Z` redo, `Ctrl+D` duplicate selection, `Delete` delete
 selection, `F2` rename the active object, `Ctrl+A` select all,
 `Ctrl+Shift+A` select none, `Ctrl+I` invert selection. In the Project
-browser, the arrow keys move through the tiles, `F2` renames, and
-`Delete` deletes the focused asset. While a text field has focus,
-`Ctrl+Z` and
-`Ctrl+Y` undo and redo that field's text instead of the scene, and
-`Ctrl+S` applies the field before writing the scene. Closing the
-window applies it before deciding whether to prompt for unsaved work.
+browser, the arrow keys move through the tiles, `Shift`+arrow extends
+the selection, `F2` renames one asset, `Ctrl+D` duplicates the selected
+assets, and `Delete` removes all selected assets. While a text field
+has focus, `Ctrl+Z` and `Ctrl+Y` undo and redo that field's text
+instead of the scene, and `Ctrl+S` applies the field before writing
+the scene. Closing the window applies it before deciding whether to
+prompt for unsaved work.
 
 Saving writes a temporary file and moves it into place, so a failed
 save cannot truncate the previous scene. Unknown components are kept

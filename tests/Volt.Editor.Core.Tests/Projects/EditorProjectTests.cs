@@ -140,6 +140,104 @@ public sealed class EditorProjectTests : IDisposable
 	}
 
 	[Fact]
+	public void RenameFolder_MovesContentsAndUpdatesTheStartupScene()
+	{
+		EditorProject project = EditorProject.Create(_root, "Folder rename");
+		project.CreateFolder("Scenes/Levels");
+		project.CreateScene("Scenes/Levels/Level.volt.scene.json", "Level");
+		project.StartupScenePath = "Scenes/Levels/Level.volt.scene.json";
+		project.SaveManifest();
+
+		string renamed = project.RenameFolder("Scenes/Levels", "Maps");
+
+		Assert.Equal("Scenes/Maps", renamed);
+		Assert.False(Directory.Exists(project.ResolvePath("Scenes/Levels")));
+		Assert.True(File.Exists(project.ResolvePath(
+			"Scenes/Maps/Level.volt.scene.json")));
+		Assert.Equal(
+			"Scenes/Maps/Level.volt.scene.json",
+			project.StartupScenePath);
+		Assert.True(project.AssetCatalog.FileExists(
+			"Scenes/Maps/Level.volt.scene.json"));
+
+		EditorProject reopened = EditorProject.Open(_root);
+
+		Assert.Equal(
+			"Scenes/Maps/Level.volt.scene.json",
+			reopened.StartupScenePath);
+		Assert.NotNull(reopened.LoadStartupScene());
+	}
+
+	[Fact]
+	public void RenameFolder_RewritesFolderAssetReferences()
+	{
+		EditorProject project = EditorProject.Create(_root, "Folder references");
+		project.CreateFolder("Assets/Materials");
+		string meshId = "Assets/Materials/cube.mesh";
+		File.WriteAllText(project.ResolvePath(meshId), "mesh");
+		project.AssetCatalog.Refresh();
+
+		SceneDocument scene = project.LoadStartupScene();
+		SceneEntity cube = scene.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+		cube.GetComponent<MeshRendererData>()!.Mesh = meshId;
+
+		using JsonDocument payload = JsonDocument.Parse(
+			"""{"mesh":"Assets/Materials/cube.mesh","label":"keep"}""");
+
+		cube.AddComponent(new UnknownComponentData(
+			"future.renderer",
+			payload.RootElement));
+
+		project.SaveScene(scene, project.StartupScenePath);
+
+		string renamed = project.RenameFolder("Assets/Materials", "Textures");
+
+		Assert.Equal("Assets/Textures", renamed);
+		Assert.False(File.Exists(project.ResolvePath(meshId)));
+		Assert.True(File.Exists(project.ResolvePath(
+			"Assets/Textures/cube.mesh")));
+		Assert.True(project.AssetCatalog.FileExists(
+			"Assets/Textures/cube.mesh"));
+
+		SceneDocument reloaded = project.LoadStartupScene();
+		SceneEntity reloadedCube = reloaded.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+
+		Assert.Equal(
+			"Assets/Textures/cube.mesh",
+			reloadedCube.GetComponent<MeshRendererData>()!.Mesh);
+
+		UnknownComponentData unknown = Assert.IsType<UnknownComponentData>(
+			reloadedCube.Components.Single(
+				component => component is UnknownComponentData));
+
+		Assert.Equal(
+			"Assets/Textures/cube.mesh",
+			unknown.Data.GetProperty("mesh").GetString());
+		Assert.Equal("keep", unknown.Data.GetProperty("label").GetString());
+	}
+
+	[Fact]
+	public void RenameFolder_RejectsRootsExistingDestinationsAndMissingFolders()
+	{
+		EditorProject project = EditorProject.Create(_root, "Folder guards");
+		project.CreateFolder("Assets/First");
+		project.CreateFolder("Assets/Second");
+
+		Assert.Throws<ArgumentException>(() =>
+			project.RenameFolder("Assets", "Root"));
+		Assert.Throws<ArgumentException>(() =>
+			project.RenameFolder("Assets/First", "../Escape"));
+		Assert.Throws<IOException>(() =>
+			project.RenameFolder("Assets/First", "Second"));
+		Assert.Throws<DirectoryNotFoundException>(() =>
+			project.RenameFolder("Assets/Missing", "Renamed"));
+
+		Assert.True(Directory.Exists(project.ResolvePath("Assets/First")));
+	}
+
+	[Fact]
 	public void SaveScene_WritesVersionedSceneAndReportsPath()
 	{
 		EditorProject project = EditorProject.Create(_root, "Scenes");
@@ -174,6 +272,53 @@ public sealed class EditorProjectTests : IDisposable
 		Assert.True(project.AssetCatalog.FileExists(second));
 		Assert.True(File.Exists(project.ResolvePath(
 			"Scenes/Level.volt.scene.json")));
+	}
+
+	[Fact]
+	public void DuplicateAssets_CopiesTheWholeSelectionIntoNumberedSiblings()
+	{
+		EditorProject project = EditorProject.Create(_root, "Bulk duplicates");
+		project.CreateScene("Scenes/Level.volt.scene.json", "Level");
+		project.CreateScene("Scenes/Prop.volt.scene.json", "Prop");
+		project.CreateScene("Scenes/Level 1.volt.scene.json", "Existing");
+
+		IReadOnlyList<string> copies = project.DuplicateAssets(
+		[
+			"Scenes/Level.volt.scene.json",
+			"Scenes/Prop.volt.scene.json",
+			"Scenes/Level.volt.scene.json"
+		]);
+
+		Assert.Equal(
+			[
+				"Scenes/Level 2.volt.scene.json",
+				"Scenes/Prop 1.volt.scene.json"
+			],
+			copies);
+		Assert.True(File.Exists(project.ResolvePath(copies[0])));
+		Assert.True(File.Exists(project.ResolvePath(copies[1])));
+		Assert.True(File.Exists(project.ResolvePath(
+			"Scenes/Level 1.volt.scene.json")));
+		Assert.True(project.AssetCatalog.FileExists(copies[0]));
+		Assert.True(project.AssetCatalog.FileExists(copies[1]));
+	}
+
+	[Fact]
+	public void DuplicateAssets_ValidatesEverySourceBeforeWritingCopies()
+	{
+		EditorProject project = EditorProject.Create(_root, "Bulk guards");
+		project.CreateScene("Scenes/Level.volt.scene.json", "Level");
+
+		Assert.Throws<FileNotFoundException>(() => project.DuplicateAssets(
+		[
+			"Scenes/Level.volt.scene.json",
+			"Scenes/Missing.volt.scene.json"
+		]));
+
+		Assert.False(File.Exists(project.ResolvePath(
+			"Scenes/Level 1.volt.scene.json")));
+		Assert.False(project.AssetCatalog.FileExists(
+			"Scenes/Level 1.volt.scene.json"));
 	}
 
 	[Fact]
@@ -325,5 +470,40 @@ public sealed class EditorProjectTests : IDisposable
 		Assert.Equal(
 			string.Empty,
 			reloadedCube.GetComponent<MeshRendererData>()!.Mesh);
+	}
+
+	[Fact]
+	public void DeleteAssets_ValidatesTheWholeSelectionBeforeDeleting()
+	{
+		EditorProject project = EditorProject.Create(_root, "Delete many");
+		project.CreateScene("Scenes/Old.volt.scene.json", "Old");
+		project.CreateScene("Scenes/Other.volt.scene.json", "Other");
+
+		Assert.Throws<InvalidOperationException>(() =>
+			project.DeleteAssets(
+			[
+				"Scenes/Old.volt.scene.json",
+				project.StartupScenePath
+			]));
+
+		Assert.True(File.Exists(project.ResolvePath(
+			"Scenes/Old.volt.scene.json")));
+		Assert.True(File.Exists(project.ResolvePath(
+			project.StartupScenePath)));
+
+		project.DeleteAssets(
+		[
+			"Scenes/Old.volt.scene.json",
+			"Scenes/Other.volt.scene.json"
+		]);
+
+		Assert.False(File.Exists(project.ResolvePath(
+			"Scenes/Old.volt.scene.json")));
+		Assert.False(File.Exists(project.ResolvePath(
+			"Scenes/Other.volt.scene.json")));
+		Assert.False(project.AssetCatalog.FileExists(
+			"Scenes/Old.volt.scene.json"));
+		Assert.False(project.AssetCatalog.FileExists(
+			"Scenes/Other.volt.scene.json"));
 	}
 }

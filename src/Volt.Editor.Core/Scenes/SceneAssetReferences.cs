@@ -28,6 +28,104 @@ internal static class SceneAssetReferences
 			return 0;
 		}
 
+		return RewriteFile(
+			path,
+			text => string.Equals(
+				text,
+				oldId,
+				StringComparison.OrdinalIgnoreCase)
+				? newId
+				: null);
+	}
+
+	/// <summary>
+	/// Rewrites every asset reference beneath one folder prefix.
+	/// </summary>
+	/// <remarks>
+	/// A folder rename changes every file it contains at once. Walking
+	/// the scenes once with a prefix keeps that operation proportional
+	/// to the number of scene files rather than the number of assets.
+	/// </remarks>
+	public static int ReplaceFolderInFile(
+		string path,
+		string oldFolder,
+		string newFolder)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(path);
+		ArgumentException.ThrowIfNullOrWhiteSpace(oldFolder);
+		ArgumentException.ThrowIfNullOrWhiteSpace(newFolder);
+
+		string oldPrefix = oldFolder.EndsWith('/')
+			? oldFolder
+			: oldFolder + "/";
+		string newPrefix = newFolder.EndsWith('/')
+			? newFolder
+			: newFolder + "/";
+
+		if (string.Equals(oldPrefix, newPrefix, StringComparison.Ordinal))
+		{
+			return 0;
+		}
+
+		return RewriteFile(
+			path,
+			text => text.StartsWith(
+				oldPrefix,
+				StringComparison.OrdinalIgnoreCase)
+				? newPrefix + text[oldPrefix.Length..]
+				: null);
+	}
+
+	public static int ReplaceInDocument(
+		JsonNode root,
+		string oldId,
+		string newId)
+	{
+		ArgumentNullException.ThrowIfNull(root);
+		ValidateIds(oldId, newId);
+
+		if (string.Equals(oldId, newId, StringComparison.Ordinal))
+		{
+			return 0;
+		}
+
+		return ReplaceInDocument(
+			root,
+			text => string.Equals(
+				text,
+				oldId,
+				StringComparison.OrdinalIgnoreCase)
+				? newId
+				: null);
+	}
+
+	public static int ReplaceInNode(
+		JsonNode node,
+		string oldId,
+		string newId)
+	{
+		ArgumentNullException.ThrowIfNull(node);
+		ValidateIds(oldId, newId);
+
+		if (string.Equals(oldId, newId, StringComparison.Ordinal))
+		{
+			return 0;
+		}
+
+		return ReplaceInNode(
+			node,
+			text => string.Equals(
+				text,
+				oldId,
+				StringComparison.OrdinalIgnoreCase)
+				? newId
+				: null);
+	}
+
+	private static int RewriteFile(
+		string path,
+		Func<string, string?> replace)
+	{
 		string json;
 
 		try
@@ -62,7 +160,7 @@ internal static class SceneAssetReferences
 			return 0;
 		}
 
-		int changed = ReplaceInDocument(root, oldId, newId);
+		int changed = ReplaceInDocument(root, replace);
 
 		if (changed > 0)
 		{
@@ -74,19 +172,10 @@ internal static class SceneAssetReferences
 		return changed;
 	}
 
-	public static int ReplaceInDocument(
+	private static int ReplaceInDocument(
 		JsonNode root,
-		string oldId,
-		string newId)
+		Func<string, string?> replace)
 	{
-		ArgumentNullException.ThrowIfNull(root);
-		ValidateIds(oldId, newId);
-
-		if (string.Equals(oldId, newId, StringComparison.Ordinal))
-		{
-			return 0;
-		}
-
 		if (root is not JsonObject document ||
 			document["entities"] is not JsonArray entities)
 		{
@@ -111,26 +200,17 @@ internal static class SceneAssetReferences
 					continue;
 				}
 
-				changed += ReplaceInNode(data, oldId, newId);
+				changed += ReplaceInNode(data, replace);
 			}
 		}
 
 		return changed;
 	}
 
-	public static int ReplaceInNode(
+	private static int ReplaceInNode(
 		JsonNode node,
-		string oldId,
-		string newId)
+		Func<string, string?> replace)
 	{
-		ArgumentNullException.ThrowIfNull(node);
-		ValidateIds(oldId, newId);
-
-		if (string.Equals(oldId, newId, StringComparison.Ordinal))
-		{
-			return 0;
-		}
-
 		int replaced = 0;
 
 		switch (node)
@@ -142,15 +222,18 @@ internal static class SceneAssetReferences
 				{
 					JsonNode? child = obj[key];
 
-					if (IsMatch(child, oldId))
+					if (child is JsonValue value &&
+						value.TryGetValue<string>(out string? text) &&
+						replace(text) is string replacement &&
+						!string.Equals(text, replacement, StringComparison.Ordinal))
 					{
-						obj[key] = JsonValue.Create(newId);
+						obj[key] = JsonValue.Create(replacement);
 						replaced++;
 					}
 
 					else if (child is not null)
 					{
-						replaced += ReplaceInNode(child, oldId, newId);
+						replaced += ReplaceInNode(child, replace);
 					}
 				}
 
@@ -161,15 +244,18 @@ internal static class SceneAssetReferences
 				{
 					JsonNode? child = array[index];
 
-					if (IsMatch(child, oldId))
+					if (child is JsonValue value &&
+						value.TryGetValue<string>(out string? text) &&
+						replace(text) is string replacement &&
+						!string.Equals(text, replacement, StringComparison.Ordinal))
 					{
-						array[index] = JsonValue.Create(newId);
+						array[index] = JsonValue.Create(replacement);
 						replaced++;
 					}
 
 					else if (child is not null)
 					{
-						replaced += ReplaceInNode(child, oldId, newId);
+						replaced += ReplaceInNode(child, replace);
 					}
 				}
 
@@ -178,13 +264,6 @@ internal static class SceneAssetReferences
 			default:
 				return 0;
 		}
-	}
-
-	private static bool IsMatch(JsonNode? node, string oldId)
-	{
-		return node is JsonValue value &&
-			value.TryGetValue<string>(out string? text) &&
-			string.Equals(text, oldId, StringComparison.OrdinalIgnoreCase);
 	}
 
 	private static void ValidateIds(string oldId, string newId)

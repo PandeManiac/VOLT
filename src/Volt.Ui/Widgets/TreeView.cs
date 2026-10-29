@@ -457,7 +457,6 @@ public sealed class TreeView : Widget
 		else if (shift && _selectionAnchor is not null)
 		{
 			SelectRange(_selectionAnchor, item);
-			SelectionChanged?.Invoke(this, _selection);
 		}
 
 		else if (!item.IsSelected || _selection.Count == 1)
@@ -707,6 +706,7 @@ public sealed class TreeView : Widget
 		}
 
 		InvalidateVisual();
+		SelectionChanged?.Invoke(this, _selection);
 	}
 
 	private void ClearSelection()
