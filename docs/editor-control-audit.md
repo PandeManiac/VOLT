@@ -1,0 +1,117 @@
+# Editor control inventory
+
+Every visible control in the editor is listed with its state. The
+inventory exists so a later change cannot quietly leave a control that
+looks usable but edits nothing.
+
+## How each entry was checked
+
+- The action is wired in `EditorShell` (menus, toolbar) or in the
+  owning panel, and it changes authored state through `EditorSession`,
+  never only through widget state.
+- The behaviour is covered by a headless test in `tests/Volt.Editor.Tests`
+  or `tests/Volt.Editor.Core.Tests`.
+- The control appears in the headless snapshots produced by
+  `dotnet run --project src/Volt.Editor -- --snapshot <file>
+  --snapshot-state <workspace|authoring|start>`.
+
+A command that cannot run is disabled rather than silently inert: the
+menu refreshes its enabled state from session state on every frame
+(`RefreshCommandStates`), which
+`EditorCommandAuditTests.MenuCommands_WithNoProject_AreDisabledRatherThanInert`
+pins.
+
+## Menus
+
+| Menu | Controls | State |
+| --- | --- | --- |
+| File | New Project, Open Project, New Scene, Save Scene, Close Project, Exit | Working; scene commands disabled without a project or scene |
+| Edit | Undo, Redo, Cut, Copy, Paste, Duplicate, Delete, Select All, Select None, Invert Selection, Preferences | Working; each follows selection, history, and clipboard state |
+| Assets | Refresh Asset Catalog, New Scene | Working; disabled without a project |
+| GameObject | Create Empty, Cube, Sphere, Plane, Camera, Light | Working; creates real entities and selects them |
+| Component | Add <component> for every catalog entry | Working; disabled when the selection already has that component |
+| Window | Every panel toggle, Reset Layout, interface scales, Start Screen | Working; toggles dock panels and persists the workspace |
+| Help | About, Show Documentation, Keyboard Shortcuts | Working; writes to the Console |
+
+## Toolbar
+
+| Control | State |
+| --- | --- |
+| Select, Translate, Rotate, Scale | Working; sets the active tool used by both the viewport toolbar and the gizmo |
+| Local / World | Working; changes gizmo orientation and manipulation mathematics (`GizmoDragTests.LocalMode_*`, `WorldMode_*`) |
+| Snapping toggle and step field | Working; steps the world delta, covered by `Snapping_StepsTheWorldDelta` |
+| Play, Pause, Step, Stop | Working; drives `PlaySession`, including pause, single step, and stop restoring the authored scene |
+| Interface scale | Working; rebuilds the interface at the chosen scale and saves it |
+
+## Hierarchy
+
+Creation, deletion, duplication, rename (F2 and context menu),
+reparenting by dragging, multi-selection with modifiers, search, and
+context menus are implemented and covered by `SelectionCommandsTests`,
+`SelectionDeleteTests`, `SelectionDuplicateTests`,
+`HierarchyReparentTests`, and `EditorChromeTests`. Selection is one
+authoritative set shared with the viewport and the Inspector.
+
+## Inspector
+
+Transform editing (position, rotation, scale), mesh and material
+references, visibility, and component properties are editable, with text
+fields that commit on Enter and revert on Escape. Add Component offers
+only components the selection does not already have, and removing,
+enabling, and disabling components works. Inspector construction and
+menu wiring are covered by `EditorChromeTests`, the light and material
+tests, and the scene-document tests in `Volt.Editor.Core.Tests`.
+
+## Scene viewport
+
+| Control | State |
+| --- | --- |
+| RMB free-look | Working; native relative mouse mode with cursor hiding, relative motion consumed once per frame, and a fallback when the native request is refused |
+| WASD / QE / Shift fly | Working while the look is captured |
+| MMB pan, wheel dolly | Working |
+| F focus selection | Working |
+| LMB select, box select | Working; gizmo handles take priority over entity picking |
+| Translation, rotation, scale handles | Working; ray-based axis and plane solves with a refusal for near-parallel views |
+| Snap toggle and step | Working |
+| Orientation compass | Working; snaps the camera to an axis view at the current distance |
+| Viewport toolbar | Working; mirrors the tool and transform-space controls for the active viewport |
+| Overlay hint line | Working; describes the current bindings |
+
+## Game viewport
+
+Game tab, runtime camera, Play Mode input routing, pause, and step are
+implemented. The Game view renders the play session's camera rather than
+the editor camera.
+
+## Project browser
+
+Folders, list and tile views, search, selection, keyboard navigation,
+rename, delete, duplicate (single and bulk), folder creation, context
+menus, and revealing the current scene are implemented. Scene asset
+references follow renames and stay valid after moves.
+
+## Console and Profiler
+
+The console records editor log entries with severity and can be cleared.
+The profiler draws real frame-time and managed-memory timelines from
+`FrameTimeline` and `MemoryTimeline`, and reports live managed memory.
+
+## Docking
+
+Panels can be switched, closed, reopened from the Window menu, and
+resized. The layout, the open/closed state, and the interface scale are
+saved per project and restored on launch. Reset Layout restores the
+default workspace.
+
+## Known intentional limitations
+
+These are documented in `docs/editor-guide.md` and are not hidden
+controls; no visible control promises them:
+
+- No floating dock windows, asset thumbnails, or asset import pipeline
+  beyond discovery.
+- No custom C# gameplay assembly loading at runtime; gameplay is
+  composed from built-in behaviours and authored component data.
+- No IME candidate window or complex text shaping.
+- Gameplay and scene rendering use a single pass with no shadows or
+  post-processing.
