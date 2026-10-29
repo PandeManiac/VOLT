@@ -40,6 +40,35 @@ public static class ComponentRegistry
 	}
 
 	/// <summary>
+	/// Gets a snapshot of every registered component type.
+	/// </summary>
+	/// <remarks>
+	/// Registration is process-wide and append-only, so the order is
+	/// stable and the identifiers stay valid. A tool can enumerate this
+	/// once instead of reflecting over loaded assemblies.
+	/// </remarks>
+	public static IReadOnlyList<ComponentInfo> GetRegisteredComponents()
+	{
+		lock (s_lock)
+		{
+			return [.. s_componentsById];
+		}
+	}
+
+	/// <summary>
+	/// Attempts to retrieve metadata for a component CLR type.
+	/// </summary>
+	public static bool TryGetInfoForType(Type componentType, out ComponentInfo info)
+	{
+		ArgumentNullException.ThrowIfNull(componentType);
+
+		lock (s_lock)
+		{
+			return s_components.TryGetValue(componentType, out info);
+		}
+	}
+
+	/// <summary>
 	/// Registers an unmanaged component type.
 	/// Repeated registrations return the same identifier.
 	/// </summary>

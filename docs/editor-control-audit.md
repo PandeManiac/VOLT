@@ -104,6 +104,14 @@ The console records editor log entries with severity and can be cleared.
 The profiler draws real frame-time and managed-memory timelines from
 `FrameTimeline` and `MemoryTimeline`, and reports live managed memory.
 
+## ECS inspector
+
+The ECS panel reports the runtime world's entity and archetype counts,
+the selected object's real ECS handle and component values, measured
+chunk storage per archetype, and a component query that runs through
+`World.Query`. It refreshes on a timer while playing or paused. It is
+read-only; component values cannot be edited there yet.
+
 ## Docking
 
 Panels can be switched, closed, reopened from the Window menu, and
@@ -120,6 +128,8 @@ controls; no visible control promises them:
   beyond discovery.
 - No custom C# gameplay assembly loading at runtime; gameplay is
   composed from built-in behaviours and authored component data.
+- The ECS panel cannot edit runtime components or list individual
+  query results; it reports measured counts and signatures.
 - No IME candidate window or complex text shaping.
 - Gameplay and scene rendering use a single pass with no shadows or
   post-processing.

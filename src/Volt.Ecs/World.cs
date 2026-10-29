@@ -276,6 +276,119 @@ public sealed unsafe class World : IDisposable
 	}
 
 	/// <summary>
+	/// Attempts to read a component value without throwing when the
+	/// entity or the component is absent.
+	/// </summary>
+	/// <remarks>
+	/// This is the read-only shape a debugger or inspector needs: a
+	/// stale selection is an ordinary result rather than an exception
+	/// on a per-frame path. The value is copied, so the caller never
+	/// holds a reference into chunk storage that a structural change
+	/// could invalidate.
+	/// </remarks>
+	public bool TryReadComponent<T>(Entity entity, out T value)
+		where T : unmanaged
+	{
+		ThrowIfDisposed();
+
+		if (!_locations.TryGetValue(entity, out EntityLocation location))
+		{
+			value = default;
+			return false;
+		}
+
+		ComponentType type = ComponentRegistry.Register<T>();
+
+		if (location.Chunk.Archetype.FindComponentIndex(type) < 0)
+		{
+			value = default;
+			return false;
+		}
+
+		value = location.Chunk.GetComponent<T>(location.Row);
+		return true;
+	}
+
+	/// <summary>
+	/// Attempts to read the component signature of a live entity.
+	/// </summary>
+	public bool TryGetSignature(
+		Entity entity,
+		out ComponentSignature signature)
+	{
+		ThrowIfDisposed();
+
+		if (!_locations.TryGetValue(entity, out EntityLocation location))
+		{
+			signature = ComponentSignature.Empty;
+			return false;
+		}
+
+		signature = location.Chunk.Archetype.Signature;
+		return true;
+	}
+
+	/// <summary>
+	/// Gets a snapshot of the archetypes this world has allocated.
+	/// </summary>
+	/// <remarks>
+	/// The list is a copy; the archetypes it names are live. Read their
+	/// counts from the thread that owns the simulation, because a
+	/// structural change on another thread would produce a torn view
+	/// rather than a consistent one. Nothing here keeps the caller
+	/// inside chunk storage.
+	/// </remarks>
+	public IReadOnlyList<Archetype> GetArchetypes()
+	{
+		ThrowIfDisposed();
+
+		lock (_structureGate)
+		{
+			return [.. _archetypes.Values];
+		}
+	}
+
+	/// <summary>
+	/// Measures one archetype's chunks, capacity, and native allocation.
+	/// </summary>
+	public bool TryGetArchetypeStorage(
+		Archetype archetype,
+		out ArchetypeStorageInfo storage)
+	{
+		ArgumentNullException.ThrowIfNull(archetype);
+		ThrowIfDisposed();
+
+		lock (_structureGate)
+		{
+			if (!_chunks.TryGetValue(archetype, out List<ArchetypeChunk>? chunks))
+			{
+				storage = default;
+				return false;
+			}
+
+			int entities = 0;
+			int capacity = 0;
+			long bytes = 0;
+
+			foreach (ArchetypeChunk chunk in chunks)
+			{
+				entities += chunk.Count;
+				capacity += chunk.Capacity;
+				bytes += (long)chunk.AllocatedBytes;
+			}
+
+			storage = new ArchetypeStorageInfo(
+				archetype,
+				chunks.Count,
+				entities,
+				capacity,
+				bytes);
+
+			return true;
+		}
+	}
+
+	/// <summary>
 	/// Creates a query over matching, nonempty archetype chunks.
 	/// </summary>
 	/// <remarks>

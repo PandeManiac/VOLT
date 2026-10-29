@@ -92,6 +92,7 @@ public sealed class EditorShell : Panel
 		Inspector,
 		Project,
 		Console,
+		Ecs,
 		Profiler
 	}
 
@@ -534,6 +535,7 @@ public sealed class EditorShell : Panel
 			"inspector" => new InspectorPanel(_session),
 			"project" => new ProjectPanel(_session, _projectPanelState),
 			"console" => new ConsolePanel(_session),
+			"ecs" => new EcsInspectorPanel(_session),
 			"profiler" => new ProfilerPanel(_session),
 			_ => null
 		};
@@ -2340,6 +2342,7 @@ public sealed class EditorShell : Panel
 			PanelTab.Inspector => "inspector",
 			PanelTab.Project => "project",
 			PanelTab.Console => "console",
+			PanelTab.Ecs => "ecs",
 			PanelTab.Profiler => "profiler",
 			_ => throw new ArgumentOutOfRangeException(nameof(tab))
 		};

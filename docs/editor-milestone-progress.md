@@ -146,3 +146,65 @@ which the build caught and the duplicate was removed.
 - Extend the control inventory if new panels or commands are added.
 - Both stale branches are now folded in; there is no unmerged project
   work left on them.
+
+## Theme correction and runtime ECS inspection (October 2026)
+
+Branch `freebuff/212b0f79ee2a8862f016a79a`, based on master `31dc5f5`.
+
+### What changed
+
+- **Colour-space fix.** The swapchain selector prefers
+  `B8G8R8A8_SRGB`, and the UI shader wrote palette bytes into it
+  unchanged, so the framebuffer applied the sRGB transfer function a
+  second time. That is the measured cause of the interface rendering
+  much brighter than its palette. `ui.frag` now decodes authored sRGB
+to linear when the target format carries the transfer function, and
+  the new `UiSurfaceColorSpace` decides that from the chosen format so
+  a UNORM surface still passes bytes through. The third push constant
+  carries the flag; `ui.vert`/`ui.frag` were rebuilt with glslang
+  16.6.0.
+- **Darker theme and larger type.** The palette is now the requested
+  near-black charcoal set (`#11151C` window, `#1A212B`-range panels,
+  `#10151D` wells, `#38B6E8` accent). Body text rose from 14 to 15 and
+  the panel header from 13 to 14 logical units.
+- **Read-only ECS introspection API.**
+  `World.GetArchetypes`, `World.TryGetSignature`,
+  `World.TryReadComponent<T>`, `World.TryGetArchetypeStorage`, and
+  `ComponentRegistry.GetRegisteredComponents` / `TryGetInfoForType`.
+  Reads copy their value; measured storage comes from the chunks
+  themselves.
+- **`RuntimeWorldSnapshot`.** Captures the live world, formats the
+  component values it can (Position, Rotation, Scale, Velocity,
+  AngularVelocity) and labels the rest as unformatted with their size,
+  and runs real `World.Query` calls under a structural freeze.
+- **ECS panel.** Runtime entity handle, component values, archetype
+  storage table, and a component query builder. Refreshes four times a
+  second and is read-only.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `WorldIntrospectionTests` 8 passed, `RuntimeWorldSnapshotTests` 6
+  passed, `UiSurfaceColorSpaceTests` 7 cases passed.
+- Full solution suite passes (see the session report for the exact
+  count).
+- Golden snapshot baselines and the guide images were regenerated and
+  reviewed at 1440x900; the darker surfaces, separations, and larger
+  text render correctly, and the ECS tab is present in the bottom tab
+  group.
+
+### Not verified here
+
+- No Vulkan device exists in this workspace, so the sRGB decode has not
+  been seen on hardware. A windowed run should show a `#1B212B` panel
+  as that byte value rather than a brighter one, on both an sRGB
+  swapchain and (if it is ever selected) the UNORM fallback.
+- The ECS panel has not been driven interactively. Its data path is
+  covered by tests; it is not the active tab in any snapshot preset, so
+  its rendered layout has not been captured.
+
+### Next
+
+- Runtime component editing with explicit write-back rules.
+- Per-entity query results with paging.
+- Project-owned gameplay assemblies, which is Milestone E.

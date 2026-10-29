@@ -124,7 +124,8 @@ Toolbar (VOLT mark | Select Move Rotate Scale | Play Pause Step Stop
 +-----------+-----------------------------+------------+
 | Hierarchy | Scene / Game tabs           | Inspector  |
 |           +-----------------------------+            |
-|           | Project / Console / Profiler|            |
+|           | Project / Console /         |            |
+|           | ECS / Profiler              |            |
 +-----------+-----------------------------+------------+
 Status bar (scene, last action, play state, object count, frame rate)
 ```
@@ -180,10 +181,17 @@ an icon, a title, and a sentence instead of an empty rectangle: no
 scene, no objects, no matches, no project, nothing selected, an empty
 folder, or a filtered-out console.
 - **Typography is a role scale** (`Small`, `Body`, `Large`, `Heading`,
-`Title`, `PanelHeader`, `Mono`, `MonoSmall`). Body text is 14 logical
-units; numeric fields use the monospace face so digits align down a
-column, and inspector rows label their X/Y/Z components in the
-conventional muted red, green, and blue.
+`Title`, `PanelHeader`, `Mono`, `MonoSmall`). Body text is 15 logical
+units with a 14-unit panel header; numeric fields use the monospace face
+so digits align down a column, and inspector rows label their X/Y/Z
+components in the conventional muted red, green, and blue.
+- **Colour is authored in sRGB and composited in linear light.** The
+palette records the bytes a developer should see. When the swapchain
+format applies the sRGB transfer function, the UI shader decodes those
+bytes before blending so the framebuffer does not encode them a second
+time; a surface that only offers a UNORM format passes them through.
+That is why a panel declared as `#1B212B` renders as `#1B212B` instead
+of the much brighter value a double encode produces.
 
 The tool strip groups tools, transport, and view context, and the
 status bar reports the scene and its dirty marker, the last action,
@@ -376,6 +384,30 @@ runtime world and the authored scene is not written back. This is
 covered by `tests/Volt.Editor.Tests` and
 `tests/Volt.Editor.Core.Tests/Runtime/PlaySessionTests.cs`.
 
+## Runtime ECS inspector
+
+The **ECS** panel (bottom tab group, and **Window → ECS**) reports the
+world Play Mode actually built, not the authored scene. While a session
+is running it shows:
+
+- the session state and the live entity and archetype counts;
+- the selected object's runtime ECS handle, its real component
+  signature, and the values read from its component columns;
+- every allocated archetype with its entity count, chunk count,
+  occupancy, and the native bytes its chunks report;
+- a query builder that runs `World.Query` with every checked component
+  required and reports the matched archetypes and entity count.
+
+Values refresh four times a second instead of on every fixed step, and
+each capture copies every value it displays, so stopping Play Mode
+cannot leave the panel holding a reference into chunk storage. The panel
+is read-only: runtime component editing needs defined write-back
+semantics and is not implemented yet.
+
+Inspecting a paused world works the same way, which is the useful case
+for comparing a simulated pose with the authored transform. The authored
+Inspector keeps editing serialized data; the ECS panel never writes it.
+
 ## Running a game without the editor
 
 Gameplay data is normal project data. `samples/Volt.PlayDemo` is an
@@ -438,6 +470,9 @@ not yet a mesh-rendering game framework.
 - Gameplay logic is currently composed from the built-in behaviours
   (`Spin`, `Move`) and authored component data. Loading user-authored
   C# assemblies into a separate runtime is not implemented.
+- The ECS panel is read-only. Runtime component edits, entity creation
+  at runtime, and per-entity query result lists are not implemented;
+  the query reports matched archetypes and counts.
 - Floating dock windows, asset thumbnails, and an asset import pipeline
   beyond discovery are not implemented.
 - Text entry covers Unicode text and clipboard operations. IME

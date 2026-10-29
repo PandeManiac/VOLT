@@ -10,13 +10,14 @@ public sealed class DockLayoutTests
 	{
 		DockLayout layout = DockLayout.CreateEditorDefault();
 
-		Assert.Equal(7, layout.Panels.Count);
+		Assert.Equal(8, layout.Panels.Count);
 		Assert.True(layout.IsOpen("hierarchy"));
 		Assert.True(layout.IsOpen("scene"));
 		Assert.True(layout.IsOpen("game"));
 		Assert.True(layout.IsOpen("inspector"));
 		Assert.True(layout.IsOpen("project"));
 		Assert.True(layout.IsOpen("console"));
+		Assert.True(layout.IsOpen("ecs"));
 		Assert.True(layout.IsOpen("profiler"));
 
 		DockTabsNode center = Assert.IsType<DockTabsNode>(

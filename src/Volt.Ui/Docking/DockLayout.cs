@@ -55,8 +55,10 @@ public sealed class DockLayout
 		DockPanel project = new("project", "Project");
 		DockPanel console = new("console", "Console");
 		DockPanel profiler = new("profiler", "Profiler");
+		DockPanel ecs = new("ecs", "ECS");
 
-		DockTabsNode bottomTabs = new(["project", "console", "profiler"]);
+		DockTabsNode bottomTabs = new(
+			["project", "console", "ecs", "profiler"]);
 		DockTabsNode centerTabs = new(["scene", "game"]);
 
 		DockSplitNode center = new(
@@ -86,6 +88,7 @@ public sealed class DockLayout
 				inspector,
 				project,
 				console,
+				ecs,
 				profiler
 			]);
 
