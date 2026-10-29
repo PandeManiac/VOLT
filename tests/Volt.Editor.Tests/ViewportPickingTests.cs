@@ -575,10 +575,47 @@ public sealed class ViewportPickingTests
 			Bounds,
 			UnitsPerPixel));
 
-		Assert.Equal(3, gizmo.Handles.Count);
+		Assert.Equal(3 * 48, gizmo.Handles.Count);
 		Assert.DoesNotContain(
 			gizmo.Handles,
 			handle => handle.Handle == GizmoHandle.PlaneXZ);
+
+		GizmoHandleHit ringSegment = gizmo.Handles.First(
+			handle => handle.Handle == GizmoHandle.AxisZ);
+		UiPoint ringPoint = Midpoint(
+			ringSegment.StartPixel,
+			ringSegment.EndPixel);
+
+		Assert.Equal(
+			GizmoHandle.AxisZ,
+			gizmo.Pick(ringPoint, ViewportMath.GizmoPickTolerancePixels).Handle);
+	}
+
+	[Fact]
+	public void ScaleGizmo_UsesObjectLocalAxesAndSquareTipGeometry()
+	{
+		(EditorCamera camera, Matrix4x4 viewProjection) = CreateFramedView();
+		Quaternion rotation = Quaternion.CreateFromAxisAngle(
+			Vector3.UnitY, MathF.PI / 2f);
+		ViewportGizmo gizmo = new();
+
+		Assert.True(gizmo.Build(
+			EditorTool.Scale,
+			Vector3.Zero,
+			rotation,
+			local: false,
+			scale: 1f,
+			viewProjection,
+			Bounds,
+			UnitsPerPixel));
+
+		Assert.Equal(3, gizmo.Handles.Count);
+		GizmoHandleHit xAxis = gizmo.Handles.First(
+			handle => handle.Handle == GizmoHandle.AxisX);
+
+		Assert.True(Vector3.Dot(
+			Vector3.Normalize(xAxis.End - xAxis.Origin),
+			-Vector3.UnitZ) > 0.999f);
 	}
 
 	[Fact]

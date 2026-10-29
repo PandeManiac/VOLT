@@ -2269,9 +2269,22 @@ internal sealed class SceneViewport : Widget, IFrameTick
 			return;
 		}
 
+		if (_session.Tool == EditorTool.Rotate)
+		{
+			DrawRotationRings(
+				drawList,
+				origin,
+				_gizmo.WorldLength * 0.78f,
+				rotation,
+				_session.LocalTransform,
+				bounds,
+				viewProjection,
+				theme);
+		}
+
 		foreach (GizmoHandleHit handle in _gizmo.Handles)
 		{
-			if (!handle.Visible)
+			if (_session.Tool == EditorTool.Rotate || !handle.Visible)
 			{
 				continue;
 			}
@@ -2387,14 +2400,94 @@ internal sealed class SceneViewport : Widget, IFrameTick
 			return;
 		}
 
-		drawList.AddRoundedRect(
-			new UiRect(
-				handle.EndPixel.X - 2f,
-				handle.EndPixel.Y - 2f,
-				5f,
-				5f),
-			2f,
+		Vector2 direction = new(
+			handle.EndPixel.X - handle.StartPixel.X,
+			handle.EndPixel.Y - handle.StartPixel.Y);
+
+		if (direction.LengthSquared() < 1e-4f)
+		{
+			return;
+		}
+
+		direction = Vector2.Normalize(direction);
+		Vector2 perpendicular = new(-direction.Y, direction.X);
+		Vector2 tip = new(handle.EndPixel.X, handle.EndPixel.Y);
+		Vector2 basePoint = tip - (direction * 9f);
+		Vector2 wing = perpendicular * 4f;
+
+		drawList.AddLine(
+			new UiPoint(tip.X, tip.Y),
+			new UiPoint(basePoint.X + wing.X, basePoint.Y + wing.Y),
+			2.5f,
 			color);
+		drawList.AddLine(
+			new UiPoint(tip.X, tip.Y),
+			new UiPoint(basePoint.X - wing.X, basePoint.Y - wing.Y),
+			2.5f,
+			color);
+	}
+
+	/// <summary>
+	/// Draws the three rotation planes as projected circular rings.
+	/// </summary>
+	private static void DrawRotationRings(
+		UiDrawList drawList,
+		Vector3 origin,
+		float radius,
+		Quaternion rotation,
+		bool local,
+		UiRect bounds,
+		in Matrix4x4 viewProjection,
+		UiTheme theme)
+	{
+		const int Segments = 48;
+		Vector3[] normals = [Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ];
+		UiColor[] colors =
+		[
+			theme.Palette.GridAxisX,
+			theme.Palette.Success,
+			theme.Palette.GridAxisZ
+		];
+
+		for (int ring = 0; ring < normals.Length; ring++)
+		{
+			Vector3 normal = normals[ring];
+			Vector3 first = normal == Vector3.UnitX
+				? Vector3.UnitY
+				: Vector3.UnitX;
+			Vector3 second = Vector3.Normalize(Vector3.Cross(normal, first));
+
+			if (local)
+			{
+				normal = Vector3.Transform(normal, rotation);
+				first = Vector3.Transform(first, rotation);
+				second = Vector3.Transform(second, rotation);
+			}
+			UiPoint previous = default;
+			bool havePrevious = false;
+
+			for (int segment = 0; segment <= Segments; segment++)
+			{
+				float angle = segment * (MathF.Tau / Segments);
+				Vector3 point = origin + radius *
+					((first * MathF.Cos(angle)) + (second * MathF.Sin(angle)));
+
+				if (!ViewportMath.TryProject(
+						viewProjection, point, bounds, out UiPoint projected))
+				{
+					havePrevious = false;
+					continue;
+				}
+
+				if (havePrevious)
+				{
+					drawList.AddLine(previous, projected, 2f, colors[ring]);
+				}
+
+				previous = projected;
+				havePrevious = true;
+			}
+		}
 	}
 
 	/// <summary>

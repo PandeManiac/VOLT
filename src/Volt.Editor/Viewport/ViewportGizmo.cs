@@ -308,12 +308,11 @@ internal sealed class ViewportGizmo
 
 		if (type == EditorTool.Rotate)
 		{
-			// Rotation reuses the axis handles: dragging one rotates
-			// about that axis rather than moving along it, so the same
-			// pick geometry serves both tools.
-			AddAxis(center, bounds, viewProjection, orientation, Vector3.UnitX, GizmoHandle.AxisX, origin);
-			AddAxis(center, bounds, viewProjection, orientation, Vector3.UnitY, GizmoHandle.AxisY, origin);
-			AddAxis(center, bounds, viewProjection, orientation, Vector3.UnitZ, GizmoHandle.AxisZ, origin);
+			// Rotation rings and picking share the same projected
+			// geometry; every segment is tagged with its rotation axis.
+			AddRotationRing(bounds, viewProjection, orientation, origin, Vector3.UnitX, GizmoHandle.AxisX);
+			AddRotationRing(bounds, viewProjection, orientation, origin, Vector3.UnitY, GizmoHandle.AxisY);
+			AddRotationRing(bounds, viewProjection, orientation, origin, Vector3.UnitZ, GizmoHandle.AxisZ);
 
 			IsVisible = _handles.Count > 0;
 
@@ -437,6 +436,53 @@ internal sealed class ViewportGizmo
 			MathF.Max(MathF.Abs(scale.Y), MathF.Abs(scale.Z)));
 
 		return halfExtent * magnitude;
+	}
+
+	private void AddRotationRing(
+		UiRect bounds,
+		in Matrix4x4 viewProjection,
+		Quaternion orientation,
+		Vector3 origin,
+		Vector3 normal,
+		GizmoHandle handle)
+	{
+		const int Segments = 48;
+		Vector3 first = normal == Vector3.UnitX
+			? Vector3.UnitY
+			: Vector3.UnitX;
+		Vector3 second = Vector3.Normalize(Vector3.Cross(normal, first));
+		first = Vector3.Transform(first, orientation);
+		second = Vector3.Transform(second, orientation);
+
+		float radius = WorldLength * 0.78f;
+		bool hasPrevious = false;
+		Vector3 previousWorld = default;
+		UiPoint previousPixel = default;
+
+		for (int segment = 0; segment <= Segments; segment++)
+		{
+			float angle = segment * (MathF.Tau / Segments);
+			Vector3 point = origin + radius *
+				((first * MathF.Cos(angle)) + (second * MathF.Sin(angle)));
+			bool visible = ViewportMath.TryProject(
+				viewProjection, point, bounds, out UiPoint pixel);
+
+			if (visible && hasPrevious)
+			{
+				_handles.Add(new GizmoHandleHit(
+					handle,
+					previousWorld,
+					point,
+					previousPixel,
+					pixel,
+					true,
+					0f));
+			}
+
+			hasPrevious = visible;
+			previousWorld = point;
+			previousPixel = pixel;
+		}
 	}
 
 	private void AddAxis(

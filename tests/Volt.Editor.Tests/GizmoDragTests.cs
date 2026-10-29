@@ -92,6 +92,31 @@ public sealed class GizmoDragTests : IDisposable
 	}
 
 	[Fact]
+	public void AxisDrag_ContinuesPastTheVisibleHandleTip()
+	{
+		SceneEntity box = CreateBox();
+
+		_session.Tool = EditorTool.Translate;
+		_session.LocalTransform = false;
+
+		Paint();
+
+		GizmoHandleHit xAxis = Handle(GizmoHandle.AxisX);
+		UiPoint beyond = new(
+			xAxis.StartPixel.X +
+				((xAxis.EndPixel.X - xAxis.StartPixel.X) * 3f),
+			xAxis.StartPixel.Y +
+				((xAxis.EndPixel.Y - xAxis.StartPixel.Y) * 3f));
+
+		PointerDown(Lerp(xAxis.StartPixel, xAxis.EndPixel, 0.5f));
+		PointerMove(beyond);
+		PointerUp(beyond);
+
+		Assert.Equal(_viewport.Gizmo.WorldLength * 2.5f,
+			box.Transform.Position.X, 3);
+	}
+
+	[Fact]
 	public void AxisDrag_IsOneUndoStep_ThatRestoresTheExactTransform()
 	{
 		SceneEntity box = CreateBox();

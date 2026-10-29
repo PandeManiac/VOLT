@@ -102,8 +102,28 @@ public sealed class GoldenSnapshotTests : IDisposable
 		_session.Tool = EditorTool.Rotate;
 		_session.LocalTransform = false;
 		_session.GridSnapping = true;
+		SelectDefaultMesh();
 
 		Verify("editor-rotate-world-snap.png", 1280, 800);
+	}
+
+	[Fact]
+	public void ScaleState_MatchesItsBaseline()
+	{
+		_session.Tool = EditorTool.Scale;
+		SelectDefaultMesh();
+
+		Verify("editor-scale.png", 1440, 900);
+	}
+
+	private void SelectDefaultMesh()
+	{
+		Guid meshId = _session.Scene!.Entities
+			.First(entity =>
+				entity.GetComponent<MeshRendererData>() is not null)
+			.Id;
+
+		_session.Select(meshId);
 	}
 
 	private void Verify(string name, int width, int height)
