@@ -99,8 +99,40 @@ unknown component payloads, and repoints the startup scene, so autorings
 survive moving assets between folders. The browser keeps several selected
 assets across grid/list switches and interface-scale changes.
 
+## Vulkan-branch recovery
+
+`fix/editor-vulkan-stability` was six commits on a much older base, but it
+held real fixes master lacked. All six are now here, one commit each, with
+their tests:
+
+- An offscreen render target creates the render pass before the
+  framebuffer that references it (`37f310f`).
+- An abandoned frame keeps the original failure instead of the error
+  produced while cleaning up after it (`55a7ab9`).
+- Startup reports the physical and logical window size plus the display
+  scale from `UiSurfaceMetrics`, because the layout surface is still zero
+  before the first frame (`b85e7cf`).
+- Every painted font belongs to one atlas-mapped font set: the shell
+  publishes its theme to the context, panels take captions on attach, and
+  the renderer fails with the font name instead of painting white blocks
+  (`7a583bc`).
+- The frame slot is published before the UI pass records, so a sampled
+  target is in the layout the UI expects (`90147a3`).
+- The start screen uses larger, higher-contrast text (`ca9cdbf`).
+
+Only two of the six conflicted. The window-geometry commit disagreed with
+the saved window size and position, so the diagnostic sink was kept and
+the saved geometry preserved. The font commit's project panel had moved
+since its base; master's block was kept and the deferred-caption change
+re-applied on top. Because the cherry-pick had already applied the other
+hunks of that commit, a first pass inserted a duplicate `ApplyDpiScale`,
+which the build caught and the duplicate was removed.
+
 ## Next actions
 
-- Verify the shutdown fix and input behaviour on hardware (list above).
-- Review `fix/editor-vulkan-stability` for anything master still lacks.
+- Run the hardware checks above, including one launch that paints the
+  start screen and one with a project open, to confirm no text paints as
+  white blocks.
 - Extend the control inventory if new panels or commands are added.
+- Both stale branches are now folded in; there is no unmerged project
+  work left on them.
