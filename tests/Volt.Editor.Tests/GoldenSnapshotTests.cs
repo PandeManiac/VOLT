@@ -58,6 +58,26 @@ public sealed class GoldenSnapshotTests : IDisposable
 	}
 
 	[Fact]
+	public void StartScreen_MatchesItsBaseline()
+	{
+		// The start screen is the interface before any project exists, and
+		// its heading and caption are the shapes that painted as solid
+		// blocks when the shell kept a second font set, so it gets its own
+		// baseline. The default folder is the literal the windowed editor
+		// starts with, which keeps the capture independent of HOME.
+		using EditorSession startSession = new();
+
+		UiRasterImage actual = EditorSnapshot.Capture(
+			startSession,
+			Path.Combine(_root, "editor-start.png"),
+			1440,
+			900,
+			defaultProjectFolder: "~/VoltGame");
+
+		VerifyImage("editor-start.png", actual);
+	}
+
+	[Fact]
 	public void RotateWorldSnapState_MatchesItsBaseline()
 	{
 		_session.Tool = EditorTool.Rotate;
@@ -75,6 +95,11 @@ public sealed class GoldenSnapshotTests : IDisposable
 			width,
 			height);
 
+		VerifyImage(name, actual);
+	}
+
+	private static void VerifyImage(string name, UiRasterImage actual)
+	{
 		Assert.True(
 			CountColors(actual) > 24,
 			"The capture must contain real interface content.");
