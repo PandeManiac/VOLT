@@ -61,12 +61,22 @@ still releases the remaining resources when the device is lost.
 
 ## Remaining verification on real hardware
 
-The cloud workspace has no Vulkan device and no display server, so these
-must be run locally and are **not** claimed as verified:
+The cloud workspace has no Vulkan ICD, no compositor, and no root access
+to install either, so it cannot present a real frame. What the cloud can
+check does pass: the solution builds cleanly, the full suite is green, and
+CPU snapshots of the start screen and an authoring session
+(`EditorSnapshot`) show readable text and correct layout after the
+recovered font and frame-slot fixes. That path paints without a GPU by
+design, so it cannot prove the Vulkan atlas mapping, resource lifetime,
+or presentation.
+
+These checks need a machine with a display and are **not** claimed as
+verified:
 
 1. Launch with validation enabled and exit after a normal authoring
    session; confirm no `VUID-vkDestroyPipeline-pipeline-00765` and no
-   other validation output.
+   other validation output:
+   `dotnet run --project src/Volt.Editor -c Release -- --validation --frames 300`
 2. Repeat launch and exit several times, including after opening and
    closing a project.
 3. Hold RMB in the Scene view; confirm the cursor hides, rotation never
