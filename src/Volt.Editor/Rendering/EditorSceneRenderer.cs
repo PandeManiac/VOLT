@@ -222,8 +222,19 @@ internal sealed class EditorSceneRenderer : IViewportRenderer, IDisposable
 	/// Releases every mesh, target, and pipeline.
 	/// </summary>
 	/// <remarks>
+	/// <para>
 	/// The caller must stop presenting before disposing, because the UI
 	/// renderer's descriptor sets reference these targets.
+	/// </para>
+	/// <para>
+	/// Disposal waits for the device first. The host submits a frame
+	/// whose command buffer records this pipeline, the pipeline is
+	/// destroyed here, and the host's own idle only runs later when the
+	/// host is disposed. Without this wait the GPU can still be
+	/// executing a recorded draw when the pipeline is destroyed, which
+	/// is exactly what <c>VUID-vkDestroyPipeline-pipeline-00765</c>
+	/// reports at shutdown.
+	/// </para>
 	/// </remarks>
 	public void Dispose()
 	{
@@ -233,6 +244,17 @@ internal sealed class EditorSceneRenderer : IViewportRenderer, IDisposable
 		}
 
 		_disposed = true;
+
+		try
+		{
+			_device.WaitIdle();
+		}
+
+		catch
+		{
+			// A lost device cannot accept the wait, but the remaining
+			// native resources still have to be released.
+		}
 
 		_pipeline?.Dispose();
 		_pipeline = null;
