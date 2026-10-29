@@ -45,6 +45,7 @@ public sealed class ProjectPanel : Panel
 	private readonly IconButton _listButton;
 	private readonly IconButton _refreshButton;
 	private readonly IconButton _newSceneButton;
+	private readonly IconButton _newFolderButton;
 	private readonly IconButton _upButton;
 
 	private readonly List<IconTileView> _tileViews = [];
@@ -59,6 +60,9 @@ public sealed class ProjectPanel : Panel
 	private bool _skipFolderCapture;
 	private string _selectedId = string.Empty;
 	private bool _selectedIsFolder;
+	private readonly HashSet<string> _selectedAssetIds =
+		new(StringComparer.OrdinalIgnoreCase);
+	private string _selectionAnchorId = string.Empty;
 	private string _signature = string.Empty;
 	private bool _gridMode = true;
 	private bool _updating;
@@ -98,6 +102,10 @@ public sealed class ProjectPanel : Panel
 
 		_refreshButton = CreateAction(UiIcon.Refresh, "Rescan the project folder", RefreshCatalog);
 		_newSceneButton = CreateAction(UiIcon.Plus, "Create a new scene", CreateScene);
+		_newFolderButton = CreateAction(
+			UiIcon.Folder,
+			"Create a new folder",
+			ShowCreateFolderDialog);
 		_tilesButton = CreateAction(
 			UiIcon.TileView,
 			"Show assets as tiles",
@@ -112,6 +120,7 @@ public sealed class ProjectPanel : Panel
 		header.Add(CreateSeparator());
 		header.Add(_refreshButton);
 		header.Add(_newSceneButton);
+		header.Add(_newFolderButton);
 		header.Add(_tilesButton);
 		header.Add(_listButton);
 
@@ -130,6 +139,7 @@ public sealed class ProjectPanel : Panel
 		};
 
 		_folders.SelectionChanged += OnFolderSelectionChanged;
+		_folders.ContextMenuRequested += OnFolderTreeContextMenuRequested;
 
 		_tiles = new TileWrapPanel();
 
@@ -215,6 +225,7 @@ public sealed class ProjectPanel : Panel
 			_folderSelectionActive = state.FolderSelectionActive;
 			_selectedId = state.SelectedId;
 			_selectedIsFolder = state.SelectedIsFolder;
+			_selectedAssetIds.UnionWith(state.SelectedAssetIds);
 			_search.Text = state.Search;
 			_collapsedFolders.UnionWith(state.CollapsedFolders);
 			_skipFolderCapture = true;
@@ -238,6 +249,7 @@ public sealed class ProjectPanel : Panel
 			GridMode = _gridMode,
 			SelectedId = _selectedId,
 			SelectedIsFolder = _selectedIsFolder,
+			SelectedAssetIds = [.. _selectedAssetIds],
 			Search = _search.Text,
 			CollapsedFolders = [.. _collapsedFolders]
 		};
@@ -245,15 +257,35 @@ public sealed class ProjectPanel : Panel
 
 	protected override bool OnKeyDown(UiKeyEvent key)
 	{
-		if (!key.IsDown || key.Modifiers != UiKeyModifiers.None)
+		if (!key.IsDown)
 		{
 			return false;
 		}
 
+		bool shift = key.HasModifier(UiKeyModifiers.Shift);
+
 		// The list view runs its own arrow navigation. The tile grid
-		// needs this panel to move focus and selection together.
-		if (_gridMode && TryMoveTileFocus(key.Key))
+		// needs this panel to move focus and selection together; Shift
+		// extends the asset range from the current anchor.
+		if (_gridMode &&
+			(key.Modifiers == UiKeyModifiers.None ||
+				key.Modifiers == UiKeyModifiers.Shift) &&
+			TryMoveTileFocus(key.Key, extendSelection: shift))
 		{
+			return true;
+		}
+
+		// The asset view owns Ctrl+D while it has focus. The scene's
+		// duplicate shortcut stands down inside the browser, so the key
+		// duplicates the selected files instead of scene objects.
+		if (key.Modifiers == UiKeyModifiers.Control &&
+			key.Key == UiKey.D &&
+			!key.IsRepeat &&
+			AssetViewHasFocus() &&
+			!_selectedIsFolder &&
+			_selectedAssetIds.Count > 0)
+		{
+			DuplicateAssets(SelectedAssets());
 			return true;
 		}
 
@@ -261,7 +293,8 @@ public sealed class ProjectPanel : Panel
 		// and the search field can both own the keyboard while an
 		// asset is selected, so requiring focus here keeps Delete
 		// from acting on something the author cannot see.
-		if (key.IsRepeat ||
+		if (key.Modifiers != UiKeyModifiers.None ||
+			key.IsRepeat ||
 			!AssetViewHasFocus() ||
 			_selectedId.Length == 0 ||
 			_selectedIsFolder)
@@ -269,7 +302,9 @@ public sealed class ProjectPanel : Panel
 			return false;
 		}
 
-		if (_session.Project?.AssetCatalog.Find(_selectedId) is not ProjectAsset asset)
+		IReadOnlyList<ProjectAsset> selected = SelectedAssets();
+
+		if (selected.Count == 0)
 		{
 			return false;
 		}
@@ -277,18 +312,24 @@ public sealed class ProjectPanel : Panel
 		switch (key.Key)
 		{
 			case UiKey.F2:
-				ShowRenameAssetDialog(asset);
+				if (selected.Count > 1)
+				{
+					_session.SetStatus("Rename one asset at a time");
+					return true;
+				}
+
+				ShowRenameAssetDialog(selected[0]);
 				return true;
 
 			case UiKey.Delete:
-				ShowDeleteAssetDialog(asset);
+				ShowDeleteAssetsDialog(selected);
 				return true;
 		}
 
 		return false;
 	}
 
-	private bool TryMoveTileFocus(UiKey key)
+	private bool TryMoveTileFocus(UiKey key, bool extendSelection)
 	{
 		int columns = _tiles.Columns;
 
@@ -322,7 +363,13 @@ public sealed class ProjectPanel : Panel
 
 		IconTileView tile = _tileViews[target];
 
-		if (!SelectTile(tile))
+		if (extendSelection &&
+			!_selectedIsFolder &&
+			tile.Tag is ProjectAsset asset)
+		{
+			SelectAssetRange(asset.Id);
+		}
+		else if (!SelectTile(tile))
 		{
 			return false;
 		}
@@ -413,13 +460,28 @@ public sealed class ProjectPanel : Panel
 	{
 		if (_gridMode)
 		{
+			IconTileView? primary = null;
+			IconTileView? selected = null;
+
 			foreach (IconTileView tile in _tileViews)
 			{
-				if (tile.IsSelected && tile.Focus())
+				if (!IsSelectedTag(tile.Tag))
 				{
-					RevealSelection();
-					return;
+					continue;
 				}
+
+				selected ??= tile;
+
+				if (IsPrimaryTag(tile.Tag))
+				{
+					primary = tile;
+					break;
+				}
+			}
+
+			if ((primary ?? selected) is { } target && target.Focus())
+			{
+				RevealSelection();
 			}
 
 			return;
@@ -465,10 +527,22 @@ public sealed class ProjectPanel : Panel
 
 		foreach (IconTileView tile in _tileViews)
 		{
-			if (IsSelectedTag(tile.Tag))
+			if (IsPrimaryTag(tile.Tag))
 			{
 				selected = tile;
 				break;
+			}
+		}
+
+		if (selected is null)
+		{
+			foreach (IconTileView tile in _tileViews)
+			{
+				if (IsSelectedTag(tile.Tag))
+				{
+					selected = tile;
+					break;
+				}
 			}
 		}
 
@@ -554,8 +628,8 @@ public sealed class ProjectPanel : Panel
 				// the panel still shows the old folder. Move to the new
 				// scene's folder and rebuild again so its tile is visible.
 				_folder = ParentFolder(relative);
-				_selectedId = ProjectAssetCatalog.NormalizeId(relative);
-				_selectedIsFolder = false;
+				SetSingleAssetState(
+					ProjectAssetCatalog.NormalizeId(relative));
 				Rebuild(force: true);
 				_revealSelectionPending = true;
 			}
@@ -564,6 +638,122 @@ public sealed class ProjectPanel : Panel
 		catch (Exception exception)
 		{
 			_session.Log(exception.Message, EditorLogLevel.Error);
+		}
+	}
+
+	private void ShowCreateFolderDialog()
+	{
+		if (_session.Project is not EditorProject project ||
+			Context is not UiContext context)
+		{
+			return;
+		}
+
+		string parent = _folder.Length == 0 ? "Assets" : _folder;
+		UiTheme theme = context.Theme;
+		Panel scrim = CreateAssetDialog(
+			theme,
+			"New folder",
+			400f,
+			out StackPanel content);
+
+		content.Add(new Label($"Create a folder in \"{parent}\".")
+		{
+			Font = theme.Fonts.Body,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		TextField name = new(NextFolderName(project, parent))
+		{
+			Height = UiLength.Points(28f),
+			Placeholder = "Folder name",
+			MaximumLength = 120,
+			TooltipText = "Folder name"
+		};
+
+		content.Add(name);
+
+		Label error = new(string.Empty)
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.Danger,
+			Wrap = UiTextWrap.Wrap
+		};
+
+		content.Add(error);
+
+		StackPanel buttons = new(UiOrientation.Horizontal)
+		{
+			Spacing = 6f
+		};
+
+		Button create = new("Create")
+		{
+			IsPrimary = true,
+			MinHeight = 28f
+		};
+
+		Button cancel = new("Cancel")
+		{
+			MinHeight = 28f
+		};
+
+		cancel.Clicked += _ => context.CloseModal();
+
+		create.Clicked += _ =>
+		{
+			try
+			{
+				string folder = project.CreateFolder($"{parent}/{name.Text}");
+
+				_folder = parent;
+				_folderSelectionActive = true;
+				ClearAssetSelection();
+				_selectedId = folder;
+				_selectedIsFolder = true;
+
+				if (_search.Text.Length > 0)
+				{
+					_search.Text = string.Empty;
+				}
+
+				Rebuild(force: true);
+				_revealSelectionPending = true;
+				context.CloseModal();
+				_session.SetStatus(
+					$"Created folder {Path.GetFileName(folder)}");
+			}
+
+			catch (Exception exception)
+			{
+				error.Text = exception.Message;
+			}
+		};
+
+		buttons.Add(create);
+		buttons.Add(cancel);
+		content.Add(buttons);
+
+		context.ShowModal(scrim);
+		name.Focus();
+		name.SelectAll();
+	}
+
+	private static string NextFolderName(EditorProject project, string parent)
+	{
+		string candidate = "New Folder";
+
+		for (int index = 1; ; index++)
+		{
+			string path = $"{parent}/{candidate}";
+
+			if (!project.AssetCatalog.Folders.Any(folder =>
+				string.Equals(folder, path, StringComparison.OrdinalIgnoreCase)))
+			{
+				return candidate;
+			}
+
+			candidate = $"New Folder {index}";
 		}
 	}
 
@@ -598,8 +788,7 @@ public sealed class ProjectPanel : Panel
 			_folderFilterActive = false;
 			_skipFolderCapture = true;
 			_search.Text = string.Empty;
-			_selectedId = string.Empty;
-			_selectedIsFolder = false;
+			ClearAssetSelection();
 			force = true;
 		}
 
@@ -611,14 +800,14 @@ public sealed class ProjectPanel : Panel
 			_tileViews.Clear();
 			_listRows.Clear();
 			_folderSelectionActive = false;
-			_selectedId = string.Empty;
-			_selectedIsFolder = false;
+			ClearAssetSelection();
 			_folders.Clear();
 			_list.Clear();
 			_breadcrumb.Text = "No project open";
 			_details.Text = string.Empty;
 			_refreshButton.IsEnabled = false;
 			_newSceneButton.IsEnabled = false;
+			_newFolderButton.IsEnabled = false;
 			_empty.Title = "No project open";
 			_empty.Description =
 				"Create or open a project to browse its assets.";
@@ -638,10 +827,11 @@ public sealed class ProjectPanel : Panel
 		_updating = true;
 
 		IReadOnlyList<ProjectAsset> assets = project.AssetCatalog.Assets;
+		IReadOnlyList<string> folders = project.AssetCatalog.Folders;
 		string filter = _search.Text.Trim();
 
-		RebuildFolders(assets, filter);
-		RebuildContents(assets, filter);
+		RebuildFolders(folders, filter);
+		RebuildContents(assets, folders, filter);
 
 		_breadcrumb.Text = _folder.Length == 0
 			? project.Name
@@ -650,6 +840,7 @@ public sealed class ProjectPanel : Panel
 		_upButton.IsEnabled = _folder.Length > 0;
 		_refreshButton.IsEnabled = true;
 		_newSceneButton.IsEnabled = true;
+		_newFolderButton.IsEnabled = true;
 
 		int total = _gridMode
 			? _tiles.Children.Count
@@ -680,7 +871,7 @@ public sealed class ProjectPanel : Panel
 	}
 
 	private void RebuildFolders(
-		IReadOnlyList<ProjectAsset> assets,
+		IReadOnlyList<string> folders,
 		string filter)
 	{
 		if (_skipFolderCapture)
@@ -699,29 +890,28 @@ public sealed class ProjectPanel : Panel
 		SortedDictionary<string, TreeViewItem> nodes =
 			new(StringComparer.OrdinalIgnoreCase);
 
-		foreach (ProjectAsset asset in assets)
+		foreach (string folder in folders)
 		{
-			string[] segments = asset.Id.Split('/');
-
-			if (segments.Length < 2)
-			{
-				continue;
-			}
-
+			string[] segments = folder.Split('/');
 			string path = string.Empty;
 			TreeViewItem? parent = null;
 
-			for (int index = 0; index < segments.Length - 1; index++)
+			foreach (string segment in segments)
 			{
+				if (segment.Length == 0)
+				{
+					continue;
+				}
+
 				path = path.Length == 0
-					? segments[index]
-					: $"{path}/{segments[index]}";
+					? segment
+					: $"{path}/{segment}";
 
 				if (!nodes.TryGetValue(path, out TreeViewItem? node))
 				{
 					node = new TreeViewItem(
 						$"folder:{path}",
-						segments[index],
+						segment,
 						path)
 					{
 						IsExpanded = filter.Length > 0 ||
@@ -823,6 +1013,7 @@ public sealed class ProjectPanel : Panel
 
 	private void RebuildContents(
 		IReadOnlyList<ProjectAsset> assets,
+		IReadOnlyList<string> folders,
 		string filter)
 	{
 		for (int index = _tiles.Children.Count - 1; index >= 0; index--)
@@ -840,6 +1031,8 @@ public sealed class ProjectPanel : Panel
 		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
 
 		List<ProjectAsset> visible = [];
+		HashSet<string> visibleAssetIds =
+			new(StringComparer.OrdinalIgnoreCase);
 
 		foreach (ProjectAsset asset in assets)
 		{
@@ -866,43 +1059,29 @@ public sealed class ProjectPanel : Panel
 			visible.Add(asset);
 		}
 
-		SortedDictionary<string, string> folders =
+		SortedDictionary<string, string> childFolders =
 			new(StringComparer.OrdinalIgnoreCase);
 
-		foreach (ProjectAsset asset in assets)
+		foreach (string folder in folders)
 		{
-			if (filter.Length > 0)
-			{
-				continue;
-			}
-
-			if (_folder.Length > 0 &&
-				!asset.Id.StartsWith(
-					_folder + "/",
+			// A matching asset is enough while filtering; folder rows
+			// would make the result look less like a flat search.
+			if (filter.Length > 0 ||
+				!string.Equals(
+					ParentFolder(folder),
+					_folder,
 					StringComparison.OrdinalIgnoreCase))
 			{
 				continue;
 			}
 
-			string remainder = asset.Id[(_folder.Length == 0
-				? 0
-				: _folder.Length + 1)..];
-			int slash = remainder.IndexOf('/');
+			int slash = folder.LastIndexOf('/');
+			string name = slash < 0 ? folder : folder[(slash + 1)..];
 
-			if (slash <= 0)
-			{
-				continue;
-			}
-
-			string name = remainder[..slash];
-			string folderPath = _folder.Length == 0
-				? name
-				: $"{_folder}/{name}";
-
-			folders[folderPath] = name;
+			childFolders[folder] = name;
 		}
 
-		foreach (KeyValuePair<string, string> folder in folders)
+		foreach (KeyValuePair<string, string> folder in childFolders)
 		{
 			IconTileView tile = new(
 				UiIcon.Folder,
@@ -914,7 +1093,7 @@ public sealed class ProjectPanel : Panel
 			};
 
 			tile.Activated += OnTileActivated;
-			tile.Clicked += OnTileClicked;
+			tile.SelectionRequested += OnTileSelectionRequested;
 			tile.ContextMenuRequested += OnTileContextMenuRequested;
 
 			_tileViews.Add(tile);
@@ -935,6 +1114,8 @@ public sealed class ProjectPanel : Panel
 
 		foreach (ProjectAsset asset in visible)
 		{
+			visibleAssetIds.Add(asset.Id);
+
 			IconTileView tile = new(
 				EditorIcons.ForAsset(asset.Kind),
 				asset.FileName,
@@ -945,7 +1126,7 @@ public sealed class ProjectPanel : Panel
 			};
 
 			tile.Activated += OnTileActivated;
-			tile.Clicked += OnTileClicked;
+			tile.SelectionRequested += OnTileSelectionRequested;
 			tile.ContextMenuRequested += OnTileContextMenuRequested;
 
 			_tileViews.Add(tile);
@@ -962,6 +1143,30 @@ public sealed class ProjectPanel : Panel
 
 			_listRows[AssetKey(asset.Id)] = row;
 			_list.AddRoot(row);
+		}
+
+		if (_selectedIsFolder)
+		{
+			_selectedAssetIds.Clear();
+		}
+		else
+		{
+			_selectedAssetIds.IntersectWith(visibleAssetIds);
+
+			if (_selectedAssetIds.Count == 0)
+			{
+				_selectedId = string.Empty;
+				_selectionAnchorId = string.Empty;
+			}
+			else if (!_selectedAssetIds.Contains(_selectedId))
+			{
+				_selectedId = _selectedAssetIds.First();
+				_selectionAnchorId = _selectedId;
+			}
+			else if (!_selectedAssetIds.Contains(_selectionAnchorId))
+			{
+				_selectionAnchorId = _selectedId;
+			}
 		}
 
 		_tiles.InvalidateMeasure();
@@ -984,7 +1189,7 @@ public sealed class ProjectPanel : Panel
 		return isFolder ? FolderKey(id) : AssetKey(id);
 	}
 
-	private void SyncSelection(bool updateDetails)
+	private void SyncSelection(bool updateDetails, bool syncList = true)
 	{
 		if (_syncingSelection)
 		{
@@ -1002,15 +1207,47 @@ public sealed class ProjectPanel : Panel
 
 			List<TreeViewItem> selected = [];
 
-			if (_selectedId.Length > 0 &&
-				_listRows.TryGetValue(
-					SelectionKey(_selectedId, _selectedIsFolder),
-					out TreeViewItem? row))
+			if (_selectedIsFolder)
 			{
-				selected.Add(row);
+				if (_listRows.TryGetValue(
+					FolderKey(_selectedId),
+					out TreeViewItem? folderRow))
+				{
+					selected.Add(folderRow);
+				}
+			}
+			else
+			{
+				foreach (string id in _selectedAssetIds)
+				{
+					if (string.Equals(
+						id,
+						_selectedId,
+						StringComparison.OrdinalIgnoreCase))
+					{
+						continue;
+					}
+
+					if (_listRows.TryGetValue(
+						AssetKey(id),
+						out TreeViewItem? row))
+					{
+						selected.Add(row);
+					}
+				}
+
+				if (_listRows.TryGetValue(
+					AssetKey(_selectedId),
+					out TreeViewItem? activeRow))
+				{
+					selected.Add(activeRow);
+				}
 			}
 
-			_list.SetSelection(selected);
+			if (syncList)
+			{
+				_list.SetSelection(selected);
+			}
 		}
 
 		finally
@@ -1026,16 +1263,26 @@ public sealed class ProjectPanel : Panel
 
 	private bool IsSelectedTag(object? tag)
 	{
-		if (_selectedId.Length == 0)
+		if (_selectedIsFolder)
 		{
-			return false;
+			return tag is string folder &&
+				string.Equals(folder, _selectedId, StringComparison.OrdinalIgnoreCase);
 		}
 
-		return _selectedIsFolder
-			? tag is string folder &&
-				string.Equals(folder, _selectedId, StringComparison.OrdinalIgnoreCase)
-			: tag is ProjectAsset asset &&
-				string.Equals(asset.Id, _selectedId, StringComparison.OrdinalIgnoreCase);
+		return tag is ProjectAsset asset &&
+			_selectedAssetIds.Contains(asset.Id);
+	}
+
+	private bool IsPrimaryTag(object? tag)
+	{
+		if (_selectedIsFolder)
+		{
+			return tag is string folder &&
+				string.Equals(folder, _selectedId, StringComparison.OrdinalIgnoreCase);
+		}
+
+		return tag is ProjectAsset asset &&
+			string.Equals(asset.Id, _selectedId, StringComparison.OrdinalIgnoreCase);
 	}
 
 	private void UpdateDetails()
@@ -1043,6 +1290,12 @@ public sealed class ProjectPanel : Panel
 		if (_selectedIsFolder)
 		{
 			_details.Text = $"Folder  ·  {_selectedId}";
+			return;
+		}
+
+		if (_selectedAssetIds.Count > 1)
+		{
+			_details.Text = $"{_selectedAssetIds.Count} assets selected";
 			return;
 		}
 
@@ -1063,15 +1316,24 @@ public sealed class ProjectPanel : Panel
 		IconTileView tile,
 		UiPoint position)
 	{
+		if (tile.Tag is string folder)
+		{
+			SelectFolder(folder);
+			ShowFolderContextMenu(folder, position);
+			return;
+		}
+
 		if (tile.Tag is not ProjectAsset asset)
 		{
 			return;
 		}
 
-		_selectedId = asset.Id;
-		_selectedIsFolder = false;
-		SyncSelection(updateDetails: true);
-		ShowAssetContextMenu(asset, position);
+		if (!_selectedAssetIds.Contains(asset.Id))
+		{
+			SelectSingleAsset(asset.Id, updateDetails: true);
+		}
+
+		ShowAssetContextMenu(asset, SelectedAssets(), position);
 	}
 
 	private void OnListContextMenuRequested(
@@ -1079,32 +1341,233 @@ public sealed class ProjectPanel : Panel
 		TreeViewItem item,
 		UiPoint position)
 	{
-		if (item.Tag is ProjectAsset asset)
+		if (item.Tag is string folder)
 		{
-			ShowAssetContextMenu(asset, position);
+			SelectFolder(folder);
+			ShowFolderContextMenu(folder, position);
+			return;
+		}
+
+		if (item.Tag is not ProjectAsset asset)
+		{
+			return;
+		}
+
+		if (!_selectedAssetIds.Contains(asset.Id))
+		{
+			SelectSingleAsset(asset.Id, updateDetails: true);
+		}
+
+		ShowAssetContextMenu(asset, SelectedAssets(), position);
+	}
+
+	private void OnFolderTreeContextMenuRequested(
+		TreeView tree,
+		TreeViewItem item,
+		UiPoint position)
+	{
+		if (item.Tag is string folder)
+		{
+			ShowFolderContextMenu(folder, position);
 		}
 	}
 
-	private void ShowAssetContextMenu(ProjectAsset asset, UiPoint position)
+	private void ShowFolderContextMenu(string folder, UiPoint position)
 	{
-		bool openScene = _session.ScenePath is string current &&
-			string.Equals(current, asset.Id, StringComparison.OrdinalIgnoreCase);
-		bool startupScene = _session.Project is EditorProject project &&
+		if (IsProjectRootFolder(folder))
+		{
+			return;
+		}
+
+		MenuItem rename = new(
+			"Rename…",
+			() => ShowRenameFolderDialog(folder));
+
+		Context?.ShowPopup(
+			new MenuPopup([rename]),
+			new UiRect(position.X, position.Y, 0f, 0f));
+	}
+
+	private void ShowRenameFolderDialog(string folder)
+	{
+		if (IsProjectRootFolder(folder) ||
+			Context is not UiContext context)
+		{
+			return;
+		}
+
+		int slash = folder.LastIndexOf('/');
+		string oldName = slash < 0 ? folder : folder[(slash + 1)..];
+		UiTheme theme = context.Theme;
+		Panel scrim = CreateAssetDialog(
+			theme,
+			"Rename folder",
+			400f,
+			out StackPanel content);
+
+		content.Add(new Label($"Rename \"{oldName}\".")
+		{
+			Font = theme.Fonts.Body,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		TextField name = new(oldName)
+		{
+			Height = UiLength.Points(28f),
+			Placeholder = "Folder name",
+			MaximumLength = 120,
+			TooltipText = "New folder name"
+		};
+
+		content.Add(name);
+
+		content.Add(new Label(
+			"Scene references and the startup or open scene path follow " +
+			"the renamed folder.")
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.TextDisabled,
+			Wrap = UiTextWrap.Wrap
+		});
+
+		Label error = new(string.Empty)
+		{
+			Font = theme.Fonts.Small,
+			TextColor = theme.Palette.Danger,
+			Wrap = UiTextWrap.Wrap
+		};
+
+		content.Add(error);
+
+		StackPanel buttons = new(UiOrientation.Horizontal)
+		{
+			Spacing = 6f
+		};
+
+		Button rename = new("Rename")
+		{
+			IsPrimary = true,
+			MinHeight = 28f
+		};
+
+		Button cancel = new("Cancel")
+		{
+			MinHeight = 28f
+		};
+
+		cancel.Clicked += _ => context.CloseModal();
+
+		rename.Clicked += _ =>
+		{
+			try
+			{
+				string renamed = _session.RenameFolder(folder, name.Text);
+
+				_folder = RemapFolder(_folder, folder, renamed);
+				_folderSelectionActive = true;
+
+				if (_search.Text.Length > 0)
+				{
+					_search.Text = string.Empty;
+				}
+
+				ClearAssetSelection();
+
+				if (string.Equals(
+					ParentFolder(renamed),
+					_folder,
+					StringComparison.OrdinalIgnoreCase))
+				{
+					_selectedId = renamed;
+					_selectedIsFolder = true;
+				}
+
+				Rebuild(force: true);
+				_revealSelectionPending = true;
+				context.CloseModal();
+				_session.SetStatus(
+					$"Renamed folder {oldName} to {Path.GetFileName(renamed)}");
+			}
+
+			catch (Exception exception)
+			{
+				error.Text = exception.Message;
+			}
+		};
+
+		buttons.Add(rename);
+		buttons.Add(cancel);
+		content.Add(buttons);
+
+		context.ShowModal(scrim);
+		name.Focus();
+		name.SelectAll();
+	}
+
+	private static bool IsProjectRootFolder(string folder)
+	{
+		return string.Equals(folder, "Assets", StringComparison.OrdinalIgnoreCase) ||
+			string.Equals(folder, "Scenes", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static string RemapFolder(
+		string current,
+		string oldFolder,
+		string newFolder)
+	{
+		if (string.Equals(current, oldFolder, StringComparison.OrdinalIgnoreCase))
+		{
+			return newFolder;
+		}
+
+		string oldPrefix = oldFolder + "/";
+
+		return current.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase)
+			? newFolder + current[oldFolder.Length..]
+			: current;
+	}
+
+	private void ShowAssetContextMenu(
+		ProjectAsset asset,
+		IReadOnlyList<ProjectAsset> selection,
+		UiPoint position)
+	{
+		if (selection.Count == 0)
+		{
+			selection = [asset];
+		}
+
+		bool multiple = selection.Count > 1;
+		bool openScene = selection.Any(item =>
+			_session.ScenePath is string current &&
 			string.Equals(
+				current,
+				item.Id,
+				StringComparison.OrdinalIgnoreCase));
+		bool startupScene = _session.Project is EditorProject project &&
+			selection.Any(item => string.Equals(
 				ProjectAssetCatalog.NormalizeId(project.StartupScenePath),
-				asset.Id,
-				StringComparison.OrdinalIgnoreCase);
+				item.Id,
+				StringComparison.OrdinalIgnoreCase));
 
 		MenuItem open = new("Open", () => OpenTag(asset))
 		{
-			IsEnabled = asset.Kind == ProjectAssetKind.Scene
+			IsEnabled = !multiple &&
+				asset.Kind == ProjectAssetKind.Scene
 		};
 
-		MenuItem rename = new("Rename…", () => ShowRenameAssetDialog(asset));
+		MenuItem rename = new("Rename…", () => ShowRenameAssetDialog(asset))
+		{
+			IsEnabled = !multiple
+		};
 
-		MenuItem duplicate = new("Duplicate", () => DuplicateAsset(asset));
+		MenuItem duplicate = new(
+			multiple ? $"Duplicate {selection.Count} Assets" : "Duplicate",
+			() => DuplicateAssets(selection));
 
-		MenuItem delete = new("Delete", () => ShowDeleteAssetDialog(asset))
+		MenuItem delete = new(
+			multiple ? $"Delete {selection.Count} Assets" : "Delete",
+			() => ShowDeleteAssetsDialog(selection))
 		{
 			IsEnabled = !openScene && !startupScene
 		};
@@ -1123,22 +1586,25 @@ public sealed class ProjectPanel : Panel
 			new UiRect(position.X, position.Y, 0f, 0f));
 	}
 
-	private void DuplicateAsset(ProjectAsset asset)
+	private void DuplicateAssets(IReadOnlyList<ProjectAsset> assets)
 	{
-		if (_session.Project is not EditorProject project)
+		if (assets.Count == 0 ||
+			_session.Project is not EditorProject project)
 		{
 			return;
 		}
 
 		try
 		{
-			string copyId = project.DuplicateAsset(asset.Id);
+			IReadOnlyList<string> copies = project.DuplicateAssets(
+				assets.Select(asset => asset.Id));
 
-			_selectedId = copyId;
-			_selectedIsFolder = false;
+			SetAssetSelection(copies);
 			Rebuild(force: true);
 			_revealSelectionPending = true;
-			_session.SetStatus($"Duplicated {asset.FileName}");
+			_session.SetStatus(assets.Count == 1
+				? $"Duplicated {assets[0].FileName}"
+				: $"Duplicated {assets.Count} assets");
 		}
 
 		catch (Exception exception)
@@ -1222,8 +1688,7 @@ public sealed class ProjectPanel : Panel
 			{
 				string renamed = _session.RenameAsset(asset.Id, name.Text);
 
-				_selectedId = renamed;
-				_selectedIsFolder = false;
+				SetSingleAssetState(renamed);
 				Rebuild(force: true);
 				_revealSelectionPending = true;
 				context.CloseModal();
@@ -1246,20 +1711,24 @@ public sealed class ProjectPanel : Panel
 		name.SelectAll();
 	}
 
-	private void ShowDeleteAssetDialog(ProjectAsset asset)
+	private void ShowDeleteAssetsDialog(IReadOnlyList<ProjectAsset> assets)
 	{
-		if (Context is not UiContext context)
+		if (assets.Count == 0 || Context is not UiContext context)
 		{
 			return;
 		}
 
-		bool openScene = _session.ScenePath is string current &&
-			string.Equals(current, asset.Id, StringComparison.OrdinalIgnoreCase);
-		bool startupScene = _session.Project is EditorProject project &&
+		bool openScene = assets.Any(asset =>
+			_session.ScenePath is string current &&
 			string.Equals(
+				current,
+				asset.Id,
+				StringComparison.OrdinalIgnoreCase));
+		bool startupScene = _session.Project is EditorProject project &&
+			assets.Any(asset => string.Equals(
 				ProjectAssetCatalog.NormalizeId(project.StartupScenePath),
 				asset.Id,
-				StringComparison.OrdinalIgnoreCase);
+				StringComparison.OrdinalIgnoreCase));
 
 		if (openScene)
 		{
@@ -1274,23 +1743,31 @@ public sealed class ProjectPanel : Panel
 			return;
 		}
 
+		int count = assets.Count;
+		bool single = count == 1;
+		ProjectAsset only = assets[0];
 		UiTheme theme = context.Theme;
 		Panel scrim = CreateAssetDialog(
 			theme,
-			"Delete asset",
+			single ? "Delete asset" : "Delete assets",
 			420f,
 			out StackPanel content);
 
-		content.Add(new Label($"Delete \"{asset.FileName}\"?")
+		content.Add(new Label(single
+			? $"Delete \"{only.FileName}\"?"
+			: $"Delete {count} selected assets?")
 		{
 			Font = theme.Fonts.Body,
 			Wrap = UiTextWrap.Wrap
 		});
 
-		content.Add(new Label(asset.Kind == ProjectAssetKind.Scene
-			? "This removes the scene file and cannot be undone."
-			: "This cannot be undone. References to this asset in " +
-				"scenes will be cleared.")
+		content.Add(new Label(single
+			? (only.Kind == ProjectAssetKind.Scene
+				? "This removes the scene file and cannot be undone."
+				: "This cannot be undone. References to this asset in " +
+					"scenes will be cleared.")
+			: "This cannot be undone. The selected files are removed, " +
+				"and references to them in scenes will be cleared.")
 		{
 			Font = theme.Fonts.Small,
 			TextColor = theme.Palette.TextDisabled,
@@ -1311,7 +1788,7 @@ public sealed class ProjectPanel : Panel
 			Spacing = 6f
 		};
 
-		Button delete = new("Delete")
+		Button delete = new(single ? "Delete" : $"Delete {count}")
 		{
 			IsPrimary = true,
 			MinHeight = 28f
@@ -1328,13 +1805,15 @@ public sealed class ProjectPanel : Panel
 		{
 			try
 			{
-				_session.DeleteAsset(asset.Id);
+				int deleted = _session.DeleteAssets(
+					assets.Select(asset => asset.Id));
 
-				_selectedId = string.Empty;
-				_selectedIsFolder = false;
+				ClearAssetSelection();
 				Rebuild(force: true);
 				context.CloseModal();
-				_session.SetStatus($"Deleted {asset.FileName}");
+				_session.SetStatus(deleted == 1
+					? $"Deleted {only.FileName}"
+					: $"Deleted {deleted} assets");
 			}
 
 			catch (Exception exception)
@@ -1408,32 +1887,227 @@ public sealed class ProjectPanel : Panel
 		return fileName[..^extension.Length];
 	}
 
-	private void OnTileClicked(IconTileView tile)
+	private void OnTileSelectionRequested(
+		IconTileView tile,
+		UiKeyModifiers modifiers)
 	{
-		SelectTile(tile);
+		bool control =
+			(modifiers & UiKeyModifiers.Control) != 0 ||
+			(modifiers & UiKeyModifiers.Super) != 0;
+		bool shift = (modifiers & UiKeyModifiers.Shift) != 0;
+
+		if (tile.Tag is string folder)
+		{
+			SelectFolder(folder);
+			return;
+		}
+
+		if (tile.Tag is not ProjectAsset asset)
+		{
+			return;
+		}
+
+		if (control)
+		{
+			ToggleAssetSelection(asset.Id);
+		}
+		else if (shift)
+		{
+			SelectAssetRange(asset.Id);
+		}
+		else
+		{
+			SelectSingleAsset(asset.Id, updateDetails: true);
+		}
 	}
 
 	private bool SelectTile(IconTileView tile)
 	{
 		if (tile.Tag is ProjectAsset asset)
 		{
-			_selectedId = asset.Id;
-			_selectedIsFolder = false;
+			SelectSingleAsset(asset.Id, updateDetails: true);
+			return true;
 		}
 
-		else if (tile.Tag is string folder)
+		if (tile.Tag is string folder)
 		{
-			_selectedId = folder;
-			_selectedIsFolder = true;
+			SelectFolder(folder);
+			return true;
 		}
 
+		return false;
+	}
+
+	private void SelectFolder(string folder)
+	{
+		ClearAssetSelection();
+		_selectedId = folder;
+		_selectedIsFolder = true;
+		SyncSelection(updateDetails: true);
+	}
+
+	private void ClearAssetSelection()
+	{
+		_selectedAssetIds.Clear();
+		_selectedId = string.Empty;
+		_selectedIsFolder = false;
+		_selectionAnchorId = string.Empty;
+	}
+
+	private void SetSingleAssetState(string id)
+	{
+		SetAssetSelection([id]);
+	}
+
+	private void SetAssetSelection(IReadOnlyList<string> ids)
+	{
+		_selectedAssetIds.Clear();
+
+		if (ids.Count == 0)
+		{
+			ClearAssetSelection();
+			return;
+		}
+
+		_selectedAssetIds.UnionWith(ids);
+		_selectedId = ids[0];
+		_selectedIsFolder = false;
+		_selectionAnchorId = _selectedId;
+	}
+
+	private void SelectSingleAsset(string id, bool updateDetails)
+	{
+		SetSingleAssetState(id);
+		SyncSelection(updateDetails);
+	}
+
+	private void ToggleAssetSelection(string id)
+	{
+		if (_selectedIsFolder)
+		{
+			SelectSingleAsset(id, updateDetails: true);
+			return;
+		}
+
+		if (_selectedAssetIds.Remove(id))
+		{
+			if (_selectedAssetIds.Count == 0)
+			{
+				ClearAssetSelection();
+			}
+			else if (string.Equals(
+				_selectedId,
+				id,
+				StringComparison.OrdinalIgnoreCase))
+			{
+				_selectedId = VisibleAssetIds()
+					.FirstOrDefault(assetId =>
+						_selectedAssetIds.Contains(assetId)) ??
+					_selectedAssetIds.First();
+			}
+
+			if (!_selectedAssetIds.Contains(_selectionAnchorId))
+			{
+				_selectionAnchorId = _selectedId;
+			}
+		}
 		else
 		{
-			return false;
+			_selectedAssetIds.Add(id);
+			_selectedId = id;
+			_selectedIsFolder = false;
+			_selectionAnchorId = id;
 		}
 
 		SyncSelection(updateDetails: true);
-		return true;
+	}
+
+	private void SelectAssetRange(string id)
+	{
+		if (_selectedIsFolder || _selectionAnchorId.Length == 0)
+		{
+			SelectSingleAsset(id, updateDetails: true);
+			return;
+		}
+
+		List<string> order = VisibleAssetIds();
+		int anchor = order.FindIndex(item => string.Equals(
+			item,
+			_selectionAnchorId,
+			StringComparison.OrdinalIgnoreCase));
+		int target = order.FindIndex(item => string.Equals(
+			item,
+			id,
+			StringComparison.OrdinalIgnoreCase));
+
+		if (anchor < 0 || target < 0)
+		{
+			SelectSingleAsset(id, updateDetails: true);
+			return;
+		}
+
+		if (anchor > target)
+		{
+			(anchor, target) = (target, anchor);
+		}
+
+		_selectedAssetIds.Clear();
+
+		for (int index = anchor; index <= target; index++)
+		{
+			_selectedAssetIds.Add(order[index]);
+		}
+
+		_selectedId = id;
+		_selectedIsFolder = false;
+		SyncSelection(updateDetails: true);
+	}
+
+	private List<string> VisibleAssetIds()
+	{
+		List<string> ids = [];
+
+		foreach (IconTileView tile in _tileViews)
+		{
+			if (tile.Tag is ProjectAsset asset)
+			{
+				ids.Add(asset.Id);
+			}
+		}
+
+		return ids;
+	}
+
+	private List<ProjectAsset> SelectedAssets()
+	{
+		List<ProjectAsset> selected = [];
+
+		if (_session.Project is not EditorProject project)
+		{
+			return selected;
+		}
+
+		foreach (IconTileView tile in _tileViews)
+		{
+			if (tile.Tag is ProjectAsset asset &&
+				_selectedAssetIds.Contains(asset.Id))
+			{
+				selected.Add(asset);
+			}
+		}
+
+		if (selected.Count > 0)
+		{
+			return selected;
+		}
+
+		if (!_selectedIsFolder &&
+			project.AssetCatalog.Find(_selectedId) is ProjectAsset active)
+		{
+			selected.Add(active);
+		}
+
+		return selected;
 	}
 
 	private void OnTileActivated(IconTileView tile)
@@ -1464,34 +2138,74 @@ public sealed class ProjectPanel : Panel
 		TreeView tree,
 		IReadOnlyList<TreeViewItem> selection)
 	{
-		if (_updating || selection.Count == 0)
+		if (_updating || _syncingSelection)
 		{
 			return;
 		}
 
-		if (_syncingSelection)
+		if (selection.Count == 0)
 		{
+			ClearAssetSelection();
+			UpdateDetails();
 			return;
 		}
 
-		if (selection[^1].Tag is ProjectAsset asset)
+		if (selection.Any(item => item.Tag is string folder))
 		{
-			_selectedId = asset.Id;
-			_selectedIsFolder = false;
-		}
+			if (selection[^1].Tag is string folder)
+			{
+				ClearAssetSelection();
+				_selectedId = folder;
+				_selectedIsFolder = true;
+			}
+			else if (selection[^1].Tag is ProjectAsset lastAsset)
+			{
+				SetSingleAssetState(lastAsset.Id);
+			}
+			else
+			{
+				return;
+			}
 
-		else if (selection[^1].Tag is string folder)
-		{
-			_selectedId = folder;
-			_selectedIsFolder = true;
-		}
-
-		else
-		{
+			SyncSelection(updateDetails: true);
 			return;
 		}
 
-		SyncSelection(updateDetails: true);
+		_selectedAssetIds.Clear();
+		string? first = null;
+
+		foreach (TreeViewItem item in selection)
+		{
+			if (item.Tag is ProjectAsset asset)
+			{
+				_selectedAssetIds.Add(asset.Id);
+				first ??= asset.Id;
+			}
+		}
+
+		if (_selectedAssetIds.Count == 0)
+		{
+			ClearAssetSelection();
+			UpdateDetails();
+			return;
+		}
+
+		if (selection[^1].Tag is ProjectAsset active)
+		{
+			_selectedId = active.Id;
+		}
+
+		_selectedIsFolder = false;
+
+		if (!_selectedAssetIds.Contains(_selectionAnchorId))
+		{
+			_selectionAnchorId = first ?? _selectedId;
+		}
+
+		// TreeView already holds this selection and its own range
+		// anchor. Re-setting it would move the anchor to the last row
+		// and break a second Shift+arrow extension.
+		SyncSelection(updateDetails: true, syncList: false);
 	}
 
 	private void OnListActivated(TreeView tree, TreeViewItem item)
@@ -1545,6 +2259,11 @@ public sealed class ProjectPanel : Panel
 	{
 		System.Text.StringBuilder builder = new();
 		builder.Append(filter).Append('|').Append(folder).Append('|');
+
+		foreach (string item in project.AssetCatalog.Folders)
+		{
+			builder.Append(item).Append(';');
+		}
 
 		foreach (ProjectAsset asset in project.AssetCatalog.Assets)
 		{

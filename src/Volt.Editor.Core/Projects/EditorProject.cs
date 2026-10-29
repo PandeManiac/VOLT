@@ -218,6 +218,68 @@ public sealed class EditorProject
 	}
 
 	/// <summary>
+	/// Creates a folder beneath Assets or Scenes.
+	/// </summary>
+	/// <remarks>
+	/// Only project-visible roots are accepted. The parent folder must
+	/// already exist, and an existing file or directory at the target
+	/// path refuses the operation. An empty folder is a real project
+	/// folder: refreshing the catalog records it and the browser shows
+	/// it before anything is added.
+	/// </remarks>
+	/// <returns>The normalized project-relative folder identity.</returns>
+	public string CreateFolder(string relativePath)
+	{
+		ArgumentNullException.ThrowIfNull(relativePath);
+
+		string id = ProjectAssetCatalog.NormalizeId(relativePath).TrimEnd('/');
+
+		if (id.Length == 0)
+		{
+			throw new ArgumentException(
+				"A folder path is required.",
+				nameof(relativePath));
+		}
+
+		string[] segments = id.Split('/');
+
+		if (segments.Length < 2 ||
+			(!string.Equals(segments[0], "Assets", StringComparison.OrdinalIgnoreCase) &&
+				!string.Equals(segments[0], "Scenes", StringComparison.OrdinalIgnoreCase)))
+		{
+			throw new ArgumentException(
+				"Folders can only be created inside Assets or Scenes.",
+				nameof(relativePath));
+		}
+
+		foreach (string segment in segments)
+		{
+			ValidateAssetName(segment, nameof(relativePath));
+		}
+
+		string destination = ResolvePath(id);
+
+		if (File.Exists(destination) || Directory.Exists(destination))
+		{
+			throw new IOException(
+				$"A file or folder already exists at '{id}'.");
+		}
+
+		string? parent = Path.GetDirectoryName(destination);
+
+		if (parent is null || !Directory.Exists(parent))
+		{
+			throw new DirectoryNotFoundException(
+				$"The parent folder for '{id}' does not exist.");
+		}
+
+		Directory.CreateDirectory(destination);
+		AssetCatalog.Refresh();
+
+		return id;
+	}
+
+	/// <summary>
 	/// Copies an asset to a numbered sibling in the same folder.
 	/// </summary>
 	/// <remarks>
@@ -229,39 +291,103 @@ public sealed class EditorProject
 	/// <returns>The project-relative identity of the copy.</returns>
 	public string DuplicateAsset(string relativePath)
 	{
-		string source = ResolvePath(relativePath);
+		return DuplicateAssets([relativePath])[0];
+	}
 
-		if (!File.Exists(source))
+	/// <summary>
+	/// Copies several assets to numbered siblings in their own folders.
+	/// </summary>
+	/// <remarks>
+	/// Every source is validated before the first copy is written, so a
+	/// missing or unsafe member refuses the whole selection instead of
+	/// leaving a partial set of copies behind. Copies are named against
+	/// both the existing files and the destinations reserved earlier in
+	/// the same operation, which keeps names unique when a selection
+	/// already contains a numbered sibling. Scene assets keep their
+	/// compound extension.
+	/// </remarks>
+	/// <returns>
+	/// The project-relative identities of the copies, in source order
+	/// with duplicate sources removed.
+	/// </returns>
+	public IReadOnlyList<string> DuplicateAssets(
+		IEnumerable<string> relativePaths)
+	{
+		ArgumentNullException.ThrowIfNull(relativePaths);
+
+		List<(string Source, string RelativeDirectory, string Stem, string Extension)>
+			sources = [];
+		HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+
+		foreach (string relativePath in relativePaths)
 		{
-			throw new FileNotFoundException(
-				$"The asset '{relativePath}' does not exist.",
-				source);
+			string id = ProjectAssetCatalog.NormalizeId(relativePath);
+
+			if (!seen.Add(id))
+			{
+				continue;
+			}
+
+			string source = ResolvePath(relativePath);
+
+			if (!File.Exists(source))
+			{
+				throw new FileNotFoundException(
+					$"The asset '{relativePath}' does not exist.",
+					source);
+			}
+
+			string directory = Path.GetDirectoryName(source)!;
+			(string stem, string extension) = SplitAssetName(
+				Path.GetFileName(source));
+
+			sources.Add((
+				source,
+				Path.GetRelativePath(RootPath, directory),
+				stem,
+				extension));
 		}
 
-		string directory = Path.GetDirectoryName(source)!;
-		(string stem, string extension) = SplitAssetName(
-			Path.GetFileName(source));
-		string relativeDirectory = Path.GetRelativePath(RootPath, directory);
-
-		int index = 1;
-		string relativeCopy;
-		string destination;
-
-		do
+		if (sources.Count == 0)
 		{
-			string copyName = $"{stem} {index}{extension}";
-			relativeCopy = relativeDirectory == "."
-				? copyName
-				: Path.Combine(relativeDirectory, copyName);
-			destination = ResolvePath(relativeCopy);
-			index++;
+			return [];
 		}
-		while (File.Exists(destination) || Directory.Exists(destination));
 
-		File.Copy(source, destination, overwrite: false);
+		HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
+		List<(string Source, string Destination)> copies = [];
+
+		foreach ((string source, string relativeDirectory, string stem,
+			string extension) in sources)
+		{
+			int index = 1;
+			string destination;
+
+			do
+			{
+				string copyName = $"{stem} {index}{extension}";
+				string relativeCopy = relativeDirectory == "."
+					? copyName
+					: Path.Combine(relativeDirectory, copyName);
+
+				destination = ResolvePath(relativeCopy);
+				index++;
+			}
+			while (File.Exists(destination) ||
+				Directory.Exists(destination) ||
+				!reserved.Add(destination));
+
+			copies.Add((source, destination));
+		}
+
+		foreach ((string source, string destination) in copies)
+		{
+			File.Copy(source, destination, overwrite: false);
+		}
+
 		AssetCatalog.Refresh();
 
-		return ProjectAssetCatalog.NormalizeId(relativeCopy);
+		return [.. copies.Select(copy => ProjectAssetCatalog.NormalizeId(
+			Path.GetRelativePath(RootPath, copy.Destination)))];
 	}
 
 	/// <summary>
@@ -345,6 +471,145 @@ public sealed class EditorProject
 	}
 
 	/// <summary>
+	/// Renames a folder beneath Assets or Scenes.
+	/// </summary>
+	/// <remarks>
+	/// The project roots cannot be renamed because the catalog and the
+	/// project layout depend on them. Moving a folder updates its files,
+	/// the startup scene path when it lives there, and every scene's
+	/// asset references that share the old folder prefix. The folder's
+	/// own leaf name is the only segment changed.
+	/// </remarks>
+	/// <returns>The normalized project-relative identity of the folder.</returns>
+	public string RenameFolder(string relativePath, string newName)
+	{
+		string id = ProjectAssetCatalog.NormalizeId(relativePath).TrimEnd('/');
+		string[] segments = id.Split('/');
+
+		if (segments.Length < 2 ||
+			(!string.Equals(segments[0], "Assets", StringComparison.OrdinalIgnoreCase) &&
+				!string.Equals(segments[0], "Scenes", StringComparison.OrdinalIgnoreCase)))
+		{
+			throw new ArgumentException(
+				"Only folders inside Assets or Scenes can be renamed.",
+				nameof(relativePath));
+		}
+
+		foreach (string segment in segments)
+		{
+			ValidateAssetName(segment, nameof(relativePath));
+		}
+
+		string source = ResolvePath(id);
+
+		if (!Directory.Exists(source))
+		{
+			throw new DirectoryNotFoundException(
+				$"The folder '{relativePath}' does not exist.");
+		}
+
+		string trimmed = (newName ?? string.Empty).Trim();
+		ValidateAssetName(trimmed, nameof(newName));
+
+		string currentName = Path.GetFileName(source);
+
+		if (string.Equals(trimmed, currentName, StringComparison.Ordinal))
+		{
+			return id;
+		}
+
+		string directory = Path.GetDirectoryName(source)!;
+		string relativeDirectory = Path.GetRelativePath(RootPath, directory);
+		string renamed = relativeDirectory == "."
+			? trimmed
+			: Path.Combine(relativeDirectory, trimmed);
+		string destination = ResolvePath(renamed);
+
+		if (File.Exists(destination) || Directory.Exists(destination))
+		{
+			throw new IOException(
+				$"A file or folder already exists at '{renamed}'.");
+		}
+
+		string oldPrefix = id + "/";
+		string renamedId = ProjectAssetCatalog.NormalizeId(renamed);
+		string newPrefix = renamedId + "/";
+		string startupScene = ProjectAssetCatalog.NormalizeId(StartupScenePath);
+		bool startupInside = startupScene.StartsWith(
+			oldPrefix,
+			StringComparison.OrdinalIgnoreCase);
+
+		Directory.Move(source, destination);
+
+		if (startupInside)
+		{
+			StartupScenePath = newPrefix + startupScene[oldPrefix.Length..];
+			SaveManifest();
+		}
+
+		ReplaceFolderReferencesInScenes(oldPrefix, newPrefix);
+		AssetCatalog.Refresh();
+
+		return renamedId;
+	}
+
+	/// <summary>
+	/// Deletes several asset files from the project.
+	/// </summary>
+	/// <remarks>
+	/// Every path is validated before the first file is removed, so a
+	/// protected startup scene or a missing asset refuses the whole
+	/// operation rather than leaving a partial deletion behind.
+	/// </remarks>
+	public void DeleteAssets(IEnumerable<string> relativePaths)
+	{
+		ArgumentNullException.ThrowIfNull(relativePaths);
+
+		List<string> ids = [];
+		HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+		string startupId = ProjectAssetCatalog.NormalizeId(StartupScenePath);
+
+		foreach (string relativePath in relativePaths)
+		{
+			string id = ProjectAssetCatalog.NormalizeId(relativePath);
+
+			if (!seen.Add(id))
+			{
+				continue;
+			}
+
+			if (string.Equals(startupId, id, StringComparison.OrdinalIgnoreCase))
+			{
+				throw new InvalidOperationException(
+					"The startup scene cannot be deleted. " +
+					"Choose another startup scene first.");
+			}
+
+			string source = ResolvePath(relativePath);
+
+			if (!File.Exists(source))
+			{
+				throw new FileNotFoundException(
+					$"The asset '{relativePath}' does not exist.",
+					source);
+			}
+
+			ids.Add(id);
+		}
+
+		foreach (string id in ids)
+		{
+			File.Delete(ResolvePath(id));
+			ReplaceReferencesInScenes(id, string.Empty);
+		}
+
+		if (ids.Count > 0)
+		{
+			AssetCatalog.Refresh();
+		}
+	}
+
+	/// <summary>
 	/// Deletes an asset file from the project.
 	/// </summary>
 	/// <remarks>
@@ -413,6 +678,23 @@ public sealed class EditorProject
 				path,
 				oldId,
 				newId);
+		}
+
+		return changed;
+	}
+
+	private int ReplaceFolderReferencesInScenes(
+		string oldPrefix,
+		string newPrefix)
+	{
+		int changed = 0;
+
+		foreach (string path in EnumerateSceneFiles())
+		{
+			changed += SceneAssetReferences.ReplaceFolderInFile(
+				path,
+				oldPrefix,
+				newPrefix);
 		}
 
 		return changed;
