@@ -657,7 +657,12 @@ Same branch, on top of `12f3dfd`.
   rebuilding-to-steady ratio stayed between 1.78 and 1.82, so the ratio is
   the figure worth tracking. CI records a run on a hosted runner and fails
   only when a mean exceeds twice the committed baseline: a gate that catches
-  a collapsed path rather than several percent of drift. The comparison is
+  a collapsed path rather than several percent of drift. The same
+  comparison also quotes the two paths against each other with
+  `--overhead RebuildingRefresh:SteadyRefresh` and fails past 2.2, which
+  leans on the steadier figure: the quotient stayed at 1.78 launched and
+  1.81 to 1.82 in-process, so a rebuilding slowdown cannot hide behind a
+  machine that moved both means. The comparison is
   `tools/compare-benchmark-runs.py`, which reads the summary table of a
   recorded run, so a saved `BenchmarkRun.txt` is enough to check one.
 - **The selected entity's header follows a rename.** The header read the
@@ -672,8 +677,12 @@ Same branch, on top of `12f3dfd`.
 
 - Release build: 0 warnings, 0 errors.
 - `Volt.Editor.Tests` 300 passed, 0 failed.
-- `python3 tools/tests/test-compare-benchmark-runs.py` passes its ten cases,
-  and the comparator reports the two recorded runs at a 0.94 ratio.
+- `python3 tools/tests/test-compare-benchmark-runs.py` passes its seventeen
+  cases, and the comparator reports the two recorded runs at a 0.94 ratio
+  with an unchanged 1.78 rebuilding-to-steady quotient.
+- `dotnet format Volt.slnx --verify-no-changes` now passes. The whitespace
+  drift in `EditorShell.cs`, `VulkanUiHost.cs` and `TextField.cs` predated
+  this work and had been failing the format gate; it is fixed in place.
 - `./tools/capture-editor-docs.sh --check` compares all five images.
 - The documentation comparator and contents checkers still pass.
 
@@ -681,9 +690,13 @@ Same branch, on top of `12f3dfd`.
 
 - No GPU or display: no windowed timing, and the query-gating behaviour is
   checked through widget identity rather than a live window session.
-- The new CI job has not run on GitHub. Its steps were exercised locally,
-  but a hosted runner's numbers cannot be checked from here, so its first
-  scheduled run is the real test of the two-times threshold.
+- The new CI job has now run on GitHub. On the push that added it, the
+  benchmark job passed, recording a run in 106 seconds and comparing it
+  with the committed baseline. The build-and-test job passed its build,
+  test, both tooling suites, the contents check and the screenshot check,
+  then failed only at the formatting step on the drift above; the hosted
+  numbers it measured are not recorded here, and the quotient gate added
+  since has not run on a hosted runner yet.
 
 ### Next
 

@@ -94,6 +94,10 @@ jobs:
   # wide ratio because a hosted runner is shared and varies between runs;
   # a collapsed path still fails. The recorded baseline is the committed
   # run, not the previous one, so a single noisy result cannot move it.
+  # The two paths are also compared with each other: their quotient
+  # held between 1.78 and 1.82 across recorded runs while the means
+  # moved by up to six percent, so it catches a rebuilding slowdown
+  # that the wide per-mean limit would pass.
   ecs-refresh-benchmark:
     name: ECS refresh benchmark
     runs-on: ubuntu-latest
@@ -121,6 +125,8 @@ jobs:
           --current "$RUNNER_TEMP/ecs-refresh/BenchmarkRun.txt"
           --job ShortRun
           --max-ratio 2.0
+          --overhead RebuildingRefresh:SteadyRefresh
+          --max-overhead 2.2
 
   # Hardware validation is a deliberately requested workflow run, not a
   # dependency of ordinary pushes. A missing self-hosted GPU runner must not

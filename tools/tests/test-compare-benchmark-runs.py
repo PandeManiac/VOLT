@@ -86,7 +86,8 @@ class ParseMeansTests(unittest.TestCase):
         self.assertEqual({}, comparator.parse_means("no table here\n"))
 
 
-class CompareTests(unittest.TestCase):
+class ComparatorTestCase(unittest.TestCase):
+
     def setUp(self) -> None:
         self._root = tempfile.TemporaryDirectory()
         self.addCleanup(self._root.cleanup)
@@ -107,6 +108,8 @@ class CompareTests(unittest.TestCase):
             status = comparator.main(list(args))
 
         return status, out.getvalue()
+
+class CompareTests(ComparatorTestCase):
 
     def test_reports_the_ratio_against_the_baseline(self) -> None:
         baseline = self.write("base.txt", [("Steady", "ShortRun", "8 us")])
@@ -190,6 +193,132 @@ class CompareTests(unittest.TestCase):
         status, _ = self.run_comparator(
             "--baseline", str(baseline),
             "--current", str(current),
+        )
+
+        self.assertEqual(2, status)
+
+
+class OverheadTests(ComparatorTestCase):
+    """The quotient of one method's mean over another's."""
+
+    def pair(self, steady: str, rebuilding: str) -> list[tuple[str, str, str]]:
+        return [
+            ("SteadyRefresh", "ShortRun", steady),
+            ("RebuildingRefresh", "ShortRun", rebuilding),
+        ]
+
+    def test_quotes_one_method_over_another(self) -> None:
+        baseline = self.write("base.txt", self.pair("8 us", "16 us"))
+        current = self.write("now.txt", self.pair("9 us", "18 us"))
+
+        status, output = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--job", "ShortRun",
+            "--overhead", "RebuildingRefresh:SteadyRefresh",
+        )
+
+        self.assertEqual(0, status)
+        self.assertIn("2.00x -> 2.00x", output)
+
+    def test_passes_when_the_quotient_stays_inside_the_limit(self) -> None:
+        baseline = self.write("base.txt", self.pair("8 us", "16 us"))
+        current = self.write("now.txt", self.pair("8.4 us", "17.64 us"))
+
+        status, _ = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--job", "ShortRun",
+            "--overhead", "RebuildingRefresh:SteadyRefresh",
+            "--max-overhead", "2.2",
+        )
+
+        self.assertEqual(0, status)
+
+    def test_fails_when_the_quotient_grows_past_the_limit(self) -> None:
+        baseline = self.write("base.txt", self.pair("8 us", "16 us"))
+        current = self.write("now.txt", self.pair("8 us", "20 us"))
+
+        status, output = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--job", "ShortRun",
+            "--overhead", "RebuildingRefresh:SteadyRefresh",
+            "--max-overhead", "2.2",
+        )
+
+        self.assertEqual(1, status)
+        self.assertIn("2.50x", output)
+
+    def test_ignores_another_job_when_one_is_requested(self) -> None:
+        baseline = self.write(
+            "base.txt",
+            [
+                ("SteadyRefresh", "InProcess", "8 us"),
+                ("RebuildingRefresh", "InProcess", "16 us"),
+                ("SteadyRefresh", "ShortRun", "8 us"),
+                ("RebuildingRefresh", "ShortRun", "16 us"),
+            ],
+        )
+        current = self.write(
+            "now.txt",
+            [
+                ("SteadyRefresh", "InProcess", "8 us"),
+                ("RebuildingRefresh", "InProcess", "40 us"),
+                ("SteadyRefresh", "ShortRun", "8 us"),
+                ("RebuildingRefresh", "ShortRun", "17 us"),
+            ],
+        )
+
+        status, _ = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--job", "ShortRun",
+            "--overhead", "RebuildingRefresh:SteadyRefresh",
+            "--max-overhead", "2.2",
+        )
+
+        self.assertEqual(0, status)
+
+    def test_fails_when_a_quoted_method_is_missing(self) -> None:
+        baseline = self.write("base.txt", self.pair("8 us", "16 us"))
+        current = self.write(
+            "now.txt",
+            [("SteadyRefresh", "ShortRun", "8 us")],
+        )
+
+        status, _ = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--job", "ShortRun",
+            "--overhead", "RebuildingRefresh:SteadyRefresh",
+            "--max-overhead", "2.2",
+        )
+
+        self.assertEqual(2, status)
+
+    def test_rejects_a_maximum_without_a_pair(self) -> None:
+        baseline = self.write("base.txt", self.pair("8 us", "16 us"))
+        current = self.write("now.txt", self.pair("8 us", "16 us"))
+
+        status, _ = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--max-overhead", "2.2",
+        )
+
+        self.assertEqual(2, status)
+
+    def test_rejects_a_pair_without_a_denominator(self) -> None:
+        baseline = self.write("base.txt", self.pair("8 us", "16 us"))
+        current = self.write("now.txt", self.pair("8 us", "16 us"))
+
+        status, _ = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--job", "ShortRun",
+            "--overhead", "RebuildingRefresh:",
+            "--max-overhead", "2.2",
         )
 
         self.assertEqual(2, status)

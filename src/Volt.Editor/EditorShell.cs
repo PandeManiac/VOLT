@@ -885,7 +885,7 @@ public sealed class EditorShell : Panel
 			() => _session.Log(
 				"Q/W/E/R select, Ctrl+S save, Ctrl+Z undo, Ctrl+Y redo, " +
 				"Ctrl+D duplicate, Del delete, F2 rename. In a viewport: hold the " +
-				"right mouse button to look, WASD/E/Q to fly, Shift to " +			" sprint, middle drag to pan, wheel to dolly, F to frame.")));
+				"right mouse button to look, WASD/E/Q to fly, Shift to " + " sprint, middle drag to pan, wheel to dolly, F to frame.")));
 
 		RefreshCommandStates();
 

@@ -3,8 +3,15 @@
 
 Reads the summary table each run writes, reports every method's mean and
 its ratio to the baseline, and can fail when a mean grows past a multiple
-of the baseline. The table is the only part of a run this needs, so a
-recorded BenchmarkRun.txt is enough.
+of the baseline.
+
+It can also quote one method's mean against another's. That quotient moves
+far less between builds than either mean does, because both methods absorb
+whatever the machine did differently, so it catches a slowdown the loose
+per-mean limit would let through.
+
+The table is the only part of a run this needs, so a recorded
+BenchmarkRun.txt is enough.
 """
 
 from __future__ import annotations
@@ -90,6 +97,56 @@ def compare(
     return rows, missing
 
 
+def parse_overhead_spec(spec: str) -> tuple[str, str]:
+    """Splits an ``numerator:denominator`` method pair."""
+    numerator, _, denominator = spec.partition(":")
+
+    return numerator.strip(), denominator.strip()
+
+
+def overhead(
+    baseline: dict[tuple[str, str], float],
+    current: dict[tuple[str, str], float],
+    numerator: str,
+    denominator: str,
+    job: str | None = None,
+) -> tuple[list[tuple[str, float, float, float, float]], list[str]]:
+    """Forms the quotient of one method's mean over another's, per job.
+
+    Returns the finished rows and, separately, the method the runs do not
+    quote, so a renamed method fails loudly instead of quietly leaving the
+    gate with nothing to check.
+    """
+    rows: list[tuple[str, float, float, float, float]] = []
+    missing: list[str] = []
+
+    for base_job in sorted({row_job for _, row_job in baseline}):
+        if job is not None and base_job != job:
+            continue
+
+        base_over = baseline.get((numerator, base_job))
+        base_under = baseline.get((denominator, base_job))
+        current_over = current.get((numerator, base_job))
+        current_under = current.get((denominator, base_job))
+
+        absent = [
+            f"{method} ({base_job})"
+            for method, quotient in (
+                (numerator, (base_over, current_over)),
+                (denominator, (base_under, current_under)),
+            )
+            if any(part is None for part in quotient)
+        ]
+
+        if absent:
+            missing.extend(absent)
+            continue
+
+        rows.append((base_job, base_over, base_under, current_over, current_under))
+
+    return rows, missing
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path, required=True)
@@ -105,7 +162,23 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="exit non-zero when a mean exceeds this multiple of the baseline",
     )
+    parser.add_argument(
+        "--overhead",
+        default=None,
+        help="also quote one method's mean over another's, written as "
+        "numerator:denominator, for example RebuildingRefresh:SteadyRefresh",
+    )
+    parser.add_argument(
+        "--max-overhead",
+        type=float,
+        default=None,
+        help="exit non-zero when the --overhead quotient exceeds this value",
+    )
     args = parser.parse_args(argv)
+
+    if args.max_overhead is not None and args.overhead is None:
+        print("--max-overhead needs --overhead.", file=sys.stderr)
+        return 2
 
     baseline = parse_means(args.baseline.read_text(encoding="utf-8"))
     current = parse_means(args.current.read_text(encoding="utf-8"))
@@ -146,11 +219,68 @@ def main(argv: list[str] | None = None) -> int:
             f"{base_mean:10.3f}us{current_mean:10.3f}us{ratio:8.2f}{flag}"
         )
 
+    over_overhead: list[str] = []
+
+    if args.overhead is not None:
+        numerator, denominator = parse_overhead_spec(args.overhead)
+
+        if not numerator or not denominator:
+            print(
+                f"--overhead expects numerator:denominator, "
+                f"not {args.overhead!r}.",
+                file=sys.stderr,
+            )
+            return 2
+
+        overhead_rows, overhead_missing = overhead(
+            baseline, current, numerator, denominator, args.job
+        )
+
+        if overhead_missing:
+            print(
+                "The runs are missing: " + ", ".join(overhead_missing),
+                file=sys.stderr,
+            )
+            return 2
+
+        if not overhead_rows:
+            print("No rows matched the requested job.", file=sys.stderr)
+            return 2
+
+        print(f"\n{numerator} over {denominator}:")
+
+        for job, base_over, base_under, current_over, current_under in overhead_rows:
+            base_quotient = base_over / base_under
+            current_quotient = current_over / current_under
+            flag = ""
+
+            if (
+                args.max_overhead is not None
+                and current_quotient > args.max_overhead
+            ):
+                flag = "  over"
+                over_overhead.append(job)
+
+            print(
+                f"  {job}: {base_over:.3f}us/{base_under:.3f}us -> "
+                f"{current_over:.3f}us/{current_under:.3f}us  "
+                f"{base_quotient:.2f}x -> {current_quotient:.2f}x{flag}"
+            )
+
     if over and args.max_ratio is not None:
         print(
             f"\n{', '.join(over)} grew past {args.max_ratio:g}x the baseline.",
             file=sys.stderr,
         )
+
+    if over_overhead and args.max_overhead is not None:
+        print(
+            f"\n{args.overhead} grew past {args.max_overhead:g}x "
+            f"on {', '.join(over_overhead)}.",
+            file=sys.stderr,
+        )
+
+    if over or over_overhead:
         return 1
 
     return 0

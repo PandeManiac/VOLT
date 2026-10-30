@@ -522,7 +522,8 @@ public class TextField : Widget
 		}
 
 		ReplaceSelection(text);
-	}	private void ReplaceSelection(
+	}
+	private void ReplaceSelection(
 		string replacement,
 		bool backspace = false,
 		bool delete = false)

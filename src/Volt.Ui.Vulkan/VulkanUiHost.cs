@@ -255,8 +255,8 @@ public sealed class VulkanUiHost : IDisposable
 	/// slot: the image a frame samples is then written by the same
 	/// submission that samples it, and the other slot cannot still be
 	/// reading it. The value is published before the frame paints, so a
-/// viewport prepares the target that frame records into, and it only
-/// advances when a frame is submitted.
+	/// viewport prepares the target that frame records into, and it only
+	/// advances when a frame is submitted.
 	/// </remarks>
 	public int CurrentFrameSlot { get; private set; }
 

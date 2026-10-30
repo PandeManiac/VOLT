@@ -73,17 +73,35 @@ python3 tools/compare-benchmark-runs.py \
 The comparator prints each method's mean in microseconds and its ratio to
 the baseline. `--max-ratio N` makes it exit non-zero when a mean exceeds
 that multiple, and `--job NAME` restricts the comparison to one job row,
-which keeps an in-process row from standing in for a launched one. Its
-tests use only the standard library:
+which keeps an in-process row from standing in for a launched one.
+
+`--overhead A:B` also quotes one method's mean over another's, and
+`--max-overhead N` fails when that quotient exceeds `N`. The quotient is
+the steadier figure: a second recording of the same build moved the means
+by up to six percent while `RebuildingRefresh / SteadyRefresh` stayed
+between 1.78 and 1.82, because both methods absorb whatever the machine
+did differently.
+
+```bash
+python3 tools/compare-benchmark-runs.py \
+    --baseline tools/benchmark-results/ecs-refresh-2026-10-30/BenchmarkRun.txt \
+    --current tools/benchmark-results/ecs-refresh-2026-10-30-run2/BenchmarkRun.txt \
+    --job ShortRun \
+    --overhead RebuildingRefresh:SteadyRefresh --max-overhead 2.2
+```
+
+Its tests use only the standard library:
 
 ```bash
 python3 tools/tests/test-compare-benchmark-runs.py
 ```
 
 CI records a run on a hosted runner and fails when a mean exceeds twice
-its recorded baseline. Hosted runners are shared and vary by several
-percent between runs, so that gate catches a collapsed path rather than
-small drift; compare two recorded runs when the change matters.
+its recorded baseline, or when the quotient exceeds 2.2. Hosted runners
+are shared and vary by several percent between runs, so the per-mean gate
+catches a collapsed path rather than small drift, while the quotient
+catches a rebuilding slowdown the wide limit would pass; compare two
+recorded runs when the change matters.
 
 ## Comparing a windowed capture
 
