@@ -407,7 +407,9 @@ is running it shows:
 
 - the session state and the live entity and archetype counts;
 - the selected object's runtime ECS handle, its real component
-  signature, and the values read from its component columns;
+  signature, and the values read from its component columns. A component
+  with no editor formatter is one muted line naming it and its size
+  rather than an empty section;
 - every allocated archetype with its entity count, chunk count,
   occupancy, and the native bytes its chunks report;
 - a query builder that runs `World.Query` with every checked component

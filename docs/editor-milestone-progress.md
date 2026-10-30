@@ -629,20 +629,26 @@ Same branch, on top of `27adb36`.
 
 - **One line for a component with no editor.** A component that has
   neither an editable channel nor readable fields is now a single muted
-  line, `MeshRenderer - No inspector formatter for MeshRendererComponent;
-  16 bytes per entity.`, instead of an accent heading plus a note that
-  reserved two rows for one fact.
-- **The frame ordering has a test.** `EcsInspectorFrameTests` rebuilds the
-  panel's rows during the update phase, then asserts that the frame drawn
-  straight afterwards paints almost none of them while the next layout
-  and draw paints them. That is the extra frame a capture now takes, so a
-  future change that rebuilds rows during draw, or drops the extra frame,
-  fails here as well as in the image comparison.
+  line, `MeshRenderer - No inspector formatter; 16 bytes per entity.`,
+  instead of an accent heading plus a note that reserved two rows for one
+  fact. The note itself no longer repeats the type the row already names,
+  and the guide states the rule.
+- **Rows rebuild only when the snapshot changes.** The panel refreshes
+  four times a second, and rebuilt its rows every time. It now builds a
+  key from the text the rows display, so an unchanged world leaves them
+  in place; `EcsInspectorRefreshTests` proves a steady tick keeps the same
+  row widgets while selecting another entity replaces them.
+- **The frame ordering has a test.** `EcsInspectorFrameTests` captures the
+  Play Mode panel and asserts that the band holding the archetype rows is
+  painted, which only holds while a capture takes one further layout and
+  draw after its last update. Dropping that frame leaves the band blank
+  and fails this test as well as the image comparison.
 
 ### Verified in the cloud
 
 - Release build: 0 warnings, 0 errors.
-- `Volt.Editor.Tests` 293 passed, 0 failed.
+- `Volt.Editor.Tests` 295 passed, 0 failed, including the refresh and
+  capture-frame tests.
 - `./tools/capture-editor-docs.sh --check` compares all five images.
 - The documentation comparator and contents checkers still pass.
 

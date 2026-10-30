@@ -87,6 +87,11 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly List<Button> _applyButtons = [];
 	private readonly Label _editStatus;
 
+	// The text the selected entity and archetype rows were built from, so
+	// an unchanged world does not tear the rows down on every tick.
+	private string _selectedKey = string.Empty;
+	private string _archetypesKey = string.Empty;
+
 	private double _elapsed;
 	private bool _disposed;
 
@@ -477,6 +482,8 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			ClearQuery();
 			_editStatus.Text = string.Empty;
 			_divergence.Text = string.Empty;
+			_selectedKey = string.Empty;
+			_archetypesKey = string.Empty;
 			return;
 		}
 
@@ -492,8 +499,33 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			"Archetypes: {0:N0}",
 			snapshot.Archetypes.Count);
 
-		RefreshSelectedEntity(snapshot.SelectedEntity);
-		RefreshArchetypes(snapshot.Archetypes);
+		RuntimeEntitySnapshot? entity = snapshot.SelectedEntity;
+
+		RuntimeTransformComparison? comparison = entity is not null &&
+			_session.Scene is SceneDocument scene
+				? RuntimeWorldSnapshot.CompareTransform(entity, scene)
+				: null;
+
+		string selectedKey = SelectedKey(entity) + '\u0003' +
+			ComparisonKey(comparison);
+
+		// The keys are built from the text the rows display, so a tick
+		// that finds the same world leaves them alone instead of
+		// rebuilding them: a rebuild costs a frame of layout and would
+		// take focus from a field the developer just reached.
+		if (selectedKey != _selectedKey &&
+			RefreshSelectedEntity(entity, comparison))
+		{
+			_selectedKey = selectedKey;
+		}
+
+		string archetypesKey = ArchetypesKey(snapshot.Archetypes);
+
+		if (archetypesKey != _archetypesKey)
+		{
+			_archetypesKey = archetypesKey;
+			RefreshArchetypes(snapshot.Archetypes);
+		}
 
 		if (started && _queryIntent)
 		{
@@ -501,14 +533,16 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		}
 	}
 
-	private void RefreshSelectedEntity(RuntimeEntitySnapshot? entity)
+	private bool RefreshSelectedEntity(
+		RuntimeEntitySnapshot? entity,
+		RuntimeTransformComparison? comparison)
 	{
 		if (_editors.Any(editor => editor.IsEditing))
 		{
 			// Rebuilding the rows would destroy the field the developer
 			// is typing into, so the panel holds its refresh until the
 			// edit commits or focus moves on.
-			return;
+			return false;
 		}
 
 		DisposeEditors();
@@ -521,17 +555,12 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 				"Select an authored object to find its runtime entity.";
 			_entityArchetype.Text = string.Empty;
 			_divergence.Text = string.Empty;
-			return;
+			return true;
 		}
 
 		_entityName.Text = entity.Name;
 		_entityHandle.Text = $"ECS handle: {entity.Handle}";
 		_entityArchetype.Text = $"Archetype: {entity.Archetype}";
-
-		RuntimeTransformComparison? comparison =
-			_session.Scene is SceneDocument scene
-				? RuntimeWorldSnapshot.CompareTransform(entity, scene)
-				: null;
 
 		UpdateDivergence(comparison);
 
@@ -543,7 +572,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 				TextColor = Theme.Palette.TextDisabled
 			});
 
-			return;
+			return true;
 		}
 
 		foreach (RuntimeComponentSnapshot component in entity.Components)
@@ -661,6 +690,71 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 				});
 			}
 		}
+
+		return true;
+	}
+
+	/// <summary>
+	/// Builds the text a selected entity's rows display, so the panel can
+	/// tell a real change from another tick of the same world.
+	/// </summary>
+	private static string SelectedKey(RuntimeEntitySnapshot? entity)
+	{
+		return entity is null
+			? string.Empty
+			: string.Join(
+				'\u0001',
+				entity.Name,
+				entity.Handle.ToString(),
+				entity.Archetype,
+				string.Join('\u0002', entity.Components.Select(ComponentKey)));
+	}
+
+	private static string ComponentKey(RuntimeComponentSnapshot component)
+	{
+		return string.Join(
+			'\u0001',
+			component.DisplayName,
+			component.Note ?? string.Empty,
+			component.Editable?.ToString() ?? string.Empty,
+			component.Value is Vector3 value ? FormatVector(value) : string.Empty,
+			string.Join(
+				'\u0002',
+				component.Fields.Select(field => $"{field.Label}={field.Value}")));
+	}
+
+	private static string ComparisonKey(RuntimeTransformComparison? comparison)
+	{
+		return comparison is null
+			? string.Empty
+			: string.Join(
+				'\u0002',
+				comparison.Channels.Select(channel =>
+					$"{channel.Channel}\u0001" +
+					$"{FormatVector(channel.AuthoredValue)}\u0001" +
+					$"{channel.Diverged}"));
+	}
+
+	private static string ArchetypesKey(
+		IReadOnlyList<RuntimeArchetypeSnapshot> archetypes)
+	{
+		return string.Join(
+			'\u0002',
+			archetypes.Select(archetype => string.Join(
+				'\u0001',
+				archetype.Signature,
+				archetype.EntityCount.ToString(
+					"N0",
+					CultureInfo.InvariantCulture),
+				archetype.ChunkCount.ToString(
+					"N0",
+					CultureInfo.InvariantCulture),
+				archetype.Occupancy.ToString(
+					"P0",
+					CultureInfo.InvariantCulture),
+				(archetype.AllocatedBytes / 1024.0).ToString(
+					"N1",
+					CultureInfo.InvariantCulture))));
 	}
 
 	private void UpdateDivergence(RuntimeTransformComparison? comparison)

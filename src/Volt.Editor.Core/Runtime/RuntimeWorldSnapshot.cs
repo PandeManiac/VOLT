@@ -470,8 +470,7 @@ public sealed class RuntimeWorldSnapshot
 			componentType.Name,
 			metadata.Size,
 			[],
-			$"No inspector formatter for {componentType.Name}; " +
-				$"{metadata.Size} bytes per entity.");
+			$"No inspector formatter; {metadata.Size} bytes per entity.");
 	}
 
 	/// <summary>
