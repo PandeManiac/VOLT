@@ -412,6 +412,13 @@ because that would migrate the entity between archetypes from the UI
 thread. A running system can overwrite the value on its next tick, and
 the panel says so rather than implying the edit is permanent.
 
+Each position and scale row also reports the authored value and marks
+it when it differs from the runtime one, and the section header
+summarises which channels have diverged, so it is obvious which values
+have never been copied back. The comparison ignores differences below
+the three decimals the panel displays, so a motionless object does not
+look diverged because of accumulated float error.
+
 Copying a runtime value back is a separate, explicit action. Each
 position and scale row has an **Apply to Scene** button, and the
 selected-entity section has an **Apply Transform to Scene** button that

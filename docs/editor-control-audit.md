@@ -116,7 +116,9 @@ never reaches the authored scene or its undo history. The
 **Apply to Scene** button beside a position or scale row copies one
 live value into the authored transform as one undo step, and
 **Apply Transform to Scene** copies both together as one step. These
-are the only runtime-to-scene writes, and they are explicit.
+are the only runtime-to-scene writes, and they are explicit. Each
+editable row shows the authored value and flags it when it differs from
+the runtime value, and the section header lists the diverged channels.
 
 ## Docking
 

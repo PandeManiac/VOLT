@@ -47,6 +47,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly Label _entityHandle;
 	private readonly Label _entityArchetype;
 	private readonly Button _applyTransform;
+	private readonly Label _divergence;
 	private readonly StackPanel _componentRows;
 	private readonly StackPanel _archetypeRows;
 	private readonly StackPanel _queryFilters;
@@ -112,10 +113,13 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		_applyTransform.Clicked += _ => CopyTransformToScene();
 
+		_divergence = MutedLabel();
+
 		doc.Add(_entityName);
 		doc.Add(_entityHandle);
 		doc.Add(_entityArchetype);
 		doc.Add(_applyTransform);
+		doc.Add(_divergence);
 
 		doc.Add(new Label(
 			"Position, scale, and existing motion values are editable. An " +
@@ -314,6 +318,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			_componentRows.ClearChildren();
 			_queryResult.Text = string.Empty;
 			_editStatus.Text = string.Empty;
+			_divergence.Text = string.Empty;
 			return;
 		}
 
@@ -352,12 +357,20 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			_entityHandle.Text =
 				"Select an authored object to find its runtime entity.";
 			_entityArchetype.Text = string.Empty;
+			_divergence.Text = string.Empty;
 			return;
 		}
 
 		_entityName.Text = entity.Name;
 		_entityHandle.Text = $"ECS handle: {entity.Handle}";
 		_entityArchetype.Text = $"Archetype: {entity.Archetype}";
+
+		RuntimeTransformComparison? comparison =
+			_session.Scene is SceneDocument scene
+				? RuntimeWorldSnapshot.CompareTransform(entity, scene)
+				: null;
+
+		UpdateDivergence(comparison);
 
 		if (entity.Components.Count == 0)
 		{
@@ -436,6 +449,22 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 					_componentRows.Add(editor);
 				}
 
+				if (comparison?.For(channel) is RuntimeChannelComparison entry)
+				{
+					_componentRows.Add(new Label(entry.Diverged
+						? $"Authored: {FormatVector(entry.AuthoredValue)} - " +
+							"differs from the runtime value. Apply to copy it back."
+						: $"Authored: {FormatVector(entry.AuthoredValue)} - " +
+							"matches the runtime value.")
+					{
+						Font = Theme.Fonts.Small,
+						TextColor = entry.Diverged
+							? Theme.Palette.Warning
+							: Theme.Palette.TextDisabled,
+						Wrap = UiTextWrap.Wrap
+					});
+				}
+
 				continue;
 			}
 
@@ -448,6 +477,46 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 				});
 			}
 		}
+	}
+
+	private void UpdateDivergence(RuntimeTransformComparison? comparison)
+	{
+		if (comparison is null || comparison.Channels.Count == 0)
+		{
+			_divergence.Text = string.Empty;
+			return;
+		}
+
+		if (!comparison.AnyDiverged)
+		{
+			_divergence.Text =
+				"Position and scale match the authored scene.";
+
+			_divergence.TextColor = Theme.Palette.TextDisabled;
+			return;
+		}
+
+		string labels = string.Join(
+			", ",
+			comparison.Channels
+				.Where(channel => channel.Diverged)
+				.Select(channel => channel.Label));
+
+		_divergence.Text =
+			$"Differs from the authored scene: {labels}. " +
+			"Apply a value back to keep it.";
+
+		_divergence.TextColor = Theme.Palette.Warning;
+	}
+
+	private static string FormatVector(Vector3 value)
+	{
+		return string.Format(
+			CultureInfo.InvariantCulture,
+			"({0:0.###}, {1:0.###}, {2:0.###})",
+			value.X,
+			value.Y,
+			value.Z);
 	}
 
 	private void ApplyEdit(

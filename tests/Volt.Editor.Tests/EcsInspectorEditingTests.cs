@@ -258,6 +258,66 @@ public sealed class EcsInspectorEditingTests : IDisposable
 		Assert.Equal(Vector3.One, player.Transform.Scale);
 	}
 
+	[Fact]
+	public void DivergenceHint_ShowsTheAuthoredValueAndTracksTheCopy()
+	{
+		SceneEntity player = _session.CreateEntity("Player")!;
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+
+		_session.Select(player.Id);
+		_session.StartPlay();
+
+		RuntimeWorldEditor.Apply(
+			_session.Play!.Runtime!,
+			player.Id,
+			RuntimeEditChannel.Position,
+			new Vector3(7f, 8f, 9f));
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(520f, 900f), UiPoint.Zero);
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				"Authored: (1, 2, 3) - differs from the runtime value",
+				StringComparison.Ordinal));
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				"Authored: (1, 1, 1) - matches the runtime value",
+				StringComparison.Ordinal));
+
+		Button apply = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Apply Transform to Scene");
+
+		Click(apply.GlobalVisualBounds.Center);
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				"Authored: (7, 8, 9) - matches the runtime value",
+				StringComparison.Ordinal));
+
+		Assert.DoesNotContain(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				"differs from the runtime value",
+				StringComparison.Ordinal));
+
+		_session.UndoLast();
+		panel.Tick(0.3, 1f);
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				"Authored: (1, 2, 3) - differs from the runtime value",
+				StringComparison.Ordinal));
+	}
+
 	private static Button ApplyToSceneButton(NumericField field)
 	{
 		// The field sits in an axis row, the axis row sits in the

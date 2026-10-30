@@ -277,6 +277,13 @@ Same branch, on top of `0cacea5`.
   runtime or the scene, and an unchanged transform; if only one of the
   two components is present, the other is left alone and the message
   says which value was copied.
+- **Divergence hints.** `RuntimeWorldSnapshot.CompareTransform`
+  compares the runtime position and scale with the authored transform
+  using a tolerance smaller than the displayed precision. Each editable
+  row shows the authored value and marks it when it differs, and the
+  section header lists the diverged channels, so it is obvious which
+  values were never copied back. The hints refresh on the panel's timer
+  and after a copy or undo.
 - **Docs.** The guide and control audit describe the copy as the one
   explicit runtime-to-scene action and note that saving is still a
   separate step.
@@ -284,7 +291,7 @@ Same branch, on top of `0cacea5`.
 ### Verified in the cloud
 
 - Release build: 0 warnings, 0 errors.
-- `Volt.Editor.Core.Tests` 54 passed, `Volt.Editor.Tests` 273 passed.
+- `Volt.Editor.Core.Tests` 65 passed, `Volt.Editor.Tests` 275 passed.
 - New `RuntimeWorldEditorTests` cover the copied position with undo and
   redo, scale preserving rotation and position, the motion-channel
   refusal, the unchanged-value no-op, and the stopped-session boundary.
@@ -294,7 +301,13 @@ Same branch, on top of `0cacea5`.
   clicks **Apply Transform to Scene** and proves position and scale
   arrive together and undo restores both.
 - New `RuntimeWorldEditorTests` cover the combined copy with undo and
-  redo, the unchanged-transform no-op, and stopped Play Mode.
+  redo, the unchanged-transform no-op, and stopped Play Mode, plus the
+  divergence comparison: a diverged position beside a matching scale,
+  a sub-display-precision difference treated as a match, and an
+  entity that left the scene.
+- A headless `EcsInspectorEditingTests` case asserts the authored value
+  is shown, turns to a match after **Apply Transform to Scene**, and
+  returns to diverged after undo.
 
 ### Not verified here
 

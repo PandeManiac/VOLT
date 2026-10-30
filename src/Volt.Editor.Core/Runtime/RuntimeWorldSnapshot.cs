@@ -51,6 +51,43 @@ public sealed record RuntimeEntitySnapshot(
 	IReadOnlyList<RuntimeComponentSnapshot> Components);
 
 /// <summary>
+/// One authored transform value compared with what the runtime world
+/// currently stores for the same channel.
+/// </summary>
+public sealed record RuntimeChannelComparison(
+	RuntimeEditChannel Channel,
+	string Label,
+	Vector3 RuntimeValue,
+	Vector3 AuthoredValue,
+	bool Diverged);
+
+/// <summary>
+/// The authored-versus-runtime comparison for one selected entity.
+/// </summary>
+public sealed record RuntimeTransformComparison(
+	IReadOnlyList<RuntimeChannelComparison> Channels)
+{
+	public bool AnyDiverged => Channels.Any(channel => channel.Diverged);
+
+	/// <summary>
+	/// Gets the comparison for one channel, or null when the runtime
+	/// entity does not store that channel.
+	/// </summary>
+	public RuntimeChannelComparison? For(RuntimeEditChannel channel)
+	{
+		foreach (RuntimeChannelComparison entry in Channels)
+		{
+			if (entry.Channel == channel)
+			{
+				return entry;
+			}
+		}
+
+		return null;
+	}
+}
+
+/// <summary>
 /// A read-only capture of the running ECS world.
 /// </summary>
 /// <remarks>
@@ -70,6 +107,18 @@ public sealed record RuntimeEntitySnapshot(
 /// </remarks>
 public sealed class RuntimeWorldSnapshot
 {
+	/// <summary>
+	/// The difference below which a runtime value is treated as matching
+	/// the authored one.
+	/// </summary>
+	/// <remarks>
+	/// The two values live in different representations and the
+	/// simulation accumulates float error, so an exact comparison would
+	/// flag a motionless object as diverged. This tolerance is smaller
+	/// than the three-decimal precision the panel displays.
+	/// </remarks>
+	public const float DivergenceTolerance = 0.0005f;
+
 	private RuntimeWorldSnapshot(
 		string worldName,
 		PlayState state,
@@ -150,6 +199,84 @@ public sealed class RuntimeWorldSnapshot
 			world.Count,
 			archetypes,
 			selected);
+	}
+
+	/// <summary>
+	/// Compares the runtime position and scale with the authored
+	/// transform, so the panel can show which values were never copied
+	/// back.
+	/// </summary>
+	/// <remarks>
+	/// Only channels the runtime entity actually stores are returned.
+	/// Velocity and angular velocity are excluded because the authored
+	/// transform has no field for them. An entity that has left the
+	/// scene yields an empty comparison rather than an error: the panel
+	/// is describing a runtime world that may outlive the selection.
+	/// </remarks>
+	public static RuntimeTransformComparison CompareTransform(
+		RuntimeEntitySnapshot entity,
+		SceneDocument scene)
+	{
+		ArgumentNullException.ThrowIfNull(entity);
+		ArgumentNullException.ThrowIfNull(scene);
+
+		List<RuntimeChannelComparison> comparisons = [];
+
+		if (scene.Find(entity.AuthoredId) is not SceneEntity authored)
+		{
+			return new RuntimeTransformComparison(comparisons);
+		}
+
+		foreach (RuntimeComponentSnapshot component in entity.Components)
+		{
+			if (component.Editable is not RuntimeEditChannel channel ||
+				component.Value is not Vector3 runtime)
+			{
+				continue;
+			}
+
+			Vector3 authoredValue;
+
+			switch (channel)
+			{
+				case RuntimeEditChannel.Position:
+					authoredValue = authored.Transform.Position;
+					break;
+
+				case RuntimeEditChannel.Scale:
+					authoredValue = authored.Transform.Scale;
+					break;
+
+				default:
+					continue;
+			}
+
+			comparisons.Add(new RuntimeChannelComparison(
+				channel,
+				ChannelLabel(channel),
+				runtime,
+				authoredValue,
+				!WithinTolerance(runtime, authoredValue)));
+		}
+
+		return new RuntimeTransformComparison(comparisons);
+	}
+
+	private static bool WithinTolerance(Vector3 left, Vector3 right)
+	{
+		return MathF.Abs(left.X - right.X) <= DivergenceTolerance &&
+			MathF.Abs(left.Y - right.Y) <= DivergenceTolerance &&
+			MathF.Abs(left.Z - right.Z) <= DivergenceTolerance;
+	}
+
+	private static string ChannelLabel(RuntimeEditChannel channel)
+	{
+		return channel switch
+		{
+			RuntimeEditChannel.Position => "Position",
+			RuntimeEditChannel.Scale => "Scale",
+			_ => channel.ToString()
+		};
 	}
 
 	/// <summary>

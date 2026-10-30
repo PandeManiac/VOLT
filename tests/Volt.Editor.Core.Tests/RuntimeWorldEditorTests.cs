@@ -413,6 +413,120 @@ public sealed class RuntimeWorldEditorTests
 	}
 
 	[Fact]
+	public void CompareTransform_ReportsDivergedPositionAndMatchingScale()
+	{
+		SceneDocument scene = new("Edit Scene");
+		SceneEntity player = scene.CreateEntity("Player");
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+
+		using RuntimeScene runtime = new(scene);
+
+		RuntimeWorldEditor.Apply(
+			runtime,
+			player.Id,
+			RuntimeEditChannel.Position,
+			new Vector3(7f, 8f, 9f));
+
+		RuntimeWorldSnapshot snapshot = RuntimeWorldSnapshot.Capture(
+			runtime,
+			PlayState.Paused,
+			player.Id);
+
+		RuntimeTransformComparison comparison =
+			RuntimeWorldSnapshot.CompareTransform(
+				snapshot.SelectedEntity!,
+				scene);
+
+		Assert.True(comparison.AnyDiverged);
+		Assert.Equal(2, comparison.Channels.Count);
+
+		RuntimeChannelComparison position =
+			comparison.For(RuntimeEditChannel.Position)!;
+
+		Assert.True(position.Diverged);
+		Assert.Equal(new Vector3(1f, 2f, 3f), position.AuthoredValue);
+		Assert.Equal(new Vector3(7f, 8f, 9f), position.RuntimeValue);
+
+		RuntimeChannelComparison scale =
+			comparison.For(RuntimeEditChannel.Scale)!;
+
+		Assert.False(scale.Diverged);
+		Assert.Equal(Vector3.One, scale.AuthoredValue);
+		Assert.Equal(Vector3.One, scale.RuntimeValue);
+	}
+
+	[Fact]
+	public void CompareTransform_IgnoresDifferencesBelowDisplayPrecision()
+	{
+		SceneDocument scene = new("Edit Scene");
+		SceneEntity player = scene.CreateEntity("Player");
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+
+		using RuntimeScene runtime = new(scene);
+
+		RuntimeWorldEditor.Apply(
+			runtime,
+			player.Id,
+			RuntimeEditChannel.Position,
+			new Vector3(1.0004f, 2f, 3f));
+
+		RuntimeWorldSnapshot rounded = RuntimeWorldSnapshot.Capture(
+			runtime,
+			PlayState.Paused,
+			player.Id);
+
+		RuntimeTransformComparison small =
+			RuntimeWorldSnapshot.CompareTransform(
+				rounded.SelectedEntity!,
+				scene);
+
+		Assert.False(small.AnyDiverged);
+		Assert.False(small.For(RuntimeEditChannel.Position)!.Diverged);
+
+		RuntimeWorldEditor.Apply(
+			runtime,
+			player.Id,
+			RuntimeEditChannel.Position,
+			new Vector3(1.01f, 2f, 3f));
+
+		RuntimeWorldSnapshot moved = RuntimeWorldSnapshot.Capture(
+			runtime,
+			PlayState.Paused,
+			player.Id);
+
+		RuntimeTransformComparison large =
+			RuntimeWorldSnapshot.CompareTransform(
+				moved.SelectedEntity!,
+				scene);
+
+		Assert.True(large.For(RuntimeEditChannel.Position)!.Diverged);
+	}
+
+	[Fact]
+	public void CompareTransform_EntityOutsideTheSceneYieldsNoChannels()
+	{
+		SceneDocument scene = new("Edit Scene");
+		SceneEntity player = scene.CreateEntity("Player");
+
+		using RuntimeScene runtime = new(scene);
+
+		RuntimeWorldSnapshot snapshot = RuntimeWorldSnapshot.Capture(
+			runtime,
+			PlayState.Paused,
+			player.Id);
+
+		scene.RemoveEntity(player.Id);
+
+		RuntimeTransformComparison comparison =
+			RuntimeWorldSnapshot.CompareTransform(
+				snapshot.SelectedEntity!,
+				scene);
+
+		Assert.Empty(comparison.Channels);
+		Assert.False(comparison.AnyDiverged);
+	}
+
+	[Fact]
 	public void Capture_MarksEditableComponentsAndKeepsRotationReadOnly()
 	{
 		SceneDocument scene = new("Edit Scene");
