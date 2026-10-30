@@ -149,7 +149,9 @@ to the committed run when there is none yet: means vary by several
 percent between machines, so a hosted run is judged against the same
 machine class whenever one is available. The per-mean limit stays wide
 because a shared runner is noisy; the quotient catches a rebuilding
-slowdown the wide limit would pass.
+slowdown the wide limit would pass. The job summary names the baseline
+that was chosen and repeats the table, so a reviewer can check both
+without opening the log.
 
 `--json` writes the same comparison as JSON instead of the table, which
 makes a series of downloaded artifacts easy to follow:
@@ -163,6 +165,19 @@ python3 tools/compare-benchmark-runs.py \
 
 The exit codes do not change: 1 when a limit is exceeded, 2 for bad or
 missing input, 0 otherwise.
+
+`tools/benchmark-trend.py` reads several of those documents and prints
+the quotient in the order they are given, so a set of downloaded
+artifacts reads as a trend:
+
+```bash
+python3 tools/benchmark-trend.py artifacts/report-1.json artifacts/report-2.json
+```
+
+Each row carries the change from the previous document, and a row that
+passed `--max-overhead` is marked. It exits 2 when a document holds no
+quotient, or when the documents quote different method pairs, which
+cannot be lined up.
 
 ## Comparing a windowed capture
 

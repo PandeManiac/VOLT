@@ -65,6 +65,7 @@ run "formatting" \
     dotnet format Volt.slnx --verify-no-changes --severity warn
 run "document tooling" python3 tools/tests/test-compare-editor-docs.py
 run "benchmark tooling" python3 tools/tests/test-compare-benchmark-runs.py
+run "benchmark trend tooling" python3 tools/tests/test-benchmark-trend.py
 run "document contents" python3 tools/tests/test-doc-contents.py
 
 shell_sources=()
