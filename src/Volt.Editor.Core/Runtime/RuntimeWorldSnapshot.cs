@@ -291,7 +291,8 @@ public sealed class RuntimeWorldSnapshot
 	/// </remarks>
 	public static RuntimeQueryResult RunQuery(
 		RuntimeScene runtime,
-		IReadOnlyList<ComponentType> required)
+		IReadOnlyList<ComponentType> required,
+		Func<Guid, string?>? authoredName = null)
 	{
 		ArgumentNullException.ThrowIfNull(runtime);
 		ArgumentNullException.ThrowIfNull(required);
@@ -331,10 +332,19 @@ public sealed class RuntimeWorldSnapshot
 			{
 				byHandle.TryGetValue(handle, out RuntimeEntityInfo? info);
 
+				// The name a world was built with can be stale: a rename
+				// changes the authored object, not the running entity. The
+				// caller's lookup keeps the listed names current.
+				string name = info?.AuthoredId is Guid authored &&
+					authoredName?.Invoke(authored) is string live &&
+					live.Length > 0
+						? live
+						: info?.Name ?? string.Empty;
+
 				entities.Add(new RuntimeQueryEntity(
 					handle,
 					info?.AuthoredId,
-					info?.Name ?? string.Empty,
+					name,
 					description));
 			}
 		}

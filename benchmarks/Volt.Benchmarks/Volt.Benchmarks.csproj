@@ -10,6 +10,7 @@
     <ProjectReference Include="../../src/Volt.Gameplay/Volt.Gameplay.csproj" />
     <ProjectReference Include="../../src/Volt.Rendering/Volt.Rendering.csproj" />
     <ProjectReference Include="../../src/Volt.Ui/Volt.Ui.csproj" />
+    <ProjectReference Include="../../src/Volt.Editor/Volt.Editor.csproj" />
     <ProjectReference Include="../../src/Volt.Graphics.Vulkan/Volt.Graphics.Vulkan.csproj" />
   </ItemGroup>
 </Project>

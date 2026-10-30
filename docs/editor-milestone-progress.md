@@ -638,16 +638,25 @@ Same branch, on top of `12f3dfd`.
   world's column and refreshes the panel: the focused field and its typed
   text survive, and the row is rebuilt with the committed value once the
   edit ends.
-- **Measured cost.** With 2000 refreshes on a steady world, a refresh that
-  skips the rebuild took about 30 us, while a refresh that rewrites the
-  selected entity's rows took about 51 us, so the gating removes roughly
-  21 us from each of the four refreshes a second. These are timings from
-  the headless test harness, not from a windowed editor.
+- **Renames reach a running query.** The names a query lists were read
+  from the runtime world, which is built when Play starts, so renaming an
+  object left the listed name stale. The query now resolves each authored
+  id through the open scene, and a scene edit marks the query for a
+  re-run, so a rename refreshes the list without touching the structure.
+- **A tracked benchmark.** `EcsInspectorRefreshBenchmarks` measures the
+  two refresh paths, and `tools/benchmark-ecs-refresh.sh` records a run
+  under `tools/benchmark-results/ecs-refresh-<date>/` so two builds can be
+  compared. The recorded run measured a steady refresh at 8.89 us and a
+  rebuilding refresh at 16.06 us, roughly 1.8 times the steady path, so
+  the gating removes about 7 us from each of the four refreshes a second.
+- **The guide says when a query re-runs.** The query bullet now states
+  that a running query re-runs when entities appear or leave and when an
+  authored name changes, and keeps its rows otherwise.
 
 ### Verified in the cloud
 
 - Release build: 0 warnings, 0 errors.
-- `Volt.Editor.Tests` 298 passed, 0 failed.
+- `Volt.Editor.Tests` 299 passed, 0 failed.
 - `./tools/capture-editor-docs.sh --check` compares all five images.
 - The documentation comparator and contents checkers still pass.
 

@@ -156,6 +156,67 @@ public sealed class EcsInspectorRefreshTests : IDisposable
 		Assert.NotSame(first, QueryRow(panel));
 	}
 
+	[Fact]
+	public void RenamingAListedEntity_RefreshesTheQueryRows()
+	{
+		Guid meshId = _session.Scene!.Entities
+			.First(entity =>
+				entity.GetComponent<MeshRendererData>() is not null)
+			.Id;
+
+		_session.Select(meshId);
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(
+			_session,
+			new EcsInspectorPanelState
+			{
+				RequiredComponents =
+					[ComponentRegistry.Get<PositionComponent>()]
+			});
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(1140f, 660f), UiPoint.Zero);
+
+		string[] before = QueryRowTexts(panel);
+
+		Assert.DoesNotContain("Renamed", before);
+
+		// A rename changes no archetype, so only the scene event can tell
+		// the panel that the listed names moved.
+		_session.RenameActiveEntity("Renamed");
+		_context.BeginFrame(0.0, new UiSize(1140f, 660f), UiPoint.Zero);
+
+		string[] after = QueryRowTexts(panel);
+
+		Assert.True(
+			after.Any(text => text.Contains("Renamed", StringComparison.Ordinal)),
+			"Rows before: " + string.Join(" | ", before) +
+			"\nRows after: " + string.Join(" | ", after));
+	}
+
+	private static string[] QueryRowTexts(Widget root)
+	{
+		List<string> texts = [];
+		CollectRows(root, texts);
+
+		return [.. texts];
+	}
+
+	private static void CollectRows(Widget root, List<string> texts)
+	{
+		if (root is Label label &&
+			label.GetType().Name == "QueryResultRow")
+		{
+			texts.Add(label.Text);
+		}
+
+		foreach (Widget child in root.Children)
+		{
+			CollectRows(child, texts);
+		}
+	}
+
 	private static Label QueryRow(Widget root)
 	{
 		if (root is Label label &&

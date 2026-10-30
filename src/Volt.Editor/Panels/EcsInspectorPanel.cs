@@ -93,6 +93,10 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private string _archetypesKey = string.Empty;
 	private string _queryKey = string.Empty;
 
+	// Set when the authored scene changes: a rename changes a name a query
+	// lists without changing the world's structure.
+	private bool _sceneDirty;
+
 	private double _elapsed;
 	private bool _disposed;
 
@@ -399,7 +403,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		Add(_content);
 		Add(_empty);
 
-		_session.SceneChanged += OnSessionChanged;
+		_session.SceneChanged += OnSceneChanged;
 		_session.SelectionChanged += OnSessionChanged;
 		_session.PlayStateChanged += OnSessionChanged;
 		_session.RuntimeUpdated += OnSessionChanged;
@@ -433,7 +437,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		}
 
 		_disposed = true;
-		_session.SceneChanged -= OnSessionChanged;
+		_session.SceneChanged -= OnSceneChanged;
 		_session.SelectionChanged -= OnSessionChanged;
 		_session.PlayStateChanged -= OnSessionChanged;
 		_session.RuntimeUpdated -= OnSessionChanged;
@@ -450,6 +454,12 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			TextColor = Theme.Palette.TextMuted,
 			Wrap = UiTextWrap.Wrap
 		};
+	}
+
+	private void OnSceneChanged(EditorSession session)
+	{
+		_sceneDirty = true;
+		Refresh();
 	}
 
 	private void OnSessionChanged(EditorSession session)
@@ -529,10 +539,13 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			RefreshArchetypes(snapshot.Archetypes);
 		}
 
-		// An entity appearing or leaving can change the rows a running
-		// query already lists, so the query is re-run when the world's
-		// structure changes rather than on every tick.
-		if (_queryIntent && (started || structureChanged))
+		// An entity appearing or leaving, or an authored edit such as a
+		// rename, can change the rows a running query already lists, so the
+		// query is re-run then rather than on every tick.
+		bool resync = started || structureChanged || _sceneDirty;
+		_sceneDirty = false;
+
+		if (_queryIntent && resync)
 		{
 			RunQuery();
 		}
@@ -1028,8 +1041,10 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		try
 		{
-			RuntimeQueryResult result =
-				RuntimeWorldSnapshot.RunQuery(runtime, required);
+			RuntimeQueryResult result = RuntimeWorldSnapshot.RunQuery(
+				runtime,
+				required,
+				id => _session.Scene?.Find(id)?.Name);
 
 			_queryMatches.Clear();
 			_queryMatches.AddRange(result.Entities);

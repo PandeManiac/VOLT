@@ -419,7 +419,9 @@ is running it shows:
   runtime-only rows are disabled because there is no object to select.
   **Prev** and **Next** move between pages and a `Page N of M` counter
   reports the position in the list. A name filter narrows the list, and
-  **Scene order**, **Name**, and **Archetype** buttons reorder it.
+  **Scene order**, **Name**, and **Archetype** buttons reorder it. A
+  running query re-runs when entities appear or leave and when an
+  authored name changes, and keeps its rows otherwise.
   The pager and **Copy Results** sit below the scrolling document, so
   they stay in reach however far the panel has been scrolled. **Copy
   Results** puts the filtered list on the clipboard, and the arrow keys
