@@ -4,6 +4,39 @@
 #   git config core.hooksPath .githooks
 set -euo pipefail
 
+usage() {
+    printf '%s\n' \
+        "Usage: tools/pre-push-check.sh [options]" \
+        "" \
+        "Runs the formatting, tooling, contents, syntax and whitespace" \
+        "gates, so a failure shows up before a push." \
+        "" \
+        "Options:" \
+        "  --screenshots   Also compare the documentation screenshots," \
+        "                  which builds the editor first." \
+        "  --help          Show this help."
+}
+
+screenshots=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --screenshots)
+            screenshots=1
+            shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            printf 'error: unknown option %s\n' "$1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
@@ -59,6 +92,15 @@ else
 fi
 
 run "whitespace in the working tree" git diff --check
+
+# The image comparison builds the editor and captures five images, so it
+# is the slowest gate and is asked for explicitly.
+if [ "$screenshots" -eq 1 ]; then
+    run "documentation screenshots" ./tools/capture-editor-docs.sh --check
+else
+    printf '\n== documentation screenshots\n'
+    printf 'skipped: pass --screenshots to compare the images\n'
+fi
 
 printf '\n%d gate(s) passed\n' "$passed"
 

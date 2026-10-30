@@ -8,6 +8,7 @@ import importlib.util
 import io
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parents[1]
@@ -319,6 +320,104 @@ class OverheadTests(ComparatorTestCase):
             "--job", "ShortRun",
             "--overhead", "RebuildingRefresh:",
             "--max-overhead", "2.2",
+        )
+
+        self.assertEqual(2, status)
+
+
+class ArtifactTests(ComparatorTestCase):
+    """Reading a run from a directory or a downloaded artifact."""
+
+    def archive(
+        self, name: str, rows: list[tuple[str, str, str]]
+    ) -> Path:
+        path = self.directory / name
+
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(
+                f"{path.stem}/BenchmarkRun.txt", run_summary(rows)
+            )
+
+        return path
+
+    def test_reads_a_run_from_an_artifact_archive(self) -> None:
+        baseline = self.archive("base.zip", [("Steady", "ShortRun", "9 us")])
+        current = self.archive("now.zip", [("Steady", "ShortRun", "10 us")])
+
+        status, output = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+        )
+
+        self.assertEqual(0, status)
+        self.assertIn("1.11", output)
+
+    def test_quotes_the_quotient_between_two_hosted_runs(self) -> None:
+        baseline = self.archive(
+            "base.zip",
+            [
+                ("SteadyRefresh", "ShortRun", "9 us"),
+                ("RebuildingRefresh", "ShortRun", "16.2 us"),
+            ],
+        )
+        current = self.archive(
+            "now.zip",
+            [
+                ("SteadyRefresh", "ShortRun", "8.5 us"),
+                ("RebuildingRefresh", "ShortRun", "15.1 us"),
+            ],
+        )
+
+        status, output = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--job", "ShortRun",
+            "--overhead", "RebuildingRefresh:SteadyRefresh",
+            "--max-overhead", "2.2",
+        )
+
+        self.assertEqual(0, status)
+        self.assertIn("1.80x -> 1.78x", output)
+
+    def test_reads_a_run_from_an_extracted_directory(self) -> None:
+        extracted = self.directory / "ecs-refresh-benchmark"
+        extracted.mkdir()
+        (extracted / "BenchmarkRun.txt").write_text(
+            run_summary([("Steady", "ShortRun", "9 us")]),
+            encoding="utf-8",
+        )
+        current = self.write("now.txt", [("Steady", "ShortRun", "9 us")])
+
+        status, _ = self.run_comparator(
+            "--baseline", str(extracted),
+            "--current", str(current),
+        )
+
+        self.assertEqual(0, status)
+
+    def test_reports_an_archive_without_a_run(self) -> None:
+        path = self.directory / "empty.zip"
+
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("notes.txt", "nothing here")
+
+        current = self.write("now.txt", [("Steady", "ShortRun", "9 us")])
+
+        status, _ = self.run_comparator(
+            "--baseline", str(path),
+            "--current", str(current),
+        )
+
+        self.assertEqual(2, status)
+
+    def test_reports_a_directory_without_a_run(self) -> None:
+        empty = self.directory / "empty"
+        empty.mkdir()
+        current = self.write("now.txt", [("Steady", "ShortRun", "9 us")])
+
+        status, _ = self.run_comparator(
+            "--baseline", str(empty),
+            "--current", str(current),
         )
 
         self.assertEqual(2, status)

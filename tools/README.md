@@ -75,8 +75,17 @@ git config core.hooksPath .githooks
 
 The hook only calls the script, so it stays short and the script can
 be run by hand. It covers the fast gates, not the build, the test
-suite, the screenshot check, or the benchmark itself; the formatting
-gate restores first, so a cold tree makes it the slow step.
+suite, or the benchmark itself; the formatting gate restores first,
+so a cold tree makes it the slow step.
+
+`--screenshots` adds the documentation image comparison hosted CI
+runs, `tools/capture-editor-docs.sh --check`. That builds the editor
+and captures five images, so it takes a minute or more; without the
+flag the script names it and skips it:
+
+```bash
+./tools/pre-push-check.sh --screenshots
+```
 
 ## ECS refresh benchmark
 
@@ -98,6 +107,18 @@ The comparator prints each method's mean in microseconds and its ratio to
 the baseline. `--max-ratio N` makes it exit non-zero when a mean exceeds
 that multiple, and `--job NAME` restricts the comparison to one job row,
 which keeps an in-process row from standing in for a launched one.
+
+`--baseline` and `--current` each take a recorded `BenchmarkRun.txt`, a
+directory holding one, or a downloaded artifact archive, so the numbers
+a hosted run measured can be quoted against another hosted run instead
+of against the committed baseline:
+
+```bash
+python3 tools/compare-benchmark-runs.py \
+    --baseline artifacts/ecs-refresh-benchmark-1.zip \
+    --current artifacts/ecs-refresh-benchmark-2.zip \
+    --job ShortRun --overhead RebuildingRefresh:SteadyRefresh
+```
 
 `--overhead A:B` also quotes one method's mean over another's, and
 `--max-overhead N` fails when that quotient exceeds `N`. The quotient is

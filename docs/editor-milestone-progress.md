@@ -706,7 +706,10 @@ Same branch, on top of `12f3dfd`.
   drift that failed the hosted format step would then have failed in the
   terminal instead. CI also keeps its recorded run as an artifact, so a
   hosted machine's means can be compared after the fact rather than only
-  its ratio.
+  its ratio, and the comparator reads an artifact archive or an
+  extracted directory directly, so two hosted runs can be quoted against
+  each other. `--screenshots` adds the image comparison, the slowest gate
+  and the last one that only a hosted runner was checking.
 
 ### Next
 

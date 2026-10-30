@@ -11,7 +11,10 @@ whatever the machine did differently, so it catches a slowdown the loose
 per-mean limit would let through.
 
 The table is the only part of a run this needs, so a recorded
-BenchmarkRun.txt is enough.
+BenchmarkRun.txt is enough. Each input may also be a directory holding
+one or a downloaded CI artifact archive, which is how two hosted runs
+are quoted against each other instead of against the committed
+baseline.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import zipfile
 from pathlib import Path
 
 # Microseconds per unit, so a mean is comparable across rows.
@@ -29,6 +33,38 @@ VALUE = re.compile(r"^(?P<number>[0-9]+(?:\.[0-9]+)?)\s*(?P<unit>ns|us|µs|ms|s)
 # Column order of the summary table: Method, Job, Toolchain,
 # IterationCount, LaunchCount, WarmupCount, Mean, ...
 MEAN_COLUMN = 6
+
+# The file a run directory or an artifact archive is expected to hold.
+RUN_FILENAME = "BenchmarkRun.txt"
+
+
+def find_run(path: Path) -> Path:
+    """Returns the run inside a directory, at its top or one level down."""
+    direct = path / RUN_FILENAME
+
+    if direct.is_file():
+        return direct
+
+    for candidate in sorted(path.rglob(RUN_FILENAME)):
+        return candidate
+
+    raise FileNotFoundError(f"{path}: no {RUN_FILENAME} here")
+
+
+def read_run(path: Path) -> str:
+    """Reads a run from a file, an extracted directory, or an artifact zip."""
+    if path.is_dir():
+        return read_run(find_run(path))
+
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            for name in archive.namelist():
+                if Path(name).name == RUN_FILENAME:
+                    return archive.read(name).decode("utf-8")
+
+        raise FileNotFoundError(f"{path}: no {RUN_FILENAME} in the archive")
+
+    return path.read_text(encoding="utf-8")
 
 
 def parse_means(text: str) -> dict[tuple[str, str], float]:
@@ -180,8 +216,15 @@ def main(argv: list[str] | None = None) -> int:
         print("--max-overhead needs --overhead.", file=sys.stderr)
         return 2
 
-    baseline = parse_means(args.baseline.read_text(encoding="utf-8"))
-    current = parse_means(args.current.read_text(encoding="utf-8"))
+    try:
+        baseline_text = read_run(args.baseline)
+        current_text = read_run(args.current)
+    except (FileNotFoundError, zipfile.BadZipFile) as error:
+        print(error, file=sys.stderr)
+        return 2
+
+    baseline = parse_means(baseline_text)
+    current = parse_means(current_text)
 
     if not baseline:
         print(
