@@ -281,7 +281,8 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		{
 			Font = Theme.Fonts.Small,
 			MinHeight = 20f,
-			TooltipText = "Clear the filter, the sort, and the checked components"
+			TooltipText = "Clear the filter, the sort, and the checked " +
+				"components (Ctrl+R)"
 		};
 
 		_resetView.Clicked += _ => ResetQueryView();
@@ -1274,6 +1275,15 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		protected override bool OnKeyDown(UiKeyEvent key)
 		{
+			if (key.Key == UiKey.R && key.HasModifier(UiKeyModifiers.Control))
+			{
+				// Reset clears the results, so this row is removed while
+				// it is handling the key. Nothing here touches the row
+				// after that.
+				_panel.ResetQueryView();
+				return true;
+			}
+
 			if (_select is null)
 			{
 				return base.OnKeyDown(key);

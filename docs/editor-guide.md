@@ -5,6 +5,19 @@
 
 ![The VOLT editor workspace with a starter scene open](images/editor-workspace.png)
 
+## Contents
+
+- [Running](#running)
+- [Interface design](#interface-design)
+- [Authoring](#authoring)
+- [Play Mode](#play-mode)
+- [Runtime ECS inspector](#runtime-ecs-inspector)
+- [Runtime ECS panel: manual checklist](#runtime-ecs-panel-manual-checklist)
+- [Running a game without the editor](#running-a-game-without-the-editor)
+- [Project structure and assemblies](#project-structure-and-assemblies)
+- [Current limitations](#current-limitations)
+- [Where to look](#where-to-look)
+
 ## Running
 
 ```bash
@@ -409,8 +422,8 @@ is running it shows:
   move between rows and continue onto the next or previous page at the
   edge of one. `Page Up` and `Page Down` jump a whole page and land on
   the row the arrow would have reached, while `Home` and `End` reach the
-  first and last selectable row of the whole list. **Reset** returns
-  the section to its initial state: no filter, scene order, nothing
+  first and last selectable row of the whole list. **Reset**, or
+  `Ctrl+R` on a focused row, returns the section to its initial state: no filter, scene order, nothing
   checked, and no results. The filter, the sort, and the checked
   components survive a panel rebuild, and a remembered query runs by
   itself once Play Mode has built a world. A manual pass over these

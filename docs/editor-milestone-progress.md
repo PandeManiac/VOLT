@@ -561,6 +561,34 @@ Same branch, on top of `851845f`.
 - No GPU or interactive session, so the button has not been seen in a
   window. The checklist is the manual pass that covers the rest.
 
+## A reset shortcut and a linked checklist (October 2026)
+
+Same branch, on top of `fde7206`.
+
+### What changed
+
+- **Ctrl+R.** A focused query row resets the query view with `Ctrl+R`,
+  the same action as the **Reset** button, which now names the shortcut
+  in its tooltip. No editor shortcut binds that combination, so it cannot
+  shadow a global command.
+- **Contents.** The guide opens with a contents list linking every
+  section, including the manual checklist at its end.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Tests` 289 passed, 0 failed.
+- A headless test focuses a query row, presses `Ctrl+R`, and checks the
+  rows, the filter, and the checks are back to their initial state.
+- `tools/tests/test-compare-editor-docs.py` and the guide's screenshot
+  freshness check both pass, so the guide's contents list and new section
+  left the captured images intact.
+
+### Not verified here
+
+- No GPU or interactive session, so the shortcut was only driven through
+  the headless input context, not a real keyboard.
+
 ### Next
 
 - Project-owned gameplay assemblies (Milestone E).

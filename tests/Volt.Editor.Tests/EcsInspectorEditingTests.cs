@@ -907,6 +907,44 @@ public sealed class EcsInspectorEditingTests : IDisposable
 	}
 
 	[Fact]
+	public void QueryResults_ControlRResetsFromAFocusedRow()
+	{
+		_session.CreateEntity("Alpha");
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		List<Label> rows = [.. QueryRows(panel)];
+
+		Assert.NotEmpty(rows);
+		Assert.True(rows[0].Focus());
+
+		Assert.True(
+			_context.KeyDown(UiKey.R, UiKeyModifiers.Control),
+			"The focused row must claim Ctrl+R rather than let it fall through.");
+
+		Assert.Empty(QueryRows(panel));
+
+		Assert.False(Descendants(panel)
+			.OfType<CheckBox>()
+			.Single(box => box.Text == "Position")
+			.IsChecked);
+
+		Assert.Equal(
+			string.Empty,
+			Descendants(panel)
+				.OfType<TextField>()
+				.Single(field => field.Name == "QueryFilter")
+				.Text);
+	}
+
+	[Fact]
 	public void QueryResults_PagerStaysOutsideTheScrollingDocument()
 	{
 		// Enough entities to fill a page and enable Next, and enough of
