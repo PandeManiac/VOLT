@@ -432,7 +432,7 @@ is running it shows:
   itself once Play Mode has built a world. A manual pass over these
   controls is the checklist at the end of this guide.
 
-![The Runtime ECS panel in Play Mode, with a Position query matching the starter scene](images/editor-ecs.png)
+![The Runtime ECS panel in Play Mode, with the Cube selected and resolved to its runtime entity](images/editor-ecs.png)
 
 Values refresh four times a second instead of on every fixed step, and
 each capture copies every value it displays, so stopping Play Mode

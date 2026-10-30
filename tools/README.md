@@ -17,7 +17,7 @@ It writes four 1440 by 900 captures to `docs/images`:
 | --- | --- | --- |
 | `editor-workspace.png` | `workspace` | Starter project, default layout, no selection |
 | `editor-authoring.png` | `authoring` | Starter cube selected, Move tool active, populated inspector |
-| `editor-ecs.png` | `ecs` | Play Mode running, ECS panel showing a `Position` query |
+| `editor-ecs.png` | `ecs` | Play Mode running, cube selected, ECS panel showing its runtime entity |
 | `editor-start.png` | `start` | Start screen before a project is open |
 
 Pass `--check` to capture into a temporary directory and compare each

@@ -627,12 +627,19 @@ Same branch, on top of `07e13c5`.
 
 ### What changed
 
-- **A fourth documentation capture.** `--snapshot-state ecs` starts Play
-  Mode, opens the ECS tab, and remembers a `Position` query, so the
-  panel paints the running world's rows, pager, results, and key hints
-  instead of its idle state. `tools/capture-editor-docs.sh` writes it as
-  `editor-ecs.png`, and the guide embeds it in the Runtime ECS inspector
-  section.
+- **A fourth documentation capture.** `--snapshot-state ecs` selects the
+  starter scene's cube, starts Play Mode, and opens the ECS tab, so the
+  panel paints the running world and the runtime entity it resolves that
+  selection to, rather than its idle state. The bottom dock is given a
+  fifth of the window, which leaves room for the session summary, the
+  selected entity, and the pager in one frame.
+  `tools/capture-editor-docs.sh` writes it as `editor-ecs.png`, and the
+  guide embeds it in the Runtime ECS inspector section.
+- **A golden baseline for the preset.** `GoldenSnapshotTests` builds the
+  same layout, selection, and remembered query, and compares its capture
+  with `tests/Volt.Editor.Tests/Baselines/editor-ecs.png`. A panel that
+  stops resolving the selection, loses the session summary, or paints the
+  wrong dock proportions now fails the build.
 - **Preset support in the snapshot path.** `EditorSnapshot.Capture` and
   the shell's internal constructor accept an `EcsInspectorPanelState`, so
   a headless capture can show a panel that normally needs a click to
@@ -645,7 +652,8 @@ Same branch, on top of `07e13c5`.
 ### Verified in the cloud
 
 - Release build: 0 warnings, 0 errors.
-- `Volt.Editor.Tests` 290 passed, 0 failed.
+- `Volt.Editor.Tests` 291 passed, 0 failed, including the new
+  `PlayModeEcsPanel_MatchesItsBaseline`.
 - `./tools/capture-editor-docs.sh --check` compares all four committed
   images with fresh captures.
 - `python3 tools/tests/test-doc-contents.py` and

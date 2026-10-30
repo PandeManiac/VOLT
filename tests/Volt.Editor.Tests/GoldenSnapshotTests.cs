@@ -1,5 +1,10 @@
+using Volt.Ecs.Component;
+using Volt.Ecs.Components.Spatial;
 using Volt.Editor.Core.Scenes;
+using Volt.Editor.Panels;
 using Volt.Ui;
+using Volt.Ui.Docking;
+using Volt.Ui.Layout;
 using Volt.Ui.Rendering;
 
 namespace Volt.Editor.Tests;
@@ -94,6 +99,47 @@ public sealed class GoldenSnapshotTests : IDisposable
 		_session.Tool = EditorTool.Translate;
 
 		Verify("editor-authoring.png", 1440, 900);
+	}
+
+	[Fact]
+	public void PlayModeEcsPanel_MatchesItsBaseline()
+	{
+		// The ECS panel reports the world Play Mode built, so this baseline
+		// covers a running session: the cube selected, a remembered Position
+		// query, and a taller bottom dock that leaves room for the session
+		// summary, the selected runtime entity, the query rows, and the key
+		// hints in one image.
+		Guid meshId = _session.Scene!.Entities
+			.First(entity =>
+				entity.GetComponent<MeshRendererData>() is not null)
+			.Id;
+
+		_session.Select(meshId);
+		_session.StartPlay();
+
+		DockLayout layout = DockLayout.CreateEditorDefault();
+		layout.FindTabs("ecs")!.ActivePanelId = "ecs";
+
+		DockSplitNode? bottom = FindVerticalSplit(layout.Root);
+
+		if (bottom is not null)
+		{
+			bottom.Ratio = 0.2f;
+		}
+
+		UiRasterImage actual = EditorSnapshot.Capture(
+			_session,
+			Path.Combine(_root, "editor-ecs.png"),
+			1440,
+			900,
+			layout: layout,
+			ecsPanelState: new EcsInspectorPanelState
+			{
+				RequiredComponents =
+					[ComponentRegistry.Get<PositionComponent>()]
+			});
+
+		VerifyImage("editor-ecs.png", actual);
 	}
 
 	[Fact]
@@ -193,6 +239,27 @@ public sealed class GoldenSnapshotTests : IDisposable
 			$"pixels ({ratio:P2}) differ by more than {ChannelTolerance}; " +
 			$"worst channel delta {worst}. The capture was written to " +
 			$"{failurePath}.");
+	}
+
+	/// <summary>
+	/// Finds the vertical split, which is the one between the scene tabs and
+	/// the bottom tab group, so a baseline can give the bottom panels more
+	/// room.
+	/// </summary>
+	private static DockSplitNode? FindVerticalSplit(DockNode? node)
+	{
+		if (node is not DockSplitNode split)
+		{
+			return null;
+		}
+
+		if (split.Orientation == UiOrientation.Vertical)
+		{
+			return split;
+		}
+
+		return FindVerticalSplit(split.First) ??
+			FindVerticalSplit(split.Second);
 	}
 
 	private static int CountColors(UiRasterImage image)

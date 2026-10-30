@@ -6,6 +6,7 @@ using Volt.Editor.Input;
 using Volt.Editor.Panels;
 using Volt.Editor.Rendering;
 using Volt.Ui.Docking;
+using Volt.Ui.Layout;
 using Volt.Ui.Rendering;
 using Volt.Ui.Styling;
 using Volt.Ui.Vulkan;
@@ -374,13 +375,32 @@ internal static class Program
 			if (state == "ecs")
 			{
 				// The panel reports the world Play Mode built, so the capture
-				// runs a session and opens the ECS tab. A remembered Position
-				// query then matches the starter scene's entities, which shows
-				// the rows, the pager, and the key hints in one image.
+				// selects the starter scene's cube and runs a session: the
+				// selection shows the panel resolving an authored object to its
+				// runtime entity. A remembered Position query then matches both
+				// entities, and the taller bottom dock leaves room for the whole
+				// panel in one image.
+				SceneEntity? mesh = session.Scene?.Entities.FirstOrDefault(
+					entity => entity.GetComponent<MeshRendererData>() is not null);
+
+				if (mesh is null)
+				{
+					throw new InvalidOperationException(
+						"The ECS snapshot needs a scene with a mesh object.");
+				}
+
+				session.Select(mesh.Id);
 				session.StartPlay();
 
 				layout = DockLayout.CreateEditorDefault();
 				layout.FindTabs("ecs")!.ActivePanelId = "ecs";
+
+				DockSplitNode? bottom = FindVerticalSplit(layout.Root);
+
+				if (bottom is not null)
+				{
+					bottom.Ratio = 0.2f;
+				}
 
 				// The panel shortens a component's CLR name for its label, so
 				// PositionComponent is the box the guide's image shows checked.
@@ -409,8 +429,7 @@ internal static class Program
 				defaultProjectFolder: state == "start"
 					? "~/VoltGame"
 					: null,
-				ecsPanelState: ecsPanelState,
-				ecsScrollFraction: state == "ecs" ? 1f : null);
+				ecsPanelState: ecsPanelState);
 
 			Console.WriteLine(
 				$"Wrote {fullPath} ({image.Width}x{image.Height}).");
@@ -723,5 +742,26 @@ internal static class Program
 		}
 
 		return true;
+	}
+
+	/// <summary>
+	/// Finds the vertical split, which is the one between the scene tabs and
+	/// the bottom tab group, so a capture can give the bottom panels more
+	/// room.
+	/// </summary>
+	private static DockSplitNode? FindVerticalSplit(DockNode? node)
+	{
+		if (node is not DockSplitNode split)
+		{
+			return null;
+		}
+
+		if (split.Orientation == UiOrientation.Vertical)
+		{
+			return split;
+		}
+
+		return FindVerticalSplit(split.First) ??
+			FindVerticalSplit(split.Second);
 	}
 }
