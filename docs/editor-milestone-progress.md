@@ -694,9 +694,11 @@ Same branch, on top of `12f3dfd`.
   benchmark job passed, recording a run in 106 seconds and comparing it
   with the committed baseline. The build-and-test job passed its build,
   test, both tooling suites, the contents check and the screenshot check,
-  then failed only at the formatting step on the drift above; the hosted
-  numbers it measured are not recorded here, and the quotient gate added
-  since has not run on a hosted runner yet.
+  then failed only at the formatting step on the drift above. The run on
+  the commit that cleared it was fully green: the format check passed, the
+  demo ran, and the benchmark job passed with the quotient gate in place,
+  so both gates are proven on a hosted runner. The hosted means are not
+  recorded here, since only the ratio means the same thing across machines.
 
 ### Next
 
