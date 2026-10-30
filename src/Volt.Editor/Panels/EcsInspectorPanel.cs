@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Numerics;
 using Volt.Ecs.Component;
 using Volt.Editor.Core.Runtime;
+using Volt.Editor.Core.Scenes;
 using Volt.Editor.Viewport;
 using Volt.Ui;
 using Volt.Ui.Layout;
@@ -54,6 +55,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly StackPanel _content;
 	private readonly List<(ComponentType Type, CheckBox Box)> _filters = [];
 	private readonly List<Vector3Field> _editors = [];
+	private readonly List<Button> _applyButtons = [];
 	private readonly Label _editStatus;
 
 	private double _elapsed;
@@ -106,10 +108,11 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		doc.Add(_entityArchetype);
 
 		doc.Add(new Label(
-			"Position, scale, and existing motion values are editable. " +
-			"Edits write to the live ECS world only: they never touch the " +
-			"saved scene, and stopping Play discards them. Running systems " +
-			"may overwrite a value on the next tick.")
+			"Position, scale, and existing motion values are editable. An " +
+			"edit writes to the live ECS world only, and stopping Play " +
+			"discards it. Apply to Scene copies a position or scale into " +
+			"the saved transform as one undo step. Running systems may " +
+			"overwrite a value on the next tick.")
 		{
 			Font = Theme.Fonts.Small,
 			TextColor = Theme.Palette.TextDisabled,
@@ -390,7 +393,37 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 					ApplyEdit(authoredId, channel, field.Value);
 
 				_editors.Add(editor);
-				_componentRows.Add(editor);
+
+				if (channel is RuntimeEditChannel.Position or
+					RuntimeEditChannel.Scale)
+				{
+					Button apply = new("Apply to Scene")
+					{
+						Font = Theme.Fonts.Small,
+						MinHeight = 20f
+					};
+
+					apply.Clicked += _ => CopyToScene(authoredId, channel);
+					_applyButtons.Add(apply);
+
+					editor.FlexGrow = 1f;
+					editor.FlexShrink = 1f;
+
+					StackPanel row = new(UiOrientation.Horizontal)
+					{
+						Spacing = 4f
+					};
+
+					row.Add(editor);
+					row.Add(apply);
+					_componentRows.Add(row);
+				}
+
+				else
+				{
+					_componentRows.Add(editor);
+				}
+
 				continue;
 			}
 
@@ -427,6 +460,38 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			: Theme.Palette.Warning;
 	}
 
+	private void CopyToScene(Guid authoredId, RuntimeEditChannel channel)
+	{
+		if (_session.Play is not PlaySession play ||
+			_session.Scene is not SceneDocument scene)
+		{
+			_editStatus.Text =
+				"Start Play Mode to copy a runtime value into the scene.";
+
+			_editStatus.TextColor = Theme.Palette.Warning;
+			return;
+		}
+
+		RuntimeEditResult result = RuntimeWorldEditor.ApplyToScene(
+			play,
+			scene,
+			_session.Undo,
+			authoredId,
+			channel);
+
+		_editStatus.Text = result.Message;
+		_editStatus.TextColor = result.Applied
+			? Theme.Palette.TextMuted
+			: Theme.Palette.Warning;
+
+		if (result.Applied)
+		{
+			// The copy changed authored data, not the runtime world, so
+			// the rows and the Inspector both need a refresh.
+			Refresh();
+		}
+	}
+
 	private void DisposeEditors()
 	{
 		foreach (Vector3Field editor in _editors)
@@ -434,7 +499,13 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			editor.Dispose();
 		}
 
+		foreach (Button apply in _applyButtons)
+		{
+			apply.Dispose();
+		}
+
 		_editors.Clear();
+		_applyButtons.Clear();
 	}
 
 	private void RefreshArchetypes(

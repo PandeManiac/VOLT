@@ -157,6 +157,70 @@ public sealed class EcsInspectorEditingTests : IDisposable
 			3);
 	}
 
+	[Fact]
+	public void ApplyToScene_CopiesTheRuntimeValueAndUndoRestoresIt()
+	{
+		SceneEntity player = _session.CreateEntity("Player")!;
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+
+		_session.Select(player.Id);
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(520f, 900f), UiPoint.Zero);
+
+		int history = _session.Undo.UndoCount;
+
+		NumericField x = PositionXField(panel);
+
+		Click(x.GlobalVisualBounds.Center);
+		Assert.True(_context.KeyDown(UiKey.A, UiKeyModifiers.Control));
+		_context.TextInput("6.5");
+		Assert.True(_context.KeyDown(UiKey.Enter));
+
+		// Editing the live world is still not an authored change.
+		Assert.Equal(new Vector3(1f, 2f, 3f), player.Transform.Position);
+		Assert.Equal(history, _session.Undo.UndoCount);
+
+		Button apply = ApplyToSceneButton(x);
+
+		Assert.True(
+			apply.GlobalVisualBounds.Width > 0f &&
+			apply.GlobalVisualBounds.Height > 0f,
+			"The apply button must be laid out before it can be clicked.");
+
+		Click(apply.GlobalVisualBounds.Center);
+
+		Assert.Equal(6.5f, player.Transform.Position.X, 3);
+		Assert.Equal(history + 1, _session.Undo.UndoCount);
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				"undo step",
+				StringComparison.Ordinal));
+
+		_session.UndoLast();
+
+		Assert.Equal(new Vector3(1f, 2f, 3f), player.Transform.Position);
+	}
+
+	private static Button ApplyToSceneButton(NumericField field)
+	{
+		// The field sits in an axis row, the axis row sits in the
+		// Vector3Field, and the vector and its apply button share the
+		// component row. Position is the first vector, so this finds
+		// the button that belongs to the field being edited rather
+		// than the one on the scale row below it.
+		Vector3Field editor = (Vector3Field)field.Parent!.Parent!;
+
+		return editor.Parent!.Children
+			.OfType<Button>()
+			.Single(button => button.Text == "Apply to Scene");
+	}
+
 	private static NumericField PositionXField(EcsInspectorPanel panel)
 	{
 		// Position is the first vector component the snapshot marks

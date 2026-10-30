@@ -112,7 +112,10 @@ chunk storage per archetype, and a component query that runs through
 `World.Query`. It refreshes on a timer while playing or paused.
 Position, scale, velocity, and angular velocity can be edited in place.
 Each edit writes only the live ECS world, is discarded on Stop, and
-never reaches the authored scene or its undo history.
+never reaches the authored scene or its undo history. The
+**Apply to Scene** button beside a position or scale row copies the
+live value into the authored transform as one undo step; it is the only
+runtime-to-scene write, and it is explicit.
 
 ## Docking
 
@@ -133,7 +136,8 @@ controls; no visible control promises them:
 - The ECS panel edits only components the runtime entity already has,
   and cannot add or remove them. It cannot edit rotation, and it does
   not list individual query results; it reports measured counts and
-  signatures.
+  signatures. Only position and scale can be copied back to the scene;
+  velocity and angular velocity are runtime-only.
 - No IME candidate window or complex text shaping.
 - Gameplay and scene rendering use a single pass with no shadows or
   post-processing.

@@ -2,6 +2,7 @@ using System.Numerics;
 using Volt.Ecs;
 using Volt.Ecs.Components.Motion;
 using Volt.Ecs.Components.Spatial;
+using Volt.Editor.Core.Editing;
 using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
 
@@ -165,6 +166,157 @@ public sealed class RuntimeWorldEditorTests
 			Vector3.Zero);
 
 		Assert.False(afterStop.Applied);
+		Assert.Equal(new Vector3(1f, 2f, 3f), player.Transform.Position);
+	}
+
+	[Fact]
+	public void ApplyToScene_CopiesTheRuntimePositionAsOneUndoStep()
+	{
+		SceneDocument scene = new("Edit Scene");
+		SceneEntity player = scene.CreateEntity("Player");
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+
+		using PlaySession session = new(scene);
+		RuntimeScene runtime = session.Start();
+		UndoStack undo = new();
+
+		RuntimeWorldEditor.Apply(
+			runtime,
+			player.Id,
+			RuntimeEditChannel.Position,
+			new Vector3(7f, 8f, 9f));
+
+		Assert.Equal(0, undo.UndoCount);
+
+		RuntimeEditResult result = RuntimeWorldEditor.ApplyToScene(
+			session,
+			scene,
+			undo,
+			player.Id,
+			RuntimeEditChannel.Position);
+
+		Assert.True(result.Applied);
+		Assert.Contains("undo step", result.Message);
+		Assert.Equal(new Vector3(7f, 8f, 9f), player.Transform.Position);
+		Assert.Equal(1, undo.UndoCount);
+		Assert.Equal("Transform Player", undo.UndoDescription);
+
+		Assert.True(undo.Undo());
+		Assert.Equal(new Vector3(1f, 2f, 3f), player.Transform.Position);
+		Assert.Equal(1, undo.RedoCount);
+
+		Assert.True(undo.Redo());
+		Assert.Equal(new Vector3(7f, 8f, 9f), player.Transform.Position);
+	}
+
+	[Fact]
+	public void ApplyToScene_Scale_KeepsRotationAndPosition()
+	{
+		SceneDocument scene = new("Edit Scene");
+		SceneEntity player = scene.CreateEntity("Player");
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+		player.Transform.EulerAngles = new Vector3(10f, 20f, 30f);
+
+		using PlaySession session = new(scene);
+		RuntimeScene runtime = session.Start();
+		UndoStack undo = new();
+
+		RuntimeWorldEditor.Apply(
+			runtime,
+			player.Id,
+			RuntimeEditChannel.Scale,
+			new Vector3(2f, 3f, 4f));
+
+		RuntimeEditResult result = RuntimeWorldEditor.ApplyToScene(
+			runtime,
+			scene,
+			undo,
+			player.Id,
+			RuntimeEditChannel.Scale);
+
+		Assert.True(result.Applied);
+		Assert.Equal(new Vector3(2f, 3f, 4f), player.Transform.Scale);
+		Assert.Equal(new Vector3(1f, 2f, 3f), player.Transform.Position);
+		Assert.Equal(new Vector3(10f, 20f, 30f), player.Transform.EulerAngles);
+		Assert.Equal(1, undo.UndoCount);
+	}
+
+	[Fact]
+	public void ApplyToScene_RefusesMotionChannelsWithoutAnAuthoredCounterpart()
+	{
+		SceneDocument scene = new("Edit Scene");
+		SceneEntity player = scene.CreateEntity("Player");
+
+		using PlaySession session = new(scene);
+		RuntimeScene runtime = session.Start();
+		UndoStack undo = new();
+
+		RuntimeEditResult velocity = RuntimeWorldEditor.ApplyToScene(
+			runtime,
+			scene,
+			undo,
+			player.Id,
+			RuntimeEditChannel.Velocity);
+
+		Assert.False(velocity.Applied);
+		Assert.Contains("no authored counterpart", velocity.Message);
+
+		RuntimeEditResult angular = RuntimeWorldEditor.ApplyToScene(
+			runtime,
+			scene,
+			undo,
+			player.Id,
+			RuntimeEditChannel.AngularVelocity);
+
+		Assert.False(angular.Applied);
+		Assert.Contains("no authored counterpart", angular.Message);
+		Assert.Equal(0, undo.UndoCount);
+	}
+
+	[Fact]
+	public void ApplyToScene_UnchangedValueCreatesNoUndoStep()
+	{
+		SceneDocument scene = new("Edit Scene");
+		SceneEntity player = scene.CreateEntity("Player");
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+
+		using PlaySession session = new(scene);
+		RuntimeScene runtime = session.Start();
+		UndoStack undo = new();
+
+		RuntimeEditResult result = RuntimeWorldEditor.ApplyToScene(
+			runtime,
+			scene,
+			undo,
+			player.Id,
+			RuntimeEditChannel.Position);
+
+		Assert.False(result.Applied);
+		Assert.Contains("already matches", result.Message);
+		Assert.Equal(0, undo.UndoCount);
+		Assert.Equal(new Vector3(1f, 2f, 3f), player.Transform.Position);
+	}
+
+	[Fact]
+	public void ApplyToScene_StopsAtThePlayModeBoundary()
+	{
+		SceneDocument scene = new("Edit Scene");
+		SceneEntity player = scene.CreateEntity("Player");
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+
+		using PlaySession session = new(scene);
+		UndoStack undo = new();
+
+		RuntimeEditResult stopped = RuntimeWorldEditor.ApplyToScene(
+			session,
+			scene,
+			undo,
+			player.Id,
+			RuntimeEditChannel.Position);
+
+		Assert.False(stopped.Applied);
+		Assert.Contains("Start Play Mode", stopped.Message);
+		Assert.Equal(0, undo.UndoCount);
 		Assert.Equal(new Vector3(1f, 2f, 3f), player.Transform.Position);
 	}
 

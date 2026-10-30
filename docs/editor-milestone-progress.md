@@ -250,3 +250,48 @@ Same branch, on top of `dd0367b`.
   workspace. The editing path is covered at the snapshot and world
   levels; the focused-field refresh hold and the row layout have not
   been captured in a window.
+
+## Runtime-to-scene apply (October 2026)
+
+Same branch, on top of `0cacea5`.
+
+### What changed
+
+- **`RuntimeWorldEditor.ApplyToScene`.** Copies one runtime transform
+  value into the authored scene and records a single
+  `SetTransformCommand`, so `Ctrl+Z` restores the previous transform and
+  redo reapplies it. The session overload refuses stopped Play Mode.
+  The runtime overload refuses velocity and angular velocity (no
+  authored counterpart), a missing runtime entity, an authored object
+  that has left the scene, and a value that already matches, which
+  would otherwise add an empty undo step.
+- **ECS panel.** Position and scale rows pair their axis field with an
+  **Apply to Scene** button. The button reads the value stored in the
+  live component, not uncommitted text in the field, and the panel's
+  status line reports the outcome. The write-back rule is otherwise
+  unchanged: an edit still touches the live world only.
+- **Docs.** The guide and control audit describe the copy as the one
+  explicit runtime-to-scene action and note that saving is still a
+  separate step.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Core.Tests` 54 passed, `Volt.Editor.Tests` 273 passed.
+- New `RuntimeWorldEditorTests` cover the copied position with undo and
+  redo, scale preserving rotation and position, the motion-channel
+  refusal, the unchanged-value no-op, and the stopped-session boundary.
+- New `EcsInspectorEditingTests` case types into the runtime X field,
+  commits, clicks the real laid-out button, checks the authored
+  transform and undo count, and undoes it.
+
+### Not verified here
+
+- No GPU or interactive session, so the button's rendered placement in
+  the row has not been seen in a window. Its laid-out bounds and click
+  path are covered by the headless test.
+
+### Next
+
+- Per-entity query results with paging.
+- Project-owned gameplay assemblies (Milestone E).

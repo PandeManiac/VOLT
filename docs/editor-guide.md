@@ -410,8 +410,17 @@ stopping Play discards it with the rest of the world. The panel only
 writes components the entity already has; it never adds or removes one,
 because that would migrate the entity between archetypes from the UI
 thread. A running system can overwrite the value on its next tick, and
-the panel says so rather than implying the edit is permanent. Change
-saved values in the authored Inspector.
+the panel says so rather than implying the edit is permanent.
+
+Copying a runtime value back is a separate, explicit action: each
+position and scale row has an **Apply to Scene** button. It reads the
+value stored in the live component, writes it into the selected
+object's authored transform, and records one undo step, so `Ctrl+Z`
+restores the previous transform. Velocity and angular velocity have no
+authored counterpart and are not offered a button. The copy does not
+stop Play Mode, and it does not save the scene; use `Ctrl+S` to write
+the new transform to disk. Anything else that should change a saved
+value still belongs in the authored Inspector.
 
 Rotation stays read-only here: the runtime stores a world-space
 quaternion, while authored Euler angles live in the Inspector.

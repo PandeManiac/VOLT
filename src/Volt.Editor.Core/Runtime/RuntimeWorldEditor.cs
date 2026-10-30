@@ -3,6 +3,7 @@ using Volt.Ecs;
 using Volt.Ecs.Component;
 using Volt.Ecs.Components.Motion;
 using Volt.Ecs.Components.Spatial;
+using Volt.Editor.Core.Editing;
 using Volt.Editor.Core.Scenes;
 
 namespace Volt.Editor.Core.Runtime;
@@ -50,7 +51,9 @@ public readonly record struct RuntimeEditResult(bool Applied, string Message)
 /// authored <see cref="SceneDocument"/>, never marks it dirty, and
 /// never creates an undo entry. Stopping Play disposes the world, so
 /// every edit disappears with it; saving the scene cannot capture one.
-/// Use the Inspector to change what is saved.
+/// <see cref="ApplyToScene"/> is the one explicit exception: the
+/// developer asks for it, it copies position or scale into the saved
+/// transform, and it records a single undo step.
 /// </para>
 /// <para>
 /// The editor also refuses to add or remove components. Adding one
@@ -154,6 +157,158 @@ public static class RuntimeWorldEditor
 		return RuntimeEditResult.Success(
 			$"{Label(channel)} applied to the live world. " +
 			"Stopping Play discards it.");
+	}
+
+	/// <summary>
+	/// Copies one runtime transform value into the authored scene as a
+	/// single undoable step.
+	/// </summary>
+	/// <remarks>
+	/// This is the only path that writes runtime data back to the scene,
+	/// and it runs only when the developer clicks <b>Apply to Scene</b>.
+	/// Only position and scale have an authored counterpart in
+	/// <see cref="TransformData"/>; velocity and angular velocity are
+	/// runtime-only and are refused. The runtime keeps running, so a
+	/// later tick may move the live value away from what was copied;
+	/// the caller sees that in the scene and in the ECS panel.
+	/// </remarks>
+	public static RuntimeEditResult ApplyToScene(
+		PlaySession session,
+		SceneDocument scene,
+		UndoStack undo,
+		Guid authoredId,
+		RuntimeEditChannel channel)
+	{
+		ArgumentNullException.ThrowIfNull(session);
+		ArgumentNullException.ThrowIfNull(scene);
+		ArgumentNullException.ThrowIfNull(undo);
+
+		if (session.State == PlayState.Stopped ||
+			session.Runtime is not RuntimeScene runtime)
+		{
+			return RuntimeEditResult.Failure(
+				"Start Play Mode to copy a runtime value into the scene.");
+		}
+
+		return ApplyToScene(runtime, scene, undo, authoredId, channel);
+	}
+
+	/// <summary>
+	/// Copies one runtime transform value into the authored scene using
+	/// a world that is already running.
+	/// </summary>
+	public static RuntimeEditResult ApplyToScene(
+		RuntimeScene runtime,
+		SceneDocument scene,
+		UndoStack undo,
+		Guid authoredId,
+		RuntimeEditChannel channel)
+	{
+		ArgumentNullException.ThrowIfNull(runtime);
+		ArgumentNullException.ThrowIfNull(scene);
+		ArgumentNullException.ThrowIfNull(undo);
+
+		if (channel is RuntimeEditChannel.Velocity or
+			RuntimeEditChannel.AngularVelocity)
+		{
+			return RuntimeEditResult.Failure(
+				$"{Label(channel)} has no authored counterpart; only " +
+				"position and scale can be copied into the scene.");
+		}
+
+		if (runtime.Find(authoredId) is not RuntimeEntityInfo info)
+		{
+			return RuntimeEditResult.Failure(
+				"The selected object has no runtime entity.");
+		}
+
+		if (!TryReadChannel(
+			runtime.World,
+			info.Entity,
+			channel,
+			out Vector3 value))
+		{
+			return RuntimeEditResult.Failure(
+				$"{Label(channel)} is not present on this runtime entity.");
+		}
+
+		if (scene.Find(authoredId) is not SceneEntity entity)
+		{
+			return RuntimeEditResult.Failure(
+				"The selected object is no longer in the scene.");
+		}
+
+		TransformData after = entity.Transform.Clone();
+
+		switch (channel)
+		{
+			case RuntimeEditChannel.Position:
+				after.Position = value;
+				break;
+
+			case RuntimeEditChannel.Scale:
+				after.Scale = value;
+				break;
+
+			default:
+				return RuntimeEditResult.Failure(
+					"That runtime value has no authored counterpart.");
+		}
+
+		if (after.Equals(entity.Transform))
+		{
+			return RuntimeEditResult.Failure(
+				$"The scene already matches the runtime {Label(channel)}; " +
+				"no undo step was created.");
+		}
+
+		undo.Execute(new SetTransformCommand(scene, authoredId, after));
+
+		return RuntimeEditResult.Success(
+			$"Copied runtime {Label(channel)} into the authored scene as " +
+			"one undo step.");
+	}
+
+	private static bool TryReadChannel(
+		World world,
+		Entity entity,
+		RuntimeEditChannel channel,
+		out Vector3 value)
+	{
+		switch (channel)
+		{
+			case RuntimeEditChannel.Position
+				when world.TryReadComponent<PositionComponent>(
+					entity,
+					out PositionComponent position):
+				value = position.Value;
+				return true;
+
+			case RuntimeEditChannel.Scale
+				when world.TryReadComponent<ScaleComponent>(
+					entity,
+					out ScaleComponent scale):
+				value = scale.Value;
+				return true;
+
+			case RuntimeEditChannel.Velocity
+				when world.TryReadComponent<VelocityComponent>(
+					entity,
+					out VelocityComponent velocity):
+				value = velocity.Value;
+				return true;
+
+			case RuntimeEditChannel.AngularVelocity
+				when world.TryReadComponent<AngularVelocityComponent>(
+					entity,
+					out AngularVelocityComponent angular):
+				value = angular.Value;
+				return true;
+
+			default:
+				value = default;
+				return false;
+		}
 	}
 
 	private static ComponentType ComponentTypeFor(RuntimeEditChannel channel)
