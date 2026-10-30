@@ -505,6 +505,33 @@ Same branch, on top of `181e338`.
   has not been seen at a real interface scale, and a wheel or drag
   scroll of the document was not replayed against a window.
 
+## Row ends with Home and End (October 2026)
+
+Same branch, on top of `dd29eb1`.
+
+### What changed
+
+- **Home and End.** On a focused query row they move focus and selection
+  to the first and last selectable row of the whole result list, turning
+  to the page that row lives on rather than stopping at the page edge.
+  Both reuse the same row-selection helper the page keys and the arrow's
+  edge step now share, so a page holding only runtime entities is never
+  entered silently.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Tests` 287 passed, 0 failed.
+- A headless test starts in the middle of page one, presses End and
+  checks the pager reads the last page with its last row focused and a
+  selection made, then presses Home and checks page one with its first
+  row focused.
+
+### Not verified here
+
+- No GPU or interactive session, so the keys have only been driven
+  through the headless input context, not a real window.
+
 ### Next
 
 - Project-owned gameplay assemblies (Milestone E).

@@ -782,6 +782,68 @@ public sealed class EcsInspectorEditingTests : IDisposable
 	}
 
 	[Fact]
+	public void QueryResults_HomeAndEndJumpToTheEndsOfTheList()
+	{
+		for (int index = 0; index < 10; index++)
+		{
+			_session.CreateEntity($"Probe {index}");
+		}
+
+		_session.StartPlay();
+
+		int total = _session.Play!.Runtime!.World.Count;
+		const int PageSize = 8;
+		int pages = (total + PageSize - 1) / PageSize;
+
+		Assert.True(pages > 1, "The test needs more than one page.");
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		List<Label> firstPage = [.. QueryRows(panel)];
+
+		// Start in the middle of the list so both keys have to travel.
+		Assert.True(firstPage[1].Focus());
+
+		_context.KeyDown(UiKey.End);
+		_context.BeginFrame(0.2, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				$"Page {pages} of {pages}",
+				StringComparison.Ordinal));
+
+		List<Label> lastPage = [.. QueryRows(panel)];
+
+		Assert.True(
+			lastPage[^1].HasFocus,
+			"End must focus the last row of the whole list.");
+
+		Assert.NotNull(_session.ActiveEntityId);
+
+		_context.KeyDown(UiKey.Home);
+		_context.BeginFrame(0.3, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				$"Page 1 of {pages}",
+				StringComparison.Ordinal));
+
+		List<Label> back = [.. QueryRows(panel)];
+
+		Assert.True(
+			back[0].HasFocus,
+			"Home must focus the first row of the whole list.");
+	}
+
+	[Fact]
 	public void QueryResults_PagerStaysOutsideTheScrollingDocument()
 	{
 		// Enough entities to fill a page and enable Next, and enough of

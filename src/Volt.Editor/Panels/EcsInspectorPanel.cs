@@ -1016,7 +1016,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			_queryRows.Add(new QueryResultRow(
 				FormatRow(match),
 				authoredId is Guid id ? () => _session.Select(id) : null,
-				MoveSelectionToPage)
+				this)
 			{
 				Name = "QueryResultRow",
 				Font = Theme.Fonts.MonoSmall,
@@ -1074,7 +1074,6 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		int start = target * QueryPageSize;
 		int end = Math.Min(_queryView.Count, start + QueryPageSize);
-		int chosen = -1;
 
 		// Down enters the next page at its first selectable row and Up
 		// enters the previous page at its last, which is where the
@@ -1085,25 +1084,69 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		{
 			if (_queryView[index].AuthoredId is not null)
 			{
-				chosen = index;
-				break;
+				return SelectRow(index);
 			}
 		}
 
-		if (chosen < 0)
+		// A page holding only runtime entities cannot take the
+		// selection, so the key does nothing instead of silently
+		// flipping the page.
+		return false;
+	}
+
+	private bool MoveSelectionToStart()
+	{
+		return MoveSelectionToEdge(fromEnd: false);
+	}
+
+	private bool MoveSelectionToEnd()
+	{
+		return MoveSelectionToEdge(fromEnd: true);
+	}
+
+	/// <summary>
+	/// Moves focus and selection to the first or last selectable row of
+	/// the whole result list, turning to the page it lives on.
+	/// </summary>
+	private bool MoveSelectionToEdge(bool fromEnd)
+	{
+		for (int index = fromEnd ? _queryView.Count - 1 : 0;
+			index >= 0 && index < _queryView.Count;
+			index += fromEnd ? -1 : 1)
 		{
-			// A page holding only runtime entities cannot take the
-			// selection, so the key does nothing instead of silently
-			// flipping the page.
+			if (_queryView[index].AuthoredId is not null)
+			{
+				return SelectRow(index);
+			}
+		}
+
+		return false;
+	}
+
+	/// <summary>
+	/// Focuses and selects one row of the whole result list, rendering
+	/// the page it belongs to when that is not the page on screen.
+	/// </summary>
+	private bool SelectRow(int index)
+	{
+		if (index < 0 || index >= _queryView.Count)
+		{
 			return false;
 		}
 
-		_queryPage = target;
-		RenderQueryPage();
+		int page = index / QueryPageSize;
 
-		return _queryRows.Children.Count > chosen - start &&
-			_queryRows.Children[chosen - start] is QueryResultRow row &&
-			row.FocusAndSelect();
+		if (page != _queryPage || _queryRows.Children.Count == 0)
+		{
+			_queryPage = page;
+			RenderQueryPage();
+		}
+
+		int row = index - (page * QueryPageSize);
+
+		return _queryRows.Children.Count > row &&
+			_queryRows.Children[row] is QueryResultRow target &&
+			target.FocusAndSelect();
 	}
 
 	private void ClearQuery()
@@ -1162,16 +1205,16 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private sealed class QueryResultRow : Label
 	{
 		private readonly Action? _select;
-		private readonly Func<int, bool>? _stepPage;
+		private readonly EcsInspectorPanel _panel;
 
 		public QueryResultRow(
 			string text,
 			Action? select,
-			Func<int, bool>? stepPage = null)
+			EcsInspectorPanel panel)
 			: base(text)
 		{
 			_select = select;
-			_stepPage = stepPage;
+			_panel = panel;
 			IsEnabled = select is not null;
 			IsFocusable = select is not null;
 			Cursor = select is null ? UiCursor.Arrow : UiCursor.Hand;
@@ -1219,8 +1262,17 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			{
 				// A page key jumps straight to the neighbouring page, so
 				// it uses the same entry point the arrow uses at an edge.
-				return _stepPage?.Invoke(
-					key.Key == UiKey.PageDown ? 1 : -1) ?? false;
+				return _panel.MoveSelectionToPage(
+					key.Key == UiKey.PageDown ? 1 : -1);
+			}
+
+			if (key.Key is UiKey.Home or UiKey.End)
+			{
+				// Home and End reach the ends of the whole result list,
+				// turning as many pages as that takes.
+				return key.Key == UiKey.Home
+					? _panel.MoveSelectionToStart()
+					: _panel.MoveSelectionToEnd();
 			}
 
 			return base.OnKeyDown(key);
@@ -1264,7 +1316,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 			// The page ended under the arrow, so the panel is asked for
 			// the neighbouring page.
-			return _stepPage?.Invoke(direction) ?? false;
+			return _panel.MoveSelectionToPage(direction);
 		}
 	}
 }

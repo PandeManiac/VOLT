@@ -408,7 +408,9 @@ is running it shows:
   Results** puts the filtered list on the clipboard, and the arrow keys
   move between rows and continue onto the next or previous page at the
   edge of one. `Page Up` and `Page Down` jump a whole page and land on
-  the row the arrow would have reached. The filter, the sort, and the
+  the row the arrow would have reached, while `Home` and `End` reach the
+  first and last selectable row of the whole list. The filter, the
+  sort, and the
   checked components survive a panel rebuild, and a remembered query
   runs by itself once Play Mode has built a world.
 
