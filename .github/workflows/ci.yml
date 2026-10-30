@@ -68,6 +68,9 @@ jobs:
       - name: Test documentation tooling
         run: python3 tools/tests/test-compare-editor-docs.py
 
+      - name: Test benchmark tooling
+        run: python3 tools/tests/test-compare-benchmark-runs.py
+
       # The guides open with contents lists; a renamed section must not
       # silently leave a dead anchor or an unlisted heading behind.
       - name: Verify document contents
@@ -85,6 +88,39 @@ jobs:
 
       - name: Run the gameplay demo
         run: dotnet run --project samples/Volt.GameplayDemo -c Release --no-restore
+
+  # The panel refreshes four times a second, so a regression in its
+  # steady path would slow every editor session. The comparison uses a
+  # wide ratio because a hosted runner is shared and varies between runs;
+  # a collapsed path still fails. The recorded baseline is the committed
+  # run, not the previous one, so a single noisy result cannot move it.
+  ecs-refresh-benchmark:
+    name: ECS refresh benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install the .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore Volt.slnx
+
+      - name: Record the refresh benchmark
+        run: OUTPUT_DIR="$RUNNER_TEMP/ecs-refresh" ./tools/benchmark-ecs-refresh.sh
+
+      - name: Compare with the recorded baseline
+        run: >-
+          python3 tools/compare-benchmark-runs.py
+          --baseline tools/benchmark-results/ecs-refresh-2026-10-30/BenchmarkRun.txt
+          --current "$RUNNER_TEMP/ecs-refresh/BenchmarkRun.txt"
+          --job ShortRun
+          --max-ratio 2.0
 
   # Hardware validation is a deliberately requested workflow run, not a
   # dependency of ordinary pushes. A missing self-hosted GPU runner must not

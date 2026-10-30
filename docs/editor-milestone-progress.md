@@ -649,6 +649,21 @@ Same branch, on top of `12f3dfd`.
   compared. The recorded run measured a steady refresh at 8.89 us and a
   rebuilding refresh at 16.06 us, roughly 1.8 times the steady path, so
   the gating removes about 7 us from each of the four refreshes a second.
+- **The refresh benchmark is tracked across runs.** A second recording of
+  the same build measured a steady refresh at 8.93 us in-process and 8.50 us
+  launched, against 8.89 us and 9.05 us in the first run; the rebuilding
+  path measured 16.22 us and 15.13 us against 16.06 us and 16.07 us. The
+  absolute microseconds moved by up to six percent between runs, while the
+  rebuilding-to-steady ratio stayed between 1.78 and 1.82, so the ratio is
+  the figure worth tracking. CI records a run on a hosted runner and fails
+  only when a mean exceeds twice the committed baseline: a gate that catches
+  a collapsed path rather than several percent of drift. The comparison is
+  `tools/compare-benchmark-runs.py`, which reads the summary table of a
+  recorded run, so a saved `BenchmarkRun.txt` is enough to check one.
+- **The selected entity's header follows a rename.** The header read the
+  name captured when Play started, and the rebuild key was built from the
+  same text, so a rename changed neither. Both now resolve the authored
+  name through the open scene, which is the lookup the query rows use.
 - **The guide says when a query re-runs.** The query bullet now states
   that a running query re-runs when entities appear or leave and when an
   authored name changes, and keeps its rows otherwise.
@@ -656,7 +671,9 @@ Same branch, on top of `12f3dfd`.
 ### Verified in the cloud
 
 - Release build: 0 warnings, 0 errors.
-- `Volt.Editor.Tests` 299 passed, 0 failed.
+- `Volt.Editor.Tests` 300 passed, 0 failed.
+- `python3 tools/tests/test-compare-benchmark-runs.py` passes its ten cases,
+  and the comparator reports the two recorded runs at a 0.94 ratio.
 - `./tools/capture-editor-docs.sh --check` compares all five images.
 - The documentation comparator and contents checkers still pass.
 
@@ -664,6 +681,9 @@ Same branch, on top of `12f3dfd`.
 
 - No GPU or display: no windowed timing, and the query-gating behaviour is
   checked through widget identity rather than a live window session.
+- The new CI job has not run on GitHub. Its steps were exercised locally,
+  but a hosted runner's numbers cannot be checked from here, so its first
+  scheduled run is the real test of the two-times threshold.
 
 ### Next
 

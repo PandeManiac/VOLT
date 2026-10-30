@@ -54,6 +54,37 @@ GitHub's slug rule. Run it directly; it uses only the standard library:
 python3 tools/tests/test-doc-contents.py
 ```
 
+## ECS refresh benchmark
+
+`tools/benchmark-ecs-refresh.sh` records the ECS inspector's two refresh
+paths with BenchmarkDotNet: `SteadyRefresh` finds the snapshot unchanged
+and keeps its rows, and `RebuildingRefresh` rewrites them. A run is
+written to `tools/benchmark-results/ecs-refresh-<date>/BenchmarkRun.txt`
+so two builds can be compared. Set `OUTPUT_DIR` to write elsewhere, as CI
+does:
+
+```bash
+./tools/benchmark-ecs-refresh.sh
+python3 tools/compare-benchmark-runs.py \
+    --baseline tools/benchmark-results/ecs-refresh-2026-10-30/BenchmarkRun.txt \
+    --current tools/benchmark-results/ecs-refresh-2026-10-30-run2/BenchmarkRun.txt
+```
+
+The comparator prints each method's mean in microseconds and its ratio to
+the baseline. `--max-ratio N` makes it exit non-zero when a mean exceeds
+that multiple, and `--job NAME` restricts the comparison to one job row,
+which keeps an in-process row from standing in for a launched one. Its
+tests use only the standard library:
+
+```bash
+python3 tools/tests/test-compare-benchmark-runs.py
+```
+
+CI records a run on a hosted runner and fails when a mean exceeds twice
+its recorded baseline. Hosted runners are shared and vary by several
+percent between runs, so that gate catches a collapsed path rather than
+small drift; compare two recorded runs when the change matters.
+
 ## Comparing a windowed capture
 
 The documentation images come from the headless rasterizer, which draws

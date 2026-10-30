@@ -576,7 +576,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			return true;
 		}
 
-		_entityName.Text = entity.Name;
+		_entityName.Text = DisplayName(entity);
 		_entityHandle.Text = $"ECS handle: {entity.Handle}";
 		_entityArchetype.Text = $"Archetype: {entity.Archetype}";
 
@@ -713,16 +713,26 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	}
 
 	/// <summary>
+	/// The name to show for a runtime entity: the authored one while the
+	/// scene still has it, because a rename during Play leaves the name the
+	/// runtime world was built with behind.
+	/// </summary>
+	private string DisplayName(RuntimeEntitySnapshot entity)
+	{
+		return _session.Scene?.Find(entity.AuthoredId)?.Name ?? entity.Name;
+	}
+
+	/// <summary>
 	/// Builds the text a selected entity's rows display, so the panel can
 	/// tell a real change from another tick of the same world.
 	/// </summary>
-	private static string SelectedKey(RuntimeEntitySnapshot? entity)
+	private string SelectedKey(RuntimeEntitySnapshot? entity)
 	{
 		return entity is null
 			? string.Empty
 			: string.Join(
 				'\u0001',
-				entity.Name,
+				DisplayName(entity),
 				entity.Handle.ToString(),
 				entity.Archetype,
 				string.Join('\u0002', entity.Components.Select(ComponentKey)));

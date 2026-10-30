@@ -195,12 +195,59 @@ public sealed class EcsInspectorRefreshTests : IDisposable
 			"\nRows after: " + string.Join(" | ", after));
 	}
 
+	[Fact]
+	public void RenamingTheSelectedEntity_RefreshesTheHeader()
+	{
+		Guid meshId = _session.Scene!.Entities
+			.First(entity =>
+				entity.GetComponent<MeshRendererData>() is not null)
+			.Id;
+
+		_session.Select(meshId);
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(1140f, 660f), UiPoint.Zero);
+
+		Assert.DoesNotContain("Renamed", LabelTexts(panel));
+
+		// The header names the authored entity, so a rename has to reach
+		// it through the scene rather than the runtime world's snapshot.
+		_session.RenameActiveEntity("Renamed");
+		_context.BeginFrame(0.0, new UiSize(1140f, 660f), UiPoint.Zero);
+
+		Assert.Contains("Renamed", LabelTexts(panel));
+	}
+
 	private static string[] QueryRowTexts(Widget root)
 	{
 		List<string> texts = [];
 		CollectRows(root, texts);
 
 		return [.. texts];
+	}
+
+	private static string[] LabelTexts(Widget root)
+	{
+		List<string> texts = [];
+		CollectLabels(root, texts);
+
+		return [.. texts];
+	}
+
+	private static void CollectLabels(Widget root, List<string> texts)
+	{
+		if (root is Label label)
+		{
+			texts.Add(label.Text);
+		}
+
+		foreach (Widget child in root.Children)
+		{
+			CollectLabels(child, texts);
+		}
 	}
 
 	private static void CollectRows(Widget root, List<string> texts)

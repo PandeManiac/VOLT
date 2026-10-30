@@ -11,7 +11,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd -P)
 DOTNET=${DOTNET:-dotnet}
 DATE=${DATE:-$(date +%F)}
-OUTPUT_DIR="$REPO_ROOT/tools/benchmark-results/ecs-refresh-$DATE"
+OUTPUT_DIR=${OUTPUT_DIR:-"$REPO_ROOT/tools/benchmark-results/ecs-refresh-$DATE"}
 
 mkdir -p "$OUTPUT_DIR"
 
