@@ -721,6 +721,105 @@ public sealed class EcsInspectorEditingTests : IDisposable
 	}
 
 	[Fact]
+	public void QueryResults_PageKeysJumpAWholePage()
+	{
+		for (int index = 0; index < 10; index++)
+		{
+			_session.CreateEntity($"Probe {index}");
+		}
+
+		_session.StartPlay();
+
+		int total = _session.Play!.Runtime!.World.Count;
+		const int PageSize = 8;
+		int pages = (total + PageSize - 1) / PageSize;
+
+		Assert.True(pages > 1, "The test needs more than one page.");
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		List<Label> firstPage = [.. QueryRows(panel)];
+
+		Assert.True(firstPage[0].Focus());
+
+		_context.KeyDown(UiKey.PageDown);
+		_context.BeginFrame(0.2, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				$"Page 2 of {pages}",
+				StringComparison.Ordinal));
+
+		List<Label> secondPage = [.. QueryRows(panel)];
+
+		Assert.True(
+			secondPage[0].HasFocus,
+			"Page Down must land on the first row of the next page.");
+
+		Assert.NotNull(_session.ActiveEntityId);
+
+		_context.KeyDown(UiKey.PageUp);
+		_context.BeginFrame(0.3, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				$"Page 1 of {pages}",
+				StringComparison.Ordinal));
+
+		List<Label> back = [.. QueryRows(panel)];
+
+		Assert.True(
+			back[^1].HasFocus,
+			"Page Up must land on the last row of the previous page.");
+	}
+
+	[Fact]
+	public void QueryResults_PagerStaysOutsideTheScrollingDocument()
+	{
+		// Enough entities to fill a page and enable Next, and enough of
+		// them that the document is taller than a short panel.
+		for (int index = 0; index < 10; index++)
+		{
+			_session.CreateEntity($"Probe {index}");
+		}
+
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		// Shrinking the panel makes the document taller than the view,
+		// which is the case a pager inside the scroll would disappear in.
+		_context.BeginFrame(0.2, new UiSize(600f, 420f), UiPoint.Zero);
+
+		ScrollView scroll = Descendants(panel).OfType<ScrollView>().Single();
+		Button next = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Next");
+
+		Assert.DoesNotContain(next, Descendants(scroll));
+
+		Assert.True(
+			next.GlobalVisualBounds.Height > 0f,
+			"The pinned pager must be laid out outside the scroll area.");
+
+		Assert.True(next.IsEnabled);
+	}
+
+	[Fact]
 	public void QueryResults_RememberedComponentsRerunTheQueryOnPlay()
 	{
 		_session.CreateEntity("Alpha");

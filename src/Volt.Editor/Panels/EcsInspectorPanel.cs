@@ -338,7 +338,6 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		doc.Add(_runQuery);
 		doc.Add(_queryFilter);
 		doc.Add(sortRow);
-		doc.Add(_queryPager);
 		doc.Add(_queryRows);
 		doc.Add(_queryResult);
 
@@ -351,6 +350,11 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		_content = new StackPanel();
 		_content.Add(scroll);
+
+		// The pager sits below the document rather than at the end of
+		// it, so changing pages and copying the list stay in reach no
+		// matter how far the panel has been scrolled.
+		_content.Add(_queryPager);
 
 		_empty = new EmptyStateView(
 			UiIcon.Inspector,
@@ -1209,6 +1213,14 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			if (key.Key is UiKey.Up or UiKey.Down)
 			{
 				return MoveToNeighbour(key.Key == UiKey.Down ? 1 : -1);
+			}
+
+			if (key.Key is UiKey.PageUp or UiKey.PageDown)
+			{
+				// A page key jumps straight to the neighbouring page, so
+				// it uses the same entry point the arrow uses at an edge.
+				return _stepPage?.Invoke(
+					key.Key == UiKey.PageDown ? 1 : -1) ?? false;
 			}
 
 			return base.OnKeyDown(key);

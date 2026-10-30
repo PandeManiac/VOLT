@@ -125,9 +125,12 @@ list and a counter reports `Page N of M`. Clicking a row selects its
 authored object, and runtime-only rows are disabled because they have
 no authored object. A name filter narrows the list, and **Scene
 order**, **Name**, and **Archetype** buttons reorder it.
-**Copy Results** writes the filtered list to the clipboard as one line
-per entity. The arrow keys move focus and selection between rows and
-step onto the next or previous page from the edge of one. The filter,
+The pager row is pinned below the scrolling document instead of
+scrolling with it. **Copy Results** writes the filtered list to the
+clipboard as one line per entity. The arrow keys move focus and
+selection between rows and step onto the next or previous page from the
+edge of one, and `Page Up` and `Page Down` jump a whole page at a time.
+The filter,
 the sort, and the checked components are part of the panel's captured
 state, so they come back after an interface-scale rebuild or reopening
 the panel, and the remembered query runs again when Play Mode builds a

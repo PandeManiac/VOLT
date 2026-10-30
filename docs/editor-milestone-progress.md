@@ -473,6 +473,38 @@ Same branch, on top of `6aeb8c1`.
   not been seen in a window. Focus and selection are driven through the
   headless input context, not a real window or a real clipboard.
 
+## A pinned pager and page keys (October 2026)
+
+Same branch, on top of `181e338`.
+
+### What changed
+
+- **Pinned pager.** The pager row, including **Copy Results**, was the
+  last item inside the panel's scrolling document, so a long archetype
+  or query section pushed it out of view. It now sits below the scroll
+  area in the panel's own layout, which keeps page changes and copying
+  in reach at any scroll offset.
+- **Page Up and Page Down.** On a focused query row they jump a whole
+  page and land on the row an arrow would have reached: Page Down on
+  the first selectable row of the next page, Page Up on the last
+  selectable row of the previous one. Both reuse the arrow's page-edge
+  path, so a page holding only runtime entities is still not entered.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Tests` 286 passed, 0 failed.
+- Headless tests press Page Down and Page Up and check the pager label,
+  focus, and selection on the entered pages, and assert the pager is
+  laid out outside the `ScrollView` rather than inside its document.
+
+### Not verified here
+
+- No GPU or interactive session. The pager is proven to be outside the
+  scroll view in the widget tree and laid out in a short panel, but it
+  has not been seen at a real interface scale, and a wheel or drag
+  scroll of the document was not replayed against a window.
+
 ### Next
 
 - Project-owned gameplay assemblies (Milestone E).
