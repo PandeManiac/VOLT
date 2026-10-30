@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Git calls this before a push. Enable it once per clone with
+#   git config core.hooksPath .githooks
+# The check itself lives in tools/pre-push-check.sh so it can be run by hand.
+exec "$(dirname "$0")/../tools/pre-push-check.sh"

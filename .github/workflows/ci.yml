@@ -128,6 +128,18 @@ jobs:
           --overhead RebuildingRefresh:SteadyRefresh
           --max-overhead 2.2
 
+      # The hosted means differ from the committed baseline by more
+      # than the ratio does, so keep the run itself: a later change
+      # can be compared against what that machine actually measured.
+      # always() keeps it on a failed comparison, where the numbers
+      # matter most.
+      - name: Keep the recorded run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecs-refresh-benchmark
+          path: ${{ runner.temp }}/ecs-refresh/BenchmarkRun.txt
+
   # Hardware validation is a deliberately requested workflow run, not a
   # dependency of ordinary pushes. A missing self-hosted GPU runner must not
   # leave normal CI queued indefinitely.

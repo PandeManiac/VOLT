@@ -699,6 +699,14 @@ Same branch, on top of `12f3dfd`.
   demo ran, and the benchmark job passed with the quotient gate in place,
   so both gates are proven on a hosted runner. The hosted means are not
   recorded here, since only the ratio means the same thing across machines.
+- **The gates run before a push.** `tools/pre-push-check.sh` runs the
+  formatting check, both tooling suites, the contents check, shell syntax,
+  and whitespace in the commits about to leave and the working tree;
+  `.githooks/pre-push` calls it once a clone sets `core.hooksPath`. The
+  drift that failed the hosted format step would then have failed in the
+  terminal instead. CI also keeps its recorded run as an artifact, so a
+  hosted machine's means can be compared after the fact rather than only
+  its ratio.
 
 ### Next
 

@@ -54,6 +54,30 @@ GitHub's slug rule. Run it directly; it uses only the standard library:
 python3 tools/tests/test-doc-contents.py
 ```
 
+## Before a push
+
+`tools/pre-push-check.sh` runs the gates hosted CI checks first:
+formatting, the documentation and benchmark tooling tests, the
+document contents check, shell syntax, and whitespace in both the
+commits about to leave and the working tree. It needs .NET 10 and
+Python 3, and exits non-zero if any gate fails:
+
+```bash
+./tools/pre-push-check.sh
+```
+
+Git runs it automatically once the clone knows where the hook lives,
+which is a one-time setting per clone that nothing else sets:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook only calls the script, so it stays short and the script can
+be run by hand. It covers the fast gates, not the build, the test
+suite, the screenshot check, or the benchmark itself; the formatting
+gate restores first, so a cold tree makes it the slow step.
+
 ## ECS refresh benchmark
 
 `tools/benchmark-ecs-refresh.sh` records the ECS inspector's two refresh
@@ -101,7 +125,9 @@ its recorded baseline, or when the quotient exceeds 2.2. Hosted runners
 are shared and vary by several percent between runs, so the per-mean gate
 catches a collapsed path rather than small drift, while the quotient
 catches a rebuilding slowdown the wide limit would pass; compare two
-recorded runs when the change matters.
+recorded runs when the change matters. CI keeps its own run as the
+`ecs-refresh-benchmark` artifact, so the numbers a hosted machine
+measured can be compared with the committed baseline after the fact.
 
 ## Comparing a windowed capture
 
