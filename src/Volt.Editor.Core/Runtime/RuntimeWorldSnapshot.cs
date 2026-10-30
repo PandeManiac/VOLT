@@ -281,12 +281,13 @@ public sealed class RuntimeWorldSnapshot
 
 	/// <summary>
 	/// Runs a real ECS query over the runtime world and reports the
-	/// archetypes and entity count it matched.
+	/// archetypes it matched and the entities stored in them.
 	/// </summary>
 	/// <remarks>
 	/// The world's structure is frozen for the duration so a concurrent
-	/// structural change cannot invalidate the enumeration. The result
-	/// holds only counts and signature strings.
+	/// structural change cannot invalidate the enumeration. Matches are
+	/// ordered by authored scene order, with runtime-only entities after
+	/// them, so a paged view stays stable between queries.
 	/// </remarks>
 	public static RuntimeQueryResult RunQuery(
 		RuntimeScene runtime,
@@ -304,29 +305,62 @@ public sealed class RuntimeWorldSnapshot
 
 		ComponentQuery query = new(required: signature);
 		List<string> signatures = [];
-		int entities = 0;
+		List<RuntimeQueryEntity> entities = [];
+		Dictionary<Entity, RuntimeEntityInfo> byHandle = [];
+		Dictionary<Entity, int> authoredOrder = [];
+
+		foreach (RuntimeEntityInfo info in runtime.Entities)
+		{
+			byHandle[info.Entity] = info;
+			authoredOrder[info.Entity] = authoredOrder.Count;
+		}
 
 		using World.StructuralFreezeScope freeze =
 			runtime.World.FreezeStructure();
 
 		foreach (WorldQueryChunk chunk in runtime.World.Query(query))
 		{
-			entities += chunk.Count;
-
 			string description = DescribeSignature(chunk.Archetype.Signature);
 
 			if (!signatures.Contains(description))
 			{
 				signatures.Add(description);
 			}
+
+			foreach (Entity handle in chunk.GetEntities())
+			{
+				byHandle.TryGetValue(handle, out RuntimeEntityInfo? info);
+
+				entities.Add(new RuntimeQueryEntity(
+					handle,
+					info?.AuthoredId,
+					info?.Name ?? string.Empty,
+					description));
+			}
 		}
+
+		entities.Sort((left, right) =>
+		{
+			int leftOrder = authoredOrder.GetValueOrDefault(
+				left.Handle,
+				int.MaxValue);
+
+			int rightOrder = authoredOrder.GetValueOrDefault(
+				right.Handle,
+				int.MaxValue);
+
+			return leftOrder != rightOrder
+				? leftOrder.CompareTo(rightOrder)
+				: left.Handle.Index.CompareTo(right.Handle.Index);
+		});
 
 		signatures.Sort(StringComparer.Ordinal);
 
 		return new RuntimeQueryResult(
 			signatures.Count,
-			entities,
-			signatures);
+			entities.Count,
+			signatures,
+			entities);
 	}
 
 	/// <summary>
@@ -576,9 +610,23 @@ public sealed class RuntimeWorldSnapshot
 }
 
 /// <summary>
+/// One entity matched by a runtime component query.
+/// </summary>
+/// <remarks>
+/// <see cref="AuthoredId"/> is null for an entity the world created
+/// outside the authored scene, and <see cref="Name"/> is empty then.
+/// </remarks>
+public sealed record RuntimeQueryEntity(
+	Entity Handle,
+	Guid? AuthoredId,
+	string Name,
+	string Archetype);
+
+/// <summary>
 /// The measured result of a component query over the runtime world.
 /// </summary>
 public sealed record RuntimeQueryResult(
 	int ArchetypeCount,
 	int EntityCount,
-	IReadOnlyList<string> Signatures);
+	IReadOnlyList<string> Signatures,
+	IReadOnlyList<RuntimeQueryEntity> Entities);

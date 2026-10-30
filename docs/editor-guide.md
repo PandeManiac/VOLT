@@ -396,7 +396,10 @@ is running it shows:
 - every allocated archetype with its entity count, chunk count,
   occupancy, and the native bytes its chunks report;
 - a query builder that runs `World.Query` with every checked component
-  required and reports the matched archetypes and entity count.
+  required, reports the matched archetypes and entity count, and lists
+  the matching entities eight at a time with their ECS handle, authored
+  name, and archetype. **Prev** and **Next** move between pages and a
+  `Page N of M` counter reports the position in the list.
 
 Values refresh four times a second instead of on every fixed step, and
 each capture copies every value it displays, so stopping Play Mode
@@ -502,8 +505,8 @@ not yet a mesh-rendering game framework.
   C# assemblies into a separate runtime is not implemented.
 - The ECS panel edits only components the selected runtime entity
   already has. Runtime entity creation, adding or removing components,
-  rotation editing, and per-entity query result lists are not
-  implemented; the query reports matched archetypes and counts.
+  and rotation editing are not implemented. Query results page through
+  the matched entities but cannot be sorted or exported.
 - Floating dock windows, asset thumbnails, and an asset import pipeline
   beyond discovery are not implemented.
 - Text entry covers Unicode text and clipboard operations. IME

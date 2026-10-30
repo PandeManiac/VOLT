@@ -115,7 +115,7 @@ public sealed class RuntimeWorldSnapshotTests
 	public void RunQuery_UsesTheRealWorldQuery()
 	{
 		SceneDocument scene = new("Snapshot Scene");
-		scene.CreateEntity("Player");
+		SceneEntity player = scene.CreateEntity("Player");
 		scene.CreateEntity("Floor");
 
 		using RuntimeScene runtime = new(scene);
@@ -127,6 +127,40 @@ public sealed class RuntimeWorldSnapshotTests
 		Assert.Equal(2, result.EntityCount);
 		Assert.Equal(1, result.ArchetypeCount);
 		Assert.Single(result.Signatures);
+		Assert.Equal(2, result.Entities.Count);
+
+		RuntimeQueryEntity row = Assert.Single(
+			result.Entities,
+			entity => entity.AuthoredId == player.Id);
+
+		Assert.Equal("Player", row.Name);
+		Assert.Equal(runtime.Find(player.Id)!.Entity, row.Handle);
+		Assert.Contains("Position", row.Archetype);
+
+		// Authored order keeps the paged list stable: Player was
+		// created first, so it is the first row.
+		Assert.Equal(player.Id, result.Entities[0].AuthoredId);
+	}
+
+	[Fact]
+	public void RunQuery_ReportsRuntimeOnlyEntitiesWithoutAnAuthoredId()
+	{
+		SceneDocument scene = new("Snapshot Scene");
+
+		using RuntimeScene runtime = new(scene);
+
+		Entity runtimeOnly = runtime.World.CreateEntity();
+		runtime.World.AddComponent(runtimeOnly, new PositionComponent(Vector3.One));
+
+		RuntimeQueryResult result = RuntimeWorldSnapshot.RunQuery(
+			runtime,
+			[ComponentRegistry.Get<PositionComponent>()]);
+
+		RuntimeQueryEntity row = Assert.Single(result.Entities);
+
+		Assert.Equal(runtimeOnly, row.Handle);
+		Assert.Null(row.AuthoredId);
+		Assert.Equal(string.Empty, row.Name);
 	}
 
 	[Fact]

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Numerics;
+using Volt.Ecs;
 using Volt.Ecs.Component;
 using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
@@ -37,6 +38,7 @@ namespace Volt.Editor.Panels;
 internal sealed class EcsInspectorPanel : Panel, IFrameTick
 {
 	private const double RefreshIntervalSeconds = 0.25;
+	private const int QueryPageSize = 8;
 
 	private readonly EditorSession _session;
 	private readonly Label _world;
@@ -53,9 +55,16 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly StackPanel _queryFilters;
 	private readonly Label _queryResult;
 	private readonly Button _runQuery;
+	private readonly StackPanel _queryRows;
+	private readonly StackPanel _queryPager;
+	private readonly Label _queryPageLabel;
+	private readonly Button _previousPage;
+	private readonly Button _nextPage;
 	private readonly EmptyStateView _empty;
 	private readonly StackPanel _content;
 	private readonly List<(ComponentType Type, CheckBox Box)> _filters = [];
+	private readonly List<RuntimeQueryEntity> _queryMatches = [];
+	private int _queryPage;
 	private readonly List<Vector3Field> _editors = [];
 	private readonly List<Button> _applyButtons = [];
 	private readonly Label _editStatus;
@@ -172,7 +181,8 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		doc.Add(new Label(
 			"Runs a real World.Query over the runtime archetypes with " +
-			"every checked component required.")
+			"every checked component required, then lists the matching " +
+			"entities a page at a time.")
 		{
 			Font = Theme.Fonts.Small,
 			TextColor = Theme.Palette.TextDisabled,
@@ -213,6 +223,39 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		_runQuery.Clicked += _ => RunQuery();
 
+		_previousPage = new Button("Prev")
+		{
+			Font = Theme.Fonts.Small,
+			MinHeight = 20f
+		};
+
+		_previousPage.Clicked += _ => ChangeQueryPage(-1);
+
+		_nextPage = new Button("Next")
+		{
+			Font = Theme.Fonts.Small,
+			MinHeight = 20f
+		};
+
+		_nextPage.Clicked += _ => ChangeQueryPage(1);
+
+		_queryPageLabel = MutedLabel();
+
+		_queryPager = new StackPanel(UiOrientation.Horizontal)
+		{
+			Spacing = 4f
+		};
+
+		_queryPager.Add(_previousPage);
+		_queryPager.Add(_nextPage);
+		_queryPager.Add(_queryPageLabel);
+		_queryPager.IsVisible = false;
+
+		_queryRows = new StackPanel
+		{
+			Spacing = 1f
+		};
+
 		_queryResult = new Label(string.Empty)
 		{
 			Font = Theme.Fonts.Small,
@@ -221,6 +264,8 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		doc.Add(_queryFilters);
 		doc.Add(_runQuery);
+		doc.Add(_queryPager);
+		doc.Add(_queryRows);
 		doc.Add(_queryResult);
 
 		ScrollView scroll = new()
@@ -316,7 +361,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		{
 			DisposeEditors();
 			_componentRows.ClearChildren();
-			_queryResult.Text = string.Empty;
+			ClearQuery();
 			_editStatus.Text = string.Empty;
 			_divergence.Text = string.Empty;
 			return;
@@ -682,6 +727,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		if (required.Count == 0)
 		{
+			ClearQuery();
 			_queryResult.Text =
 				"Check at least one component to require it.";
 
@@ -692,6 +738,11 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		{
 			RuntimeQueryResult result =
 				RuntimeWorldSnapshot.RunQuery(runtime, required);
+
+			_queryMatches.Clear();
+			_queryMatches.AddRange(result.Entities);
+			_queryPage = 0;
+			RenderQueryPage();
 
 			_queryResult.Text = string.Format(
 				CultureInfo.InvariantCulture,
@@ -707,8 +758,98 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		{
 			// A structural change between the click and the query must
 			// report itself rather than tear down the panel.
+			ClearQuery();
 			_queryResult.Text = $"Query failed: {exception.Message}";
 		}
+	}
+
+	private void ChangeQueryPage(int delta)
+	{
+		if (_queryMatches.Count == 0)
+		{
+			return;
+		}
+
+		int pages = (_queryMatches.Count + QueryPageSize - 1) / QueryPageSize;
+		int next = Math.Clamp(_queryPage + delta, 0, pages - 1);
+
+		if (next == _queryPage)
+		{
+			return;
+		}
+
+		_queryPage = next;
+		RenderQueryPage();
+	}
+
+	private void RenderQueryPage()
+	{
+		_queryRows.ClearChildren();
+
+		if (_queryMatches.Count == 0)
+		{
+			_queryPager.IsVisible = false;
+			_queryPageLabel.Text = string.Empty;
+			return;
+		}
+
+		int pages = (_queryMatches.Count + QueryPageSize - 1) / QueryPageSize;
+		_queryPage = Math.Clamp(_queryPage, 0, pages - 1);
+
+		int start = _queryPage * QueryPageSize;
+		int end = Math.Min(_queryMatches.Count, start + QueryPageSize);
+
+		for (int index = start; index < end; index++)
+		{
+			RuntimeQueryEntity match = _queryMatches[index];
+			string name = match.Name.Length > 0
+				? match.Name
+				: "(runtime only)";
+
+			_queryRows.Add(new Label(string.Format(
+				CultureInfo.InvariantCulture,
+				"{0}   {1}   {2}",
+				name,
+				HandleText(match.Handle),
+				match.Archetype))
+			{
+				Name = "QueryResultRow",
+				Font = Theme.Fonts.MonoSmall,
+				TextColor = Theme.Palette.Text,
+				Wrap = UiTextWrap.Wrap
+			});
+		}
+
+		_previousPage.IsEnabled = _queryPage > 0;
+		_nextPage.IsEnabled = _queryPage + 1 < pages;
+
+		_queryPageLabel.Text = string.Format(
+			CultureInfo.InvariantCulture,
+			"Page {0:N0} of {1:N0}  ({2:N0} entities)",
+			_queryPage + 1,
+			pages,
+			_queryMatches.Count);
+
+		_queryPager.IsVisible = true;
+	}
+
+	private void ClearQuery()
+	{
+		_queryMatches.Clear();
+		_queryPage = 0;
+		_queryRows.ClearChildren();
+		_queryPager.IsVisible = false;
+		_queryPageLabel.Text = string.Empty;
+		_queryResult.Text = string.Empty;
+	}
+
+	private static string HandleText(Entity handle)
+	{
+		return string.Format(
+			CultureInfo.InvariantCulture,
+			"Entity {0}:{1}",
+			handle.Index,
+			handle.Generation);
 	}
 
 	private static string ShortName(Type type)

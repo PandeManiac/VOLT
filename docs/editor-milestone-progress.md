@@ -319,3 +319,42 @@ Same branch, on top of `0cacea5`.
 
 - Per-entity query results with paging.
 - Project-owned gameplay assemblies (Milestone E).
+
+## Paged query results (October 2026)
+
+Same branch, on top of `b9d1963`.
+
+### What changed
+
+- **`RuntimeQueryResult`.** `RunQuery` now returns one
+  `RuntimeQueryEntity` per match, with the ECS handle, the authored id
+  and name when one exists, and the archetype signature. Matches follow
+  authored scene order, with runtime-only entities after them, so paging
+  stays stable between queries.
+- **ECS panel.** Results render eight rows per page with **Prev** and
+  **Next** buttons and a `Page N of M (X entities)` counter, below the
+  query's existing counts and signature summary. The pager hides until
+  a query matches; a new query, a failed query, and stopping Play all
+  clear the list.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Core.Tests` 66 passed, `Volt.Editor.Tests` 276 passed.
+- New query assertions cover an authored entity's handle, name, and
+  archetype, the stable authored ordering, and a runtime-only entity
+  reporting a null authored id and an empty name.
+- A headless panel test runs a real Position query over more than one
+  page of entities, checks the eight-row first page and page counter,
+  pages forward and back with laid-out buttons, and confirms Prev is
+  disabled on the first page.
+
+### Not verified here
+
+- No GPU or interactive session, so the pager and result rows have not
+  been seen in a window. The test lays the panel out on a tall surface,
+  so scrolling the panel down to the query section was not exercised.
+
+### Next
+
+- Project-owned gameplay assemblies (Milestone E).

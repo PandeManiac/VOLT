@@ -318,6 +318,99 @@ public sealed class EcsInspectorEditingTests : IDisposable
 				StringComparison.Ordinal));
 	}
 
+	[Fact]
+	public void QueryResults_PageThroughMatchedEntities()
+	{
+		for (int index = 0; index < 10; index++)
+		{
+			_session.CreateEntity($"Probe {index}");
+		}
+
+		_session.StartPlay();
+
+		int total = _session.Play!.Runtime!.World.Count;
+		const int PageSize = 8;
+		int pages = (total + PageSize - 1) / PageSize;
+
+		Assert.True(
+			total > PageSize,
+			"The test needs more entities than one page holds.");
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		CheckBox position = Descendants(panel)
+			.OfType<CheckBox>()
+			.Single(box => box.Text == "Position");
+
+		Click(position.GlobalVisualBounds.Center);
+		Assert.True(position.IsChecked);
+
+		Button run = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Run Query");
+
+		Click(run.GlobalVisualBounds.Center);
+
+		// The pager becomes visible only once a query matches, so the
+		// first page has to be laid out before its buttons can be hit.
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Equal(PageSize, QueryRows(panel).Count());
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				$"Page 1 of {pages}",
+				StringComparison.Ordinal));
+
+		Button next = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Next");
+
+		Assert.True(next.IsEnabled);
+		Assert.True(
+			next.GlobalVisualBounds.Width > 0f,
+			"The next-page button must be laid out.");
+
+		Click(next.GlobalVisualBounds.Center);
+		_context.BeginFrame(0.2, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Equal(
+			Math.Min(PageSize, total - PageSize),
+			QueryRows(panel).Count());
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				$"Page 2 of {pages}",
+				StringComparison.Ordinal));
+
+		Button previous = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Prev");
+
+		Assert.True(previous.IsEnabled);
+
+		Click(previous.GlobalVisualBounds.Center);
+		_context.BeginFrame(0.3, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Equal(PageSize, QueryRows(panel).Count());
+		Assert.False(previous.IsEnabled);
+	}
+
+	private static IEnumerable<Label> QueryRows(EcsInspectorPanel panel)
+	{
+		return Descendants(panel)
+			.OfType<Label>()
+			.Where(label => string.Equals(
+				label.Name,
+				"QueryResultRow",
+				StringComparison.Ordinal));
+	}
+
 	private static Button ApplyToSceneButton(NumericField field)
 	{
 		// The field sits in an axis row, the axis row sits in the
