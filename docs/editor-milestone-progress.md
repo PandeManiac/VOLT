@@ -358,3 +358,46 @@ Same branch, on top of `b9d1963`.
 ### Next
 
 - Project-owned gameplay assemblies (Milestone E).
+
+## Query row selection, filtering, and sorting (October 2026)
+
+Same branch, on top of `a19cba3`.
+
+### What changed
+
+- **Rows select authored objects.** A query row calls
+  `EditorSession.Select` with the entity's authored id, so the
+  Hierarchy, Inspector, and viewport follow the click. Runtime-only rows
+  have no authored object, so they are rendered disabled and muted
+  instead of silently doing nothing.
+- **Filtering.** A name field filters the matched list
+  case-insensitively. Runtime-only rows have no name, so any filter hides
+  them.
+- **Sorting.** **Scene order**, **Name**, and **Archetype** buttons
+  reorder the view. Ties fall back to name and then handle index, so
+  paging stays deterministic. Changing the filter or sort returns to
+  page one.
+- **Counter.** The page label reports `X of Y entities` while a filter is
+  active and plain `X entities` otherwise, and an empty view says that no
+  entity matches the filter.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Core.Tests` 66 passed, `Volt.Editor.Tests` 279 passed.
+- Headless tests click a row and check the session's active entity, click
+  a disabled runtime-only row and check the active entity is unchanged,
+  and sort by name and then type a name filter to check the narrowed row
+  and the `1 of N entities` counter.
+
+### Not verified here
+
+- No GPU or interactive session, so none of the controls have been seen
+  in a window. The tests lay the panel out on a tall surface, so
+  scrolling down to the query section is not exercised. Disabled rows
+  rely on the framework's input gating rather than a distinct disabled
+  treatment.
+
+### Next
+
+- Project-owned gameplay assemblies (Milestone E).

@@ -121,7 +121,10 @@ editable row shows the authored value and flags it when it differs from
 the runtime value, and the section header lists the diverged channels.
 Queries list the matched entities eight at a time with their handles,
 authored names, and archetypes; **Prev** and **Next** page through the
-list and a counter reports `Page N of M`.
+list and a counter reports `Page N of M`. Clicking a row selects its
+authored object, and runtime-only rows are disabled because they have
+no authored object. A name filter narrows the list, and **Scene
+order**, **Name**, and **Archetype** buttons reorder it.
 
 ## Docking
 
@@ -140,8 +143,8 @@ controls; no visible control promises them:
 - No custom C# gameplay assembly loading at runtime; gameplay is
   composed from built-in behaviours and authored component data.
 - The ECS panel edits only components the runtime entity already has,
-  and cannot add or remove them. It cannot edit rotation. Query results
-  page through matched entities but cannot be sorted or exported. Only position and scale can be copied back to the scene;
+  and cannot add or remove them. It cannot edit rotation. Query results can be
+  paged, filtered, sorted, and selected, but cannot be exported. Only position and scale can be copied back to the scene;
   velocity and angular velocity are runtime-only.
 - No IME candidate window or complex text shaping.
 - Gameplay and scene rendering use a single pass with no shadows or

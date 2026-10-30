@@ -6,6 +6,7 @@ using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
 using Volt.Editor.Viewport;
 using Volt.Ui;
+using Volt.Ui.Input;
 using Volt.Ui.Layout;
 using Volt.Ui.Rendering;
 using Volt.Ui.Styling;
@@ -55,6 +56,10 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly StackPanel _queryFilters;
 	private readonly Label _queryResult;
 	private readonly Button _runQuery;
+	private readonly TextField _queryFilter;
+	private readonly Button _sortScene;
+	private readonly Button _sortName;
+	private readonly Button _sortArchetype;
 	private readonly StackPanel _queryRows;
 	private readonly StackPanel _queryPager;
 	private readonly Label _queryPageLabel;
@@ -64,6 +69,8 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly StackPanel _content;
 	private readonly List<(ComponentType Type, CheckBox Box)> _filters = [];
 	private readonly List<RuntimeQueryEntity> _queryMatches = [];
+	private readonly List<RuntimeQueryEntity> _queryView = [];
+	private QuerySort _querySort;
 	private int _queryPage;
 	private readonly List<Vector3Field> _editors = [];
 	private readonly List<Button> _applyButtons = [];
@@ -182,7 +189,9 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		doc.Add(new Label(
 			"Runs a real World.Query over the runtime archetypes with " +
 			"every checked component required, then lists the matching " +
-			"entities a page at a time.")
+			"entities a page at a time. Click a row to select its authored " +
+			"object. The list can be filtered by name and sorted by scene " +
+			"order, name, or archetype.")
 		{
 			Font = Theme.Fonts.Small,
 			TextColor = Theme.Palette.TextDisabled,
@@ -222,6 +231,29 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		};
 
 		_runQuery.Clicked += _ => RunQuery();
+
+		_queryFilter = new TextField
+		{
+			Name = "QueryFilter",
+			Placeholder = "Filter by name",
+			Font = Theme.Fonts.Small,
+			MinHeight = 20f
+		};
+
+		_queryFilter.TextChanged += _ => ApplyQueryView(resetPage: true);
+
+		_sortScene = CreateSortButton("Scene order", QuerySort.SceneOrder);
+		_sortName = CreateSortButton("Name", QuerySort.Name);
+		_sortArchetype = CreateSortButton("Archetype", QuerySort.Archetype);
+
+		StackPanel sortRow = new(UiOrientation.Horizontal)
+		{
+			Spacing = 4f
+		};
+
+		sortRow.Add(_sortScene);
+		sortRow.Add(_sortName);
+		sortRow.Add(_sortArchetype);
 
 		_previousPage = new Button("Prev")
 		{
@@ -264,6 +296,8 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		doc.Add(_queryFilters);
 		doc.Add(_runQuery);
+		doc.Add(_queryFilter);
+		doc.Add(sortRow);
 		doc.Add(_queryPager);
 		doc.Add(_queryRows);
 		doc.Add(_queryResult);
@@ -741,8 +775,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 			_queryMatches.Clear();
 			_queryMatches.AddRange(result.Entities);
-			_queryPage = 0;
-			RenderQueryPage();
+			ApplyQueryView(resetPage: true);
 
 			_queryResult.Text = string.Format(
 				CultureInfo.InvariantCulture,
@@ -765,12 +798,12 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 	private void ChangeQueryPage(int delta)
 	{
-		if (_queryMatches.Count == 0)
+		if (_queryView.Count == 0)
 		{
 			return;
 		}
 
-		int pages = (_queryMatches.Count + QueryPageSize - 1) / QueryPageSize;
+		int pages = (_queryView.Count + QueryPageSize - 1) / QueryPageSize;
 		int next = Math.Clamp(_queryPage + delta, 0, pages - 1);
 
 		if (next == _queryPage)
@@ -782,40 +815,112 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		RenderQueryPage();
 	}
 
+	private void ApplyQueryView(bool resetPage)
+	{
+		IEnumerable<RuntimeQueryEntity> view = _queryMatches;
+		string filter = _queryFilter.Text.Trim();
+
+		if (filter.Length > 0)
+		{
+			view = view.Where(match => match.Name.Contains(
+				filter,
+				StringComparison.OrdinalIgnoreCase));
+		}
+
+		view = _querySort switch
+		{
+			QuerySort.Name => view
+				.OrderBy(match => match.Name.Length == 0 ? 1 : 0)
+				.ThenBy(
+					match => match.Name,
+					StringComparer.OrdinalIgnoreCase)
+				.ThenBy(match => match.Handle.Index),
+			QuerySort.Archetype => view
+				.OrderBy(match => match.Archetype, StringComparer.Ordinal)
+				.ThenBy(
+					match => match.Name,
+					StringComparer.OrdinalIgnoreCase)
+				.ThenBy(match => match.Handle.Index),
+			_ => view
+		};
+
+		_queryView.Clear();
+		_queryView.AddRange(view);
+
+		if (resetPage)
+		{
+			_queryPage = 0;
+		}
+
+		RenderQueryPage();
+	}
+
+	private void SetQuerySort(QuerySort sort)
+	{
+		if (_querySort == sort)
+		{
+			return;
+		}
+
+		_querySort = sort;
+		_sortScene.IsSelected = sort == QuerySort.SceneOrder;
+		_sortName.IsSelected = sort == QuerySort.Name;
+		_sortArchetype.IsSelected = sort == QuerySort.Archetype;
+		ApplyQueryView(resetPage: true);
+	}
+
 	private void RenderQueryPage()
 	{
 		_queryRows.ClearChildren();
 
-		if (_queryMatches.Count == 0)
+		if (_queryView.Count == 0)
 		{
 			_queryPager.IsVisible = false;
 			_queryPageLabel.Text = string.Empty;
+
+			if (_queryMatches.Count > 0)
+			{
+				_queryRows.Add(new Label("No entities match the filter.")
+				{
+					Name = "QueryEmpty",
+					Font = Theme.Fonts.Small,
+					TextColor = Theme.Palette.TextDisabled,
+					Wrap = UiTextWrap.Wrap
+				});
+			}
+
 			return;
 		}
 
-		int pages = (_queryMatches.Count + QueryPageSize - 1) / QueryPageSize;
+		int pages = (_queryView.Count + QueryPageSize - 1) / QueryPageSize;
 		_queryPage = Math.Clamp(_queryPage, 0, pages - 1);
 
 		int start = _queryPage * QueryPageSize;
-		int end = Math.Min(_queryMatches.Count, start + QueryPageSize);
+		int end = Math.Min(_queryView.Count, start + QueryPageSize);
 
 		for (int index = start; index < end; index++)
 		{
-			RuntimeQueryEntity match = _queryMatches[index];
+			RuntimeQueryEntity match = _queryView[index];
 			string name = match.Name.Length > 0
 				? match.Name
 				: "(runtime only)";
 
-			_queryRows.Add(new Label(string.Format(
-				CultureInfo.InvariantCulture,
-				"{0}   {1}   {2}",
-				name,
-				HandleText(match.Handle),
-				match.Archetype))
+			Guid? authoredId = match.AuthoredId;
+
+			_queryRows.Add(new QueryResultRow(
+				string.Format(
+					CultureInfo.InvariantCulture,
+					"{0}   {1}   {2}",
+					name,
+					HandleText(match.Handle),
+					match.Archetype),
+				authoredId is Guid id ? () => _session.Select(id) : null)
 			{
 				Name = "QueryResultRow",
 				Font = Theme.Fonts.MonoSmall,
-				TextColor = Theme.Palette.Text,
+				TextColor = authoredId is null
+					? Theme.Palette.TextDisabled
+					: Theme.Palette.Text,
 				Wrap = UiTextWrap.Wrap
 			});
 		}
@@ -823,12 +928,23 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		_previousPage.IsEnabled = _queryPage > 0;
 		_nextPage.IsEnabled = _queryPage + 1 < pages;
 
+		string count = _queryView.Count == _queryMatches.Count
+			? string.Format(
+				CultureInfo.InvariantCulture,
+				"{0:N0} entities",
+				_queryView.Count)
+			: string.Format(
+				CultureInfo.InvariantCulture,
+				"{0:N0} of {1:N0} entities",
+				_queryView.Count,
+				_queryMatches.Count);
+
 		_queryPageLabel.Text = string.Format(
 			CultureInfo.InvariantCulture,
-			"Page {0:N0} of {1:N0}  ({2:N0} entities)",
+			"Page {0:N0} of {1:N0}  ({2})",
 			_queryPage + 1,
 			pages,
-			_queryMatches.Count);
+			count);
 
 		_queryPager.IsVisible = true;
 	}
@@ -836,11 +952,26 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private void ClearQuery()
 	{
 		_queryMatches.Clear();
+		_queryView.Clear();
 		_queryPage = 0;
 		_queryRows.ClearChildren();
 		_queryPager.IsVisible = false;
 		_queryPageLabel.Text = string.Empty;
 		_queryResult.Text = string.Empty;
+	}
+
+	private Button CreateSortButton(string text, QuerySort sort)
+	{
+		Button button = new(text)
+		{
+			Font = Theme.Fonts.Small,
+			MinHeight = 20f,
+			IsSelected = _querySort == sort
+		};
+
+		button.Clicked += _ => SetQuerySort(sort);
+
+		return button;
 	}
 
 	private static string HandleText(Entity handle)
@@ -861,5 +992,52 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			name.Length > Suffix.Length
 				? name[..^Suffix.Length]
 				: name;
+	}
+
+	private enum QuerySort
+	{
+		SceneOrder,
+		Name,
+		Archetype
+	}
+
+	/// <summary>
+	/// A query result row that selects the authored object it names.
+	/// </summary>
+	/// <remarks>
+	/// Runtime-only entities have no authored object, so their rows are
+	/// inert and muted rather than opening an Inspector target that does
+	/// not exist.
+	/// </remarks>
+	private sealed class QueryResultRow : Label
+	{
+		private readonly Action? _select;
+
+		public QueryResultRow(string text, Action? select)
+			: base(text)
+		{
+			_select = select;
+			IsEnabled = select is not null;
+			IsFocusable = select is not null;
+			Cursor = select is null ? UiCursor.Arrow : UiCursor.Hand;
+		}
+
+		protected override void OnClick(int clickCount)
+		{
+			base.OnClick(clickCount);
+			_select?.Invoke();
+		}
+
+		protected override bool OnKeyDown(UiKeyEvent key)
+		{
+			if (_select is not null &&
+				key.Key is UiKey.Enter or UiKey.Space)
+			{
+				OnClick(1);
+				return true;
+			}
+
+			return base.OnKeyDown(key);
+		}
 	}
 }

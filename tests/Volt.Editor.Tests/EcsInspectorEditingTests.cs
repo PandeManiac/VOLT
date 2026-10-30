@@ -401,6 +401,150 @@ public sealed class EcsInspectorEditingTests : IDisposable
 		Assert.False(previous.IsEnabled);
 	}
 
+	[Fact]
+	public void QueryResults_ClickingARowSelectsTheAuthoredObject()
+	{
+		SceneEntity alpha = _session.CreateEntity("Alpha")!;
+		SceneEntity beta = _session.CreateEntity("Beta")!;
+
+		_session.Select(alpha.Id);
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Label betaRow = QueryRows(panel).Single(row =>
+			row.Text.StartsWith("Beta", StringComparison.Ordinal));
+
+		Assert.True(
+			betaRow.GlobalVisualBounds.Width > 0f,
+			"The query row must be laid out before it can be clicked.");
+
+		Click(betaRow.GlobalVisualBounds.Center);
+
+		Assert.Equal(beta.Id, _session.ActiveEntityId);
+	}
+
+	[Fact]
+	public void QueryResults_RuntimeOnlyRowsCannotSelectAnAuthoredObject()
+	{
+		_session.CreateEntity("Player");
+		_session.StartPlay();
+
+		RuntimeScene runtime = _session.Play!.Runtime!;
+		Entity only = runtime.World.CreateEntity();
+		runtime.World.AddComponent(only, new PositionComponent(Vector3.One));
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Label row = QueryRows(panel).Single(candidate =>
+			candidate.Text.Contains("(runtime only)", StringComparison.Ordinal));
+
+		Assert.False(row.IsEnabled);
+		Assert.Equal(UiCursor.Arrow, row.Cursor);
+
+		Guid? before = _session.ActiveEntityId;
+
+		Click(row.GlobalVisualBounds.Center);
+
+		Assert.Equal(before, _session.ActiveEntityId);
+	}
+
+	[Fact]
+	public void QueryResults_FilterAndSortRewriteTheVisibleRows()
+	{
+		_session.CreateEntity("Gamma");
+		_session.CreateEntity("Alpha");
+		_session.CreateEntity("Beta");
+		_session.StartPlay();
+
+		int total = _session.Play!.Runtime!.World.Count;
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		int sceneGamma = RowIndex(panel, "Gamma");
+
+		Assert.True(sceneGamma < RowIndex(panel, "Alpha"));
+		Assert.True(sceneGamma < RowIndex(panel, "Beta"));
+
+		Button byName = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Name");
+
+		Click(byName.GlobalVisualBounds.Center);
+		_context.BeginFrame(0.2, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.True(byName.IsSelected);
+		Assert.True(RowIndex(panel, "Alpha") < RowIndex(panel, "Beta"));
+		Assert.True(RowIndex(panel, "Beta") < RowIndex(panel, "Gamma"));
+
+		TextField filter = Descendants(panel)
+			.OfType<TextField>()
+			.Single(field => field.Name == "QueryFilter");
+
+		Click(filter.GlobalVisualBounds.Center);
+		Assert.True(filter.HasFocus);
+
+		_context.TextInput("Beta");
+		_context.BeginFrame(0.3, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Label only = Assert.Single(QueryRows(panel));
+
+		Assert.StartsWith("Beta", only.Text, StringComparison.Ordinal);
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				$"1 of {total} entities",
+				StringComparison.Ordinal));
+	}
+
+	private void RunPositionQuery(EcsInspectorPanel panel)
+	{
+		CheckBox position = Descendants(panel)
+			.OfType<CheckBox>()
+			.Single(box => box.Text == "Position");
+
+		if (!position.IsChecked)
+		{
+			Click(position.GlobalVisualBounds.Center);
+		}
+
+		Assert.True(position.IsChecked);
+
+		Button run = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Run Query");
+
+		Click(run.GlobalVisualBounds.Center);
+	}
+
+	private static int RowIndex(EcsInspectorPanel panel, string name)
+	{
+		List<Label> rows = [.. QueryRows(panel)];
+
+		return rows.FindIndex(row => row.Text.StartsWith(
+			name,
+			StringComparison.Ordinal));
+	}
+
 	private static IEnumerable<Label> QueryRows(EcsInspectorPanel panel)
 	{
 		return Descendants(panel)
