@@ -46,6 +46,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly Label _entityName;
 	private readonly Label _entityHandle;
 	private readonly Label _entityArchetype;
+	private readonly Button _applyTransform;
 	private readonly StackPanel _componentRows;
 	private readonly StackPanel _archetypeRows;
 	private readonly StackPanel _queryFilters;
@@ -103,16 +104,26 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		_entityHandle = MutedLabel();
 		_entityArchetype = MutedLabel();
 
+		_applyTransform = new Button("Apply Transform to Scene")
+		{
+			HorizontalAlignment = UiAlignment.Start,
+			MinHeight = 24f
+		};
+
+		_applyTransform.Clicked += _ => CopyTransformToScene();
+
 		doc.Add(_entityName);
 		doc.Add(_entityHandle);
 		doc.Add(_entityArchetype);
+		doc.Add(_applyTransform);
 
 		doc.Add(new Label(
 			"Position, scale, and existing motion values are editable. An " +
 			"edit writes to the live ECS world only, and stopping Play " +
-			"discards it. Apply to Scene copies a position or scale into " +
-			"the saved transform as one undo step. Running systems may " +
-			"overwrite a value on the next tick.")
+			"discards it. Apply to Scene copies one value, and Apply " +
+			"Transform copies position and scale together, into the saved " +
+			"transform as one undo step. Running systems may overwrite a " +
+			"value on the next tick.")
 		{
 			Font = Theme.Fonts.Small,
 			TextColor = Theme.Palette.TextDisabled,
@@ -295,6 +306,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		_content.IsVisible = runtime is not null;
 		_empty.IsVisible = runtime is null;
 		_runQuery.IsEnabled = runtime is not null;
+		_applyTransform.IsEnabled = runtime is not null;
 
 		if (runtime is null)
 		{
@@ -479,6 +491,39 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			authoredId,
 			channel);
 
+		ReportEditResult(result);
+	}
+
+	private void CopyTransformToScene()
+	{
+		if (_session.ActiveEntityId is not Guid authoredId)
+		{
+			_editStatus.Text =
+				"Select an object to copy its runtime transform.";
+
+			_editStatus.TextColor = Theme.Palette.Warning;
+			return;
+		}
+
+		if (_session.Play is not PlaySession play ||
+			_session.Scene is not SceneDocument scene)
+		{
+			_editStatus.Text =
+				"Start Play Mode to copy a runtime value into the scene.";
+
+			_editStatus.TextColor = Theme.Palette.Warning;
+			return;
+		}
+
+		ReportEditResult(RuntimeWorldEditor.ApplyTransformToScene(
+			play,
+			scene,
+			_session.Undo,
+			authoredId));
+	}
+
+	private void ReportEditResult(RuntimeEditResult result)
+	{
 		_editStatus.Text = result.Message;
 		_editStatus.TextColor = result.Applied
 			? Theme.Palette.TextMuted

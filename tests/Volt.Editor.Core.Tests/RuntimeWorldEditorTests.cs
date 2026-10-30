@@ -242,6 +242,98 @@ public sealed class RuntimeWorldEditorTests
 	}
 
 	[Fact]
+	public void ApplyTransformToScene_CopiesPositionAndScaleAsOneUndoStep()
+	{
+		SceneDocument scene = new("Edit Scene");
+		SceneEntity player = scene.CreateEntity("Player");
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+
+		using PlaySession session = new(scene);
+		RuntimeScene runtime = session.Start();
+		UndoStack undo = new();
+
+		RuntimeWorldEditor.Apply(
+			runtime,
+			player.Id,
+			RuntimeEditChannel.Position,
+			new Vector3(4f, 5f, 6f));
+
+		RuntimeWorldEditor.Apply(
+			runtime,
+			player.Id,
+			RuntimeEditChannel.Scale,
+			new Vector3(2f, 3f, 4f));
+
+		Assert.Equal(0, undo.UndoCount);
+
+		RuntimeEditResult result = RuntimeWorldEditor.ApplyTransformToScene(
+			session,
+			scene,
+			undo,
+			player.Id);
+
+		Assert.True(result.Applied);
+		Assert.Contains("one undo step", result.Message);
+		Assert.Equal(new Vector3(4f, 5f, 6f), player.Transform.Position);
+		Assert.Equal(new Vector3(2f, 3f, 4f), player.Transform.Scale);
+		Assert.Equal(1, undo.UndoCount);
+		Assert.Equal("Transform Player", undo.UndoDescription);
+
+		Assert.True(undo.Undo());
+		Assert.Equal(new Vector3(1f, 2f, 3f), player.Transform.Position);
+		Assert.Equal(Vector3.One, player.Transform.Scale);
+
+		Assert.True(undo.Redo());
+		Assert.Equal(new Vector3(4f, 5f, 6f), player.Transform.Position);
+		Assert.Equal(new Vector3(2f, 3f, 4f), player.Transform.Scale);
+	}
+
+	[Fact]
+	public void ApplyTransformToScene_UnchangedTransformCreatesNoUndoStep()
+	{
+		SceneDocument scene = new("Edit Scene");
+		SceneEntity player = scene.CreateEntity("Player");
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+		player.Transform.Scale = new Vector3(2f, 2f, 2f);
+
+		using PlaySession session = new(scene);
+		RuntimeScene runtime = session.Start();
+		UndoStack undo = new();
+
+		RuntimeEditResult result = RuntimeWorldEditor.ApplyTransformToScene(
+			runtime,
+			scene,
+			undo,
+			player.Id);
+
+		Assert.False(result.Applied);
+		Assert.Contains("already matches", result.Message);
+		Assert.Equal(0, undo.UndoCount);
+		Assert.Equal(new Vector3(1f, 2f, 3f), player.Transform.Position);
+		Assert.Equal(new Vector3(2f, 2f, 2f), player.Transform.Scale);
+	}
+
+	[Fact]
+	public void ApplyTransformToScene_RefusesStoppedPlayMode()
+	{
+		SceneDocument scene = new("Edit Scene");
+		SceneEntity player = scene.CreateEntity("Player");
+		UndoStack undo = new();
+
+		using PlaySession session = new(scene);
+
+		RuntimeEditResult result = RuntimeWorldEditor.ApplyTransformToScene(
+			session,
+			scene,
+			undo,
+			player.Id);
+
+		Assert.False(result.Applied);
+		Assert.Contains("Start Play Mode", result.Message);
+		Assert.Equal(0, undo.UndoCount);
+	}
+
+	[Fact]
 	public void ApplyToScene_RefusesMotionChannelsWithoutAnAuthoredCounterpart()
 	{
 		SceneDocument scene = new("Edit Scene");

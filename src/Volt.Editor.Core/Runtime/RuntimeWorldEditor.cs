@@ -269,6 +269,118 @@ public static class RuntimeWorldEditor
 			"one undo step.");
 	}
 
+	/// <summary>
+	/// Copies the live position and scale into the authored transform
+	/// as one undoable step.
+	/// </summary>
+	/// <remarks>
+	/// This is the combined form of <see cref="ApplyToScene"/> for a
+	/// simulated pose: position and scale are read from the runtime in
+	/// one pass and written by a single <see cref="SetTransformCommand"/>,
+	/// so they cannot be undone separately. Rotation is not copied
+	/// because the runtime stores a world-space quaternion. When only
+	/// one of the two components is present, the other is left alone and
+	/// the message says so.
+	/// </remarks>
+	public static RuntimeEditResult ApplyTransformToScene(
+		PlaySession session,
+		SceneDocument scene,
+		UndoStack undo,
+		Guid authoredId)
+	{
+		ArgumentNullException.ThrowIfNull(session);
+		ArgumentNullException.ThrowIfNull(scene);
+		ArgumentNullException.ThrowIfNull(undo);
+
+		if (session.State == PlayState.Stopped ||
+			session.Runtime is not RuntimeScene runtime)
+		{
+			return RuntimeEditResult.Failure(
+				"Start Play Mode to copy a runtime value into the scene.");
+		}
+
+		return ApplyTransformToScene(runtime, scene, undo, authoredId);
+	}
+
+	/// <summary>
+	/// Copies the live position and scale into the authored transform
+	/// using a world that is already running.
+	/// </summary>
+	public static RuntimeEditResult ApplyTransformToScene(
+		RuntimeScene runtime,
+		SceneDocument scene,
+		UndoStack undo,
+		Guid authoredId)
+	{
+		ArgumentNullException.ThrowIfNull(runtime);
+		ArgumentNullException.ThrowIfNull(scene);
+		ArgumentNullException.ThrowIfNull(undo);
+
+		if (runtime.Find(authoredId) is not RuntimeEntityInfo info)
+		{
+			return RuntimeEditResult.Failure(
+				"The selected object has no runtime entity.");
+		}
+
+		if (scene.Find(authoredId) is not SceneEntity entity)
+		{
+			return RuntimeEditResult.Failure(
+				"The selected object is no longer in the scene.");
+		}
+
+		bool hasPosition = TryReadChannel(
+			runtime.World,
+			info.Entity,
+			RuntimeEditChannel.Position,
+			out Vector3 position);
+
+		bool hasScale = TryReadChannel(
+			runtime.World,
+			info.Entity,
+			RuntimeEditChannel.Scale,
+			out Vector3 scale);
+
+		if (!hasPosition && !hasScale)
+		{
+			return RuntimeEditResult.Failure(
+				"The runtime entity has neither position nor scale to copy.");
+		}
+
+		TransformData after = entity.Transform.Clone();
+
+		if (hasPosition)
+		{
+			after.Position = position;
+		}
+
+		if (hasScale)
+		{
+			after.Scale = scale;
+		}
+
+		if (after.Equals(entity.Transform))
+		{
+			return RuntimeEditResult.Failure(
+				"The scene already matches the runtime transform; no undo " +
+				"step was created.");
+		}
+
+		undo.Execute(new SetTransformCommand(scene, authoredId, after));
+
+		if (hasPosition && hasScale)
+		{
+			return RuntimeEditResult.Success(
+				"Copied runtime position and scale into the authored scene " +
+				"as one undo step.");
+		}
+
+		return RuntimeEditResult.Success(hasPosition
+			? "Copied runtime position into the authored scene as one undo " +
+				"step; the runtime entity has no scale."
+			: "Copied runtime scale into the authored scene as one undo " +
+				"step; the runtime entity has no position.");
+	}
+
 	private static bool TryReadChannel(
 		World world,
 		Entity entity,

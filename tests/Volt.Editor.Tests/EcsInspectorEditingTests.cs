@@ -207,6 +207,57 @@ public sealed class EcsInspectorEditingTests : IDisposable
 		Assert.Equal(new Vector3(1f, 2f, 3f), player.Transform.Position);
 	}
 
+	[Fact]
+	public void ApplyTransformToScene_CopiesPositionAndScaleInOneUndoStep()
+	{
+		SceneEntity player = _session.CreateEntity("Player")!;
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+
+		_session.Select(player.Id);
+		_session.StartPlay();
+
+		RuntimeScene runtime = _session.Play!.Runtime!;
+
+		RuntimeWorldEditor.Apply(
+			runtime,
+			player.Id,
+			RuntimeEditChannel.Position,
+			new Vector3(4f, 5f, 6f));
+
+		RuntimeWorldEditor.Apply(
+			runtime,
+			player.Id,
+			RuntimeEditChannel.Scale,
+			new Vector3(2f, 2f, 2f));
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(520f, 900f), UiPoint.Zero);
+
+		int history = _session.Undo.UndoCount;
+
+		Button apply = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Apply Transform to Scene");
+
+		Assert.True(
+			apply.GlobalVisualBounds.Width > 0f &&
+			apply.GlobalVisualBounds.Height > 0f,
+			"The combined apply button must be laid out.");
+
+		Click(apply.GlobalVisualBounds.Center);
+
+		Assert.Equal(new Vector3(4f, 5f, 6f), player.Transform.Position);
+		Assert.Equal(new Vector3(2f, 2f, 2f), player.Transform.Scale);
+		Assert.Equal(history + 1, _session.Undo.UndoCount);
+
+		_session.UndoLast();
+
+		Assert.Equal(new Vector3(1f, 2f, 3f), player.Transform.Position);
+		Assert.Equal(Vector3.One, player.Transform.Scale);
+	}
+
 	private static Button ApplyToSceneButton(NumericField field)
 	{
 		// The field sits in an axis row, the axis row sits in the

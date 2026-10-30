@@ -270,6 +270,13 @@ Same branch, on top of `0cacea5`.
   live component, not uncommitted text in the field, and the panel's
   status line reports the outcome. The write-back rule is otherwise
   unchanged: an edit still touches the live world only.
+- **Combined copy.** **Apply Transform to Scene** reads position and
+  scale in one pass and writes them with a single
+  `SetTransformCommand`, so a simulated pose is restored by one undo
+  step. It refuses a stopped session, an object that left either the
+  runtime or the scene, and an unchanged transform; if only one of the
+  two components is present, the other is left alone and the message
+  says which value was copied.
 - **Docs.** The guide and control audit describe the copy as the one
   explicit runtime-to-scene action and note that saving is still a
   separate step.
@@ -283,7 +290,11 @@ Same branch, on top of `0cacea5`.
   refusal, the unchanged-value no-op, and the stopped-session boundary.
 - New `EcsInspectorEditingTests` case types into the runtime X field,
   commits, clicks the real laid-out button, checks the authored
-  transform and undo count, and undoes it.
+  transform and undo count, and undoes it. A second headless case
+  clicks **Apply Transform to Scene** and proves position and scale
+  arrive together and undo restores both.
+- New `RuntimeWorldEditorTests` cover the combined copy with undo and
+  redo, the unchanged-transform no-op, and stopped Play Mode.
 
 ### Not verified here
 
