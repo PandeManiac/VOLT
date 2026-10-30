@@ -175,9 +175,12 @@ python3 tools/benchmark-trend.py artifacts/report-1.json artifacts/report-2.json
 ```
 
 Each row carries the change from the previous document, and a row that
-passed `--max-overhead` is marked. It exits 2 when a document holds no
-quotient, or when the documents quote different method pairs, which
-cannot be lined up.
+passed `--max-overhead` is marked. A series that quotes more than one
+pair is narrowed with `--methods A:B`, for example
+`--methods RebuildingRefresh:SteadyRefresh`. It exits 2 when a document
+holds no quotient, when the selection matches nothing, or when the
+documents quote different pairs and none was chosen, since those cannot
+be lined up.
 
 ## Comparing a windowed capture
 

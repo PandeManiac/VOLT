@@ -78,11 +78,17 @@ class TrendTestCase(unittest.TestCase):
 
         return path
 
-    def run_trend(self, *paths: Path) -> tuple[int, str, str]:
+    def run_trend(
+        self, *paths: Path, methods: str | None = None
+    ) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
+        argv = [str(path) for path in paths]
+
+        if methods is not None:
+            argv += ["--methods", methods]
 
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            status = trend.main([str(path) for path in paths])
+            status = trend.main(argv)
 
         return status, out.getvalue(), err.getvalue()
 
@@ -173,6 +179,43 @@ class TrendTests(TrendTestCase):
         self.assertEqual(2, status)
         self.assertEqual("", output)
         self.assertIn("different methods", error)
+
+    def test_selects_one_pair_from_a_mixed_series(self) -> None:
+        kept = self.write("01.json", [("ShortRun", 1.78)])
+        other = self.write(
+            "02.json",
+            [("ShortRun", 1.10)],
+            numerator="MeshDraw",
+        )
+
+        status, output, error = self.run_trend(
+            kept, other, methods="RebuildingRefresh:SteadyRefresh"
+        )
+
+        self.assertEqual(0, status)
+        self.assertEqual("", error)
+        self.assertIn("1.78x", output)
+        self.assertNotIn("1.10x", output)
+
+    def test_unselected_pair_is_an_input_error(self) -> None:
+        document = self.write("01.json", [("ShortRun", 1.78)])
+
+        status, output, error = self.run_trend(
+            document, methods="SteadyRefresh:RebuildingRefresh"
+        )
+
+        self.assertEqual(2, status)
+        self.assertEqual("", output)
+        self.assertIn("no rows quote SteadyRefresh:RebuildingRefresh", error)
+
+    def test_malformed_selection_is_an_input_error(self) -> None:
+        document = self.write("01.json", [("ShortRun", 1.78)])
+
+        status, output, error = self.run_trend(document, methods="nonsense")
+
+        self.assertEqual(2, status)
+        self.assertEqual("", output)
+        self.assertIn("expects numerator:denominator", error)
 
 
 if __name__ == "__main__":

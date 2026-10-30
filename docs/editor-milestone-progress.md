@@ -670,8 +670,9 @@ Same branch, on top of `12f3dfd`.
   and falls back to the committed run when there is none, so the means
   are compared within one machine class instead of across two. `--json`
   writes the same comparison for a script to follow over many artifacts,
-  `tools/benchmark-trend.py` lines those documents up in the order given
-  so a sequence of artifacts reads as a trend, and the comparator reads a
+  `tools/benchmark-trend.py` lines those documents up in the order given,
+  optionally narrowed to one method pair, so a sequence of artifacts reads
+  as a trend, and the comparator reads a
   downloaded archive or extracted directory directly. The job summary
   names the baseline that was chosen and repeats the table, so a reviewer
   does not have to open the log.

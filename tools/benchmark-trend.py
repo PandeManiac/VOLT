@@ -4,8 +4,9 @@
 Each argument is a JSON document written by
 ``tools/compare-benchmark-runs.py --json``. Documents are shown in the order
 given, so a shell glob or a list sorted by download time reads as a trend.
-Every document must quote the same pair of methods, because quotients of
-different pairs cannot be lined up.
+``--methods A:B`` keeps one pair out of a mixed series; without it every
+document must quote the same pair, because quotients of different pairs
+cannot be lined up.
 """
 
 from __future__ import annotations
@@ -43,7 +44,10 @@ def load(path: Path) -> dict:
     return document
 
 
-def points(documents: list[tuple[Path, dict]]) -> list[dict]:
+def points(
+    documents: list[tuple[Path, dict]],
+    only: tuple[str, str] | None = None,
+) -> list[dict]:
     """Flattens the documents into one row per job, in the given order."""
 
     rows: list[dict] = []
@@ -52,6 +56,12 @@ def points(documents: list[tuple[Path, dict]]) -> list[dict]:
         block = document["overhead"]
 
         for row in block.get("rows", []):
+            if only is not None and (
+                block["numerator"],
+                block["denominator"],
+            ) != only:
+                continue
+
             rows.append(
                 {
                     "document": str(path),
@@ -65,6 +75,9 @@ def points(documents: list[tuple[Path, dict]]) -> list[dict]:
             )
 
     if not rows:
+        if only is not None:
+            raise ValueError(f"no rows quote {only[0]}:{only[1]}")
+
         raise ValueError("no quotient rows in the given documents")
 
     pairs = {(row["numerator"], row["denominator"]) for row in rows}
@@ -129,10 +142,32 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="a JSON document written by --json, oldest first",
     )
+    parser.add_argument(
+        "--methods",
+        default=None,
+        metavar="A:B",
+        help="keep only this method pair, for example "
+        "RebuildingRefresh:SteadyRefresh",
+    )
     args = parser.parse_args(argv)
 
+    only = None
+
+    if args.methods is not None:
+        numerator, _, denominator = args.methods.partition(":")
+
+        if not numerator.strip() or not denominator.strip():
+            print(
+                f"--methods expects numerator:denominator, "
+                f"not {args.methods!r}.",
+                file=sys.stderr,
+            )
+            return 2
+
+        only = (numerator.strip(), denominator.strip())
+
     try:
-        rows = points([(path, load(path)) for path in args.documents])
+        rows = points([(path, load(path)) for path in args.documents], only)
     except ValueError as error:
         print(error, file=sys.stderr)
         return 2
