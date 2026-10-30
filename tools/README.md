@@ -149,7 +149,12 @@ to the committed run when there is none yet: means vary by several
 percent between machines, so a hosted run is judged against the same
 machine class whenever one is available. The per-mean limit stays wide
 because a shared runner is noisy; the quotient catches a rebuilding
-slowdown the wide limit would pass. The job summary names the baseline
+slowdown the wide limit would pass. The limit remains 2.2: the three
+available hosted quotients (1.77, 1.82, 1.87) are too few to establish
+a safe tighter bound, especially on shared runners. CI also uploads
+each JSON comparison as `ecs-refresh-comparison-json`, so a longer
+series can inform a later threshold decision. The job summary names
+the baseline
 that was chosen and repeats the table, so a reviewer can check both
 without opening the log.
 
