@@ -1,6 +1,9 @@
+using Volt.Ecs.Component;
+using Volt.Ecs.Components.Spatial;
 using Volt.Editor.Core.Projects;
 using Volt.Editor.Core.Scenes;
 using Volt.Editor.Input;
+using Volt.Editor.Panels;
 using Volt.Editor.Rendering;
 using Volt.Ui.Docking;
 using Volt.Ui.Rendering;
@@ -52,7 +55,7 @@ internal static class Program
 				"[--project <folder>] [--frames <count>] " +
 				"[--width <pixels>] [--height <pixels>] " +
 				"[--ui-scale <factor>] [--snapshot <file>] " +
-				"[--snapshot-state <workspace|authoring|start>]");
+				"[--snapshot-state <workspace|authoring|start|ecs>]");
 
 			return 2;
 		}
@@ -365,6 +368,29 @@ internal static class Program
 				session.Tool = EditorTool.Translate;
 			}
 
+			DockLayout? layout = null;
+			EcsInspectorPanelState? ecsPanelState = null;
+
+			if (state == "ecs")
+			{
+				// The panel reports the world Play Mode built, so the capture
+				// runs a session and opens the ECS tab. A remembered Position
+				// query then matches the starter scene's entities, which shows
+				// the rows, the pager, and the key hints in one image.
+				session.StartPlay();
+
+				layout = DockLayout.CreateEditorDefault();
+				layout.FindTabs("ecs")!.ActivePanelId = "ecs";
+
+				// The panel shortens a component's CLR name for its label, so
+				// PositionComponent is the box the guide's image shows checked.
+				ecsPanelState = new EcsInspectorPanelState
+				{
+					RequiredComponents =
+						[ComponentRegistry.Get<PositionComponent>()]
+				};
+			}
+
 			string fullPath = Path.GetFullPath(snapshotPath);
 			string? folder = Path.GetDirectoryName(fullPath);
 
@@ -379,9 +405,12 @@ internal static class Program
 				width ?? 1600,
 				height ?? 960,
 				uiScale: uiScale ?? 1f,
+				layout: layout,
 				defaultProjectFolder: state == "start"
 					? "~/VoltGame"
-					: null);
+					: null,
+				ecsPanelState: ecsPanelState,
+				ecsScrollFraction: state == "ecs" ? 1f : null);
 
 			Console.WriteLine(
 				$"Wrote {fullPath} ({image.Width}x{image.Height}).");
@@ -634,15 +663,18 @@ internal static class Program
 				case SnapshotStateArgument:
 					if (index + 1 >= args.Length)
 					{
-						error = "--snapshot-state requires workspace, authoring, or start.";
+						error = "--snapshot-state requires workspace, authoring, " +
+							"start, or ecs.";
 						return false;
 					}
 
 					snapshotState = args[++index].ToLowerInvariant();
 
-					if (snapshotState is not ("workspace" or "authoring" or "start"))
+					if (snapshotState is not
+						("workspace" or "authoring" or "start" or "ecs"))
 					{
-						error = "--snapshot-state must be workspace, authoring, or start.";
+						error = "--snapshot-state must be workspace, authoring, " +
+							"start, or ecs.";
 						return false;
 					}
 

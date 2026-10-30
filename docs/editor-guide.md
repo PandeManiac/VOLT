@@ -8,6 +8,8 @@
 ## Contents
 
 - [Running](#running)
+- [First project](#first-project)
+- [Layout](#layout)
 - [Interface design](#interface-design)
 - [Authoring](#authoring)
 - [Play Mode](#play-mode)
@@ -423,13 +425,14 @@ is running it shows:
   edge of one. `Page Up` and `Page Down` jump a whole page and land on
   the row the arrow would have reached, while `Home` and `End` reach the
   first and last selectable row of the whole list. **Reset**, or
-  `Ctrl+R` on a focused row, returns the section to its initial state: no
-  filter, scene order, nothing checked, and no results. The filter, the
-  sort, and the checked
+  `Ctrl+R` on a focused row, returns the section to its initial state:
+  no filter, scene order, nothing checked, and no results. A hint line
+  under the rows lists those keys. The filter, the sort, and the checked
   components survive a panel rebuild, and a remembered query runs by
-  itself once Play Mode has built a world, and a hint line under the
-  rows lists the keys. A manual pass over these controls is the
-  checklist at the end of this guide.
+  itself once Play Mode has built a world. A manual pass over these
+  controls is the checklist at the end of this guide.
+
+![The Runtime ECS panel in Play Mode, with a Position query matching the starter scene](images/editor-ecs.png)
 
 Values refresh four times a second instead of on every fixed step, and
 each capture copies every value it displays, so stopping Play Mode

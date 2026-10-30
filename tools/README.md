@@ -11,12 +11,13 @@ GPU, or open project.
 ./tools/capture-editor-docs.sh
 ```
 
-It writes three 1440 by 900 captures to `docs/images`:
+It writes four 1440 by 900 captures to `docs/images`:
 
 | File | Snapshot preset | Contents |
 | --- | --- | --- |
 | `editor-workspace.png` | `workspace` | Starter project, default layout, no selection |
 | `editor-authoring.png` | `authoring` | Starter cube selected, Move tool active, populated inspector |
+| `editor-ecs.png` | `ecs` | Play Mode running, ECS panel showing a `Position` query |
 | `editor-start.png` | `start` | Start screen before a project is open |
 
 Pass `--check` to capture into a temporary directory and compare each
@@ -39,6 +40,17 @@ before the freshness check in CI:
 
 ```bash
 python3 tools/tests/test-compare-editor-docs.py
+```
+
+## Document contents
+
+`tools/tests/test-doc-contents.py` checks the guides that open with a
+contents list: every entry must point at a heading the document has, and
+every level-two heading must be listed exactly once. Anchors follow
+GitHub's slug rule. Run it directly; it uses only the standard library:
+
+```bash
+python3 tools/tests/test-doc-contents.py
 ```
 
 ## Headless Vulkan harness

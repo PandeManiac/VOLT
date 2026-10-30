@@ -117,11 +117,13 @@ public sealed class EditorShell : Panel
 		EditorSession session,
 		string? defaultProjectFolder,
 		DockLayout? layout,
-		IViewportRenderer? viewportRenderer)
+		IViewportRenderer? viewportRenderer,
+		EcsInspectorPanelState? ecsPanelState = null)
 	{
 		ArgumentNullException.ThrowIfNull(session);
 		_session = session;
 		_viewportRenderer = viewportRenderer;
+		_ecsPanelState = ecsPanelState;
 
 		ClipToBounds = true;
 		Background = _theme.Palette.WindowBackground;

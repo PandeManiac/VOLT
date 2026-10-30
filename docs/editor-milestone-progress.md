@@ -620,3 +620,43 @@ Same branch, on top of `6715ba8`.
 ### Next
 
 - Project-owned gameplay assemblies (Milestone E).
+
+## The ECS panel in the guide's screenshots (October 2026)
+
+Same branch, on top of `07e13c5`.
+
+### What changed
+
+- **A fourth documentation capture.** `--snapshot-state ecs` starts Play
+  Mode, opens the ECS tab, and remembers a `Position` query, so the
+  panel paints the running world's rows, pager, results, and key hints
+  instead of its idle state. `tools/capture-editor-docs.sh` writes it as
+  `editor-ecs.png`, and the guide embeds it in the Runtime ECS inspector
+  section.
+- **Preset support in the snapshot path.** `EditorSnapshot.Capture` and
+  the shell's internal constructor accept an `EcsInspectorPanelState`, so
+  a headless capture can show a panel that normally needs a click to
+  reach its populated state.
+- **Contents checks.** `tools/tests/test-doc-contents.py` verifies that
+  every contents entry resolves to a heading and every level-two heading
+  is listed once; CI runs it. It immediately found two sections missing
+  from the editor guide's list, which are now included.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Tests` 290 passed, 0 failed.
+- `./tools/capture-editor-docs.sh --check` compares all four committed
+  images with fresh captures.
+- `python3 tools/tests/test-doc-contents.py` and
+  `python3 tools/tests/test-compare-editor-docs.py` pass.
+
+### Not verified here
+
+- No GPU or interactive session: the new image comes from the headless
+  snapshot renderer, which draws the same widget tree the window paints
+  but not through Vulkan.
+
+### Next
+
+- Project-owned gameplay assemblies (Milestone E).

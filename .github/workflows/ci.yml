@@ -68,6 +68,11 @@ jobs:
       - name: Test documentation tooling
         run: python3 tools/tests/test-compare-editor-docs.py
 
+      # The guides open with contents lists; a renamed section must not
+      # silently leave a dead anchor or an unlisted heading behind.
+      - name: Verify document contents
+        run: python3 tools/tests/test-doc-contents.py
+
       # The editor guide's screenshots are captured headlessly and
       # compared with a per-channel and pixel tolerance, so harmless
       # platform antialiasing drift does not fail the build while a

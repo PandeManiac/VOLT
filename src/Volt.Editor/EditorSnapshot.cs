@@ -1,8 +1,10 @@
+using Volt.Editor.Panels;
 using Volt.Editor.Rendering;
 using Volt.Ui;
 using Volt.Ui.Docking;
 using Volt.Ui.Rendering;
 using Volt.Ui.Styling;
+using Volt.Ui.Widgets;
 
 namespace Volt.Editor;
 
@@ -33,7 +35,9 @@ internal static class EditorSnapshot
 		int height,
 		float uiScale = 1f,
 		DockLayout? layout = null,
-		string? defaultProjectFolder = null)
+		string? defaultProjectFolder = null,
+		EcsInspectorPanelState? ecsPanelState = null,
+		float? ecsScrollFraction = null)
 	{
 		ArgumentNullException.ThrowIfNull(session);
 		ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -51,7 +55,8 @@ internal static class EditorSnapshot
 			session,
 			defaultProjectFolder ?? session.Project?.RootPath,
 			layout ?? DockLayout.CreateEditorDefault(),
-			viewportRenderer);
+			viewportRenderer,
+			ecsPanelState);
 
 		if (float.IsFinite(uiScale) &&
 			uiScale > 0f &&
@@ -77,6 +82,24 @@ internal static class EditorSnapshot
 			frame = context.Draw();
 		}
 
+		if (ecsScrollFraction is float fraction)
+		{
+			// The ECS panel's query section sits below the session summary,
+			// so a capture of it scrolls the rows into view and paints one
+			// more frame for the new offset to be laid out.
+			EcsInspectorPanel? panel = Find<EcsInspectorPanel>(shell);
+			ScrollView? scroll = panel is null ? null : Find<ScrollView>(panel);
+
+			if (scroll is not null)
+			{
+				scroll.SetScrollOffset(fraction * scroll.MaximumScroll);
+
+				context.BeginFrame(1.0, size, UiPoint.Zero);
+				shell.Update(1.0 / 60.0, 1f);
+				frame = context.Draw();
+			}
+		}
+
 		// The viewports published their requests while the final frame
 		// painted, so those are the requests this capture rasterizes.
 		viewportRenderer.RenderFrame();
@@ -93,5 +116,24 @@ internal static class EditorSnapshot
 		image.SavePng(path);
 
 		return image;
+	}
+
+	private static T? Find<T>(Widget root)
+		where T : Widget
+	{
+		if (root is T match)
+		{
+			return match;
+		}
+
+		foreach (Widget child in root.Children)
+		{
+			if (Find<T>(child) is T found)
+			{
+				return found;
+			}
+		}
+
+		return null;
 	}
 }
