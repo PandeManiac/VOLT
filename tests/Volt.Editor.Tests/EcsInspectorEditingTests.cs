@@ -1,5 +1,6 @@
 using System.Numerics;
 using Volt.Ecs;
+using Volt.Ecs.Component;
 using Volt.Ecs.Components.Spatial;
 using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
@@ -644,6 +645,133 @@ public sealed class EcsInspectorEditingTests : IDisposable
 
 		Assert.True(sorts.Single(button => button.Text == "Name").IsSelected);
 		Assert.False(sorts.Single(button => button.Text == "Scene order").IsSelected);
+	}
+
+	[Fact]
+	public void QueryResults_ArrowKeysContinueOntoTheAdjacentPage()
+	{
+		for (int index = 0; index < 10; index++)
+		{
+			_session.CreateEntity($"Probe {index}");
+		}
+
+		_session.StartPlay();
+
+		int total = _session.Play!.Runtime!.World.Count;
+		const int PageSize = 8;
+		int pages = (total + PageSize - 1) / PageSize;
+
+		Assert.True(pages > 1, "The test needs more than one page.");
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		List<Label> firstPage = [.. QueryRows(panel)];
+
+		Assert.Equal(PageSize, firstPage.Count);
+		Assert.True(firstPage[0].Focus());
+
+		// One press per row walks off the end of the page instead of
+		// stopping on the last row.
+		for (int index = 0; index < firstPage.Count; index++)
+		{
+			_context.KeyDown(UiKey.Down);
+		}
+
+		_context.BeginFrame(0.2, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				$"Page 2 of {pages}",
+				StringComparison.Ordinal));
+
+		List<Label> secondPage = [.. QueryRows(panel)];
+
+		Assert.True(
+			secondPage[0].HasFocus,
+			"Down at the page edge must focus the first row of the next page.");
+
+		Guid? entered = _session.ActiveEntityId;
+
+		Assert.NotNull(entered);
+
+		_context.KeyDown(UiKey.Up);
+		_context.BeginFrame(0.3, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				"Page 1 of " + pages.ToString(
+					System.Globalization.CultureInfo.InvariantCulture),
+				StringComparison.Ordinal));
+
+		List<Label> back = [.. QueryRows(panel)];
+
+		Assert.True(
+			back[^1].HasFocus,
+			"Up at the page edge must focus the last row of the previous page.");
+
+		Assert.NotEqual(entered, _session.ActiveEntityId);
+	}
+
+	[Fact]
+	public void QueryResults_RememberedComponentsRerunTheQueryOnPlay()
+	{
+		_session.CreateEntity("Alpha");
+		_session.CreateEntity("Beta");
+
+		ComponentType position = ComponentRegistry.GetRegisteredComponents()
+			.Single(info => info.ClrType == typeof(PositionComponent))
+			.Type;
+
+		EcsInspectorPanelState state = new()
+		{
+			RequiredComponents = [position]
+		};
+
+		using EcsInspectorPanel panel = new(_session, state);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		CheckBox restored = Descendants(panel)
+			.OfType<CheckBox>()
+			.Single(box => box.Text == "Position");
+
+		Assert.True(
+			restored.IsChecked,
+			"The remembered components must come back checked.");
+
+		Assert.Empty(QueryRows(panel));
+
+		_session.StartPlay();
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.NotEmpty(QueryRows(panel));
+
+		Assert.Contains(
+			Descendants(panel).OfType<Label>(),
+			label => label.Text.Contains(
+				"Matched",
+				StringComparison.Ordinal));
+
+		// Stopping clears results that describe a world that is gone, and
+		// the next Play run is expected to answer the query again.
+		_session.Stop();
+		_context.BeginFrame(0.2, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Empty(QueryRows(panel));
+
+		_session.StartPlay();
+		_context.BeginFrame(0.3, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.NotEmpty(QueryRows(panel));
 	}
 
 	private void RunPositionQuery(EcsInspectorPanel panel)

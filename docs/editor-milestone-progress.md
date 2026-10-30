@@ -439,6 +439,40 @@ Same branch, on top of `096c4fa`.
   boundaries is deliberately not implemented, so the last row of a page
   does not move to the next page.
 
+## Cross-page rows and remembered queries (October 2026)
+
+Same branch, on top of `6aeb8c1`.
+
+### What changed
+
+- **Cross-page rows.** An arrow key at the edge of a page now carries
+  focus and selection onto the adjacent page: Down lands on its first
+  selectable row, Up on the last one. A page holding only runtime
+  entities is not entered, rather than flipping the pager without a
+  selection.
+- **Remembered query.** The checked components are captured with the
+  filter and sort. A non-empty remembered set means the query is
+  expected back, so the panel runs it again as soon as a world exists:
+  when Play Mode starts, and when the panel is rebuilt during Play.
+  Stopping Play still clears results that describe a world that is gone;
+  the intent survives so the next Play run answers the query on its own.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Tests` 284 passed, 0 failed.
+- Headless tests press Down once per row until the page ends and check
+  the first row of page two takes focus and selection, then press Up to
+  come back to the last row of page one. Another builds a panel from a
+  remembered component and checks that Play start answers the query
+  with no click, then stops and starts again to see it answered twice.
+
+### Not verified here
+
+- No GPU or interactive session, so the pager and the arrow keys have
+  not been seen in a window. Focus and selection are driven through the
+  headless input context, not a real window or a real clipboard.
+
 ### Next
 
 - Project-owned gameplay assemblies (Milestone E).

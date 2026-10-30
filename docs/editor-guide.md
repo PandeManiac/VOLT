@@ -403,9 +403,11 @@ is running it shows:
   **Prev** and **Next** move between pages and a `Page N of M` counter
   reports the position in the list. A name filter narrows the list, and
   **Scene order**, **Name**, and **Archetype** buttons reorder it.
-  **Copy Results** puts the filtered list on the clipboard, the arrow
-  keys move between rows, and the filter and sort survive a panel
-  rebuild or a new Play session.
+  **Copy Results** puts the filtered list on the clipboard, and the
+  arrow keys move between rows and continue onto the next or previous
+  page at the edge of one. The filter, the sort, and the checked
+  components survive a panel rebuild, and a remembered query runs by
+  itself once Play Mode has built a world.
 
 Values refresh four times a second instead of on every fixed step, and
 each capture copies every value it displays, so stopping Play Mode

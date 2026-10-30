@@ -73,6 +73,8 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly List<RuntimeQueryEntity> _queryView = [];
 	private EcsQuerySort _querySort;
 	private int _queryPage;
+	private bool _queryIntent;
+	private bool _wasRunning;
 	private readonly List<Vector3Field> _editors = [];
 	private readonly List<Button> _applyButtons = [];
 	private readonly Label _editStatus;
@@ -215,17 +217,28 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			Spacing = 1f
 		};
 
+		HashSet<ComponentType> remembered = state is null
+			? []
+			: [.. state.RequiredComponents];
+
 		foreach (ComponentRegistry.ComponentInfo info in
 			ComponentRegistry.GetRegisteredComponents())
 		{
 			CheckBox box = new(ShortName(info.ClrType))
 			{
-				Font = Theme.Fonts.Small
+				Font = Theme.Fonts.Small,
+				IsChecked = remembered.Contains(info.Type)
 			};
 
 			_filters.Add((info.Type, box));
 			_queryFilters.Add(box);
 		}
+
+		// Remembered checks mean the query is expected back rather than
+		// waiting for another click: the panel is rebuilt by an
+		// interface-scale change, and the runtime panel is also built
+		// before Play Mode has a world to query.
+		_queryIntent = remembered.Count > 0;
 
 		if (_filters.Count == 0)
 		{
@@ -408,6 +421,12 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private void Refresh()
 	{
 		RuntimeScene? runtime = _session.Play?.Runtime;
+
+		// A world appearing is the moment a remembered query becomes
+		// answerable again, so the transition is what triggers it.
+		bool started = runtime is not null && !_wasRunning;
+		_wasRunning = runtime is not null;
+
 		RuntimeWorldSnapshot snapshot = RuntimeWorldSnapshot.Capture(
 			runtime,
 			_session.PlayState,
@@ -442,6 +461,11 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		RefreshSelectedEntity(snapshot.SelectedEntity);
 		RefreshArchetypes(snapshot.Archetypes);
+
+		if (started && _queryIntent)
+		{
+			RunQuery();
+		}
 	}
 
 	private void RefreshSelectedEntity(RuntimeEntitySnapshot? entity)
@@ -771,7 +795,12 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		return new EcsInspectorPanelState
 		{
 			Filter = _queryFilter.Text,
-			Sort = _querySort
+			Sort = _querySort,
+			RequiredComponents = [
+				.. _filters
+					.Where(entry => entry.Box.IsChecked)
+					.Select(entry => entry.Type)
+			]
 		};
 	}
 
@@ -837,6 +866,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		if (required.Count == 0)
 		{
 			ClearQuery();
+			_queryIntent = false;
 			_queryResult.Text =
 				"Check at least one component to require it.";
 
@@ -851,6 +881,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			_queryMatches.Clear();
 			_queryMatches.AddRange(result.Entities);
 			ApplyQueryView(resetPage: true);
+			_queryIntent = true;
 
 			_queryResult.Text = string.Format(
 				CultureInfo.InvariantCulture,
@@ -980,7 +1011,8 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 			_queryRows.Add(new QueryResultRow(
 				FormatRow(match),
-				authoredId is Guid id ? () => _session.Select(id) : null)
+				authoredId is Guid id ? () => _session.Select(id) : null,
+				MoveSelectionToPage)
 			{
 				Name = "QueryResultRow",
 				Font = Theme.Fonts.MonoSmall,
@@ -1013,6 +1045,61 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			count);
 
 		_queryPager.IsVisible = true;
+	}
+
+	/// <summary>
+	/// Carries an arrow key past the edge of the page onto the next one.
+	/// </summary>
+	/// <returns>
+	/// True when a row on the adjacent page took focus and selection.
+	/// </returns>
+	private bool MoveSelectionToPage(int direction)
+	{
+		if (direction == 0)
+		{
+			return false;
+		}
+
+		int pages = (_queryView.Count + QueryPageSize - 1) / QueryPageSize;
+		int target = _queryPage + direction;
+
+		if (target < 0 || target >= pages)
+		{
+			return false;
+		}
+
+		int start = target * QueryPageSize;
+		int end = Math.Min(_queryView.Count, start + QueryPageSize);
+		int chosen = -1;
+
+		// Down enters the next page at its first selectable row and Up
+		// enters the previous page at its last, which is where the
+		// arrow would have landed if the pages were one list.
+		for (int index = direction > 0 ? start : end - 1;
+			index >= start && index < end;
+			index += direction)
+		{
+			if (_queryView[index].AuthoredId is not null)
+			{
+				chosen = index;
+				break;
+			}
+		}
+
+		if (chosen < 0)
+		{
+			// A page holding only runtime entities cannot take the
+			// selection, so the key does nothing instead of silently
+			// flipping the page.
+			return false;
+		}
+
+		_queryPage = target;
+		RenderQueryPage();
+
+		return _queryRows.Children.Count > chosen - start &&
+			_queryRows.Children[chosen - start] is QueryResultRow row &&
+			row.FocusAndSelect();
 	}
 
 	private void ClearQuery()
@@ -1071,14 +1158,33 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private sealed class QueryResultRow : Label
 	{
 		private readonly Action? _select;
+		private readonly Func<int, bool>? _stepPage;
 
-		public QueryResultRow(string text, Action? select)
+		public QueryResultRow(
+			string text,
+			Action? select,
+			Func<int, bool>? stepPage = null)
 			: base(text)
 		{
 			_select = select;
+			_stepPage = stepPage;
 			IsEnabled = select is not null;
 			IsFocusable = select is not null;
 			Cursor = select is null ? UiCursor.Arrow : UiCursor.Hand;
+		}
+
+		/// <summary>
+		/// Focuses this row and selects the object it names.
+		/// </summary>
+		public bool FocusAndSelect()
+		{
+			if (_select is null || !IsEnabled || !Focus())
+			{
+				return false;
+			}
+
+			OnClick(1);
+			return true;
 		}
 
 		protected override void OnClick(int clickCount)
@@ -1138,15 +1244,15 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 				candidate += direction)
 			{
 				if (parent.Children[candidate] is QueryResultRow row &&
-					row.IsEnabled &&
-					row.Focus())
+					row.FocusAndSelect())
 				{
-					row.OnClick(1);
 					return true;
 				}
 			}
 
-			return false;
+			// The page ended under the arrow, so the panel is asked for
+			// the neighbouring page.
+			return _stepPage?.Invoke(direction) ?? false;
 		}
 	}
 }
