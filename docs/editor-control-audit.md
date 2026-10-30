@@ -125,6 +125,10 @@ list and a counter reports `Page N of M`. Clicking a row selects its
 authored object, and runtime-only rows are disabled because they have
 no authored object. A name filter narrows the list, and **Scene
 order**, **Name**, and **Archetype** buttons reorder it.
+**Copy Results** writes the filtered list to the clipboard as one line
+per entity, and the arrow keys move focus and selection between rows.
+The filter and sort are part of the panel's captured state, so they
+come back after an interface-scale rebuild or reopening the panel.
 
 ## Docking
 
@@ -144,7 +148,8 @@ controls; no visible control promises them:
   composed from built-in behaviours and authored component data.
 - The ECS panel edits only components the runtime entity already has,
   and cannot add or remove them. It cannot edit rotation. Query results can be
-  paged, filtered, sorted, and selected, but cannot be exported. Only position and scale can be copied back to the scene;
+  paged, filtered, sorted, selected, and copied as text, but cannot be exported
+  as a file. Only position and scale can be copied back to the scene;
   velocity and angular velocity are runtime-only.
 - No IME candidate window or complex text shaping.
 - Gameplay and scene rendering use a single pass with no shadows or

@@ -45,6 +45,7 @@ public sealed class EditorShell : Panel
 	private readonly DockLayout _layout;
 	private readonly string _defaultProjectPath;
 	private ProjectPanelState? _projectPanelState;
+	private EcsInspectorPanelState? _ecsPanelState;
 
 	private readonly Dictionary<EditorTool, IconButton> _toolButtons = [];
 	private readonly Dictionary<PanelTab, MenuItem> _windowMenuItems = [];
@@ -482,6 +483,10 @@ public sealed class EditorShell : Panel
 			_projectPanelState =
 				FindDescendant<ProjectPanel>(_dock)?.CaptureState() ??
 				_projectPanelState;
+
+			_ecsPanelState =
+				FindDescendant<EcsInspectorPanel>(_dock)?.CaptureState() ??
+				_ecsPanelState;
 		}
 
 		for (int index = Children.Count - 1; index >= 0; index--)
@@ -535,7 +540,7 @@ public sealed class EditorShell : Panel
 			"inspector" => new InspectorPanel(_session),
 			"project" => new ProjectPanel(_session, _projectPanelState),
 			"console" => new ConsolePanel(_session),
-			"ecs" => new EcsInspectorPanel(_session),
+			"ecs" => new EcsInspectorPanel(_session, _ecsPanelState),
 			"profiler" => new ProfilerPanel(_session),
 			_ => null
 		};

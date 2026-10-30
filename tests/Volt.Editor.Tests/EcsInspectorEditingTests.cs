@@ -516,6 +516,136 @@ public sealed class EcsInspectorEditingTests : IDisposable
 				StringComparison.Ordinal));
 	}
 
+	[Fact]
+	public void QueryResults_CopyButtonWritesTheFilteredRows()
+	{
+		_session.CreateEntity("Alpha");
+		_session.CreateEntity("Beta");
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Label[] rows = [.. QueryRows(panel)];
+
+		Assert.Contains(rows, row => row.Text.StartsWith(
+			"Alpha",
+			StringComparison.Ordinal));
+
+		Assert.Contains(rows, row => row.Text.StartsWith(
+			"Beta",
+			StringComparison.Ordinal));
+
+		Button copy = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Copy Results");
+
+		Click(copy.GlobalVisualBounds.Center);
+
+		string? text = _context.Clipboard.GetText();
+
+		Assert.NotNull(text);
+
+		string[] lines = text.Split(Environment.NewLine);
+
+		Assert.Equal(rows.Length, lines.Length);
+
+		for (int index = 0; index < rows.Length; index++)
+		{
+			Assert.Equal(rows[index].Text, lines[index]);
+		}
+	}
+
+	[Fact]
+	public void QueryResults_ArrowKeysMoveFocusAndSelectionBetweenRows()
+	{
+		SceneEntity alpha = _session.CreateEntity("Alpha")!;
+		SceneEntity beta = _session.CreateEntity("Beta")!;
+
+		_session.Select(alpha.Id);
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		// A new scene already holds a camera and a light, so the authored
+		// objects are found by name rather than by a fixed row index.
+		List<Label> rows = [.. QueryRows(panel)];
+		int alphaRow = rows.FindIndex(row => row.Text.StartsWith(
+			"Alpha",
+			StringComparison.Ordinal));
+
+		Assert.True(alphaRow >= 0);
+		Assert.StartsWith("Beta", rows[alphaRow + 1].Text, StringComparison.Ordinal);
+
+		Assert.True(rows[alphaRow].Focus());
+
+		_context.KeyDown(UiKey.Down);
+
+		Assert.True(rows[alphaRow + 1].HasFocus);
+		Assert.Equal(beta.Id, _session.ActiveEntityId);
+
+		_context.KeyDown(UiKey.Up);
+
+		Assert.True(rows[alphaRow].HasFocus);
+		Assert.Equal(alpha.Id, _session.ActiveEntityId);
+	}
+
+	[Fact]
+	public void QueryResults_FilterAndSortSurviveAPanelRebuild()
+	{
+		_session.StartPlay();
+
+		using EcsInspectorPanel first = new(_session);
+
+		_context.Add(first);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		TextField filter = Descendants(first)
+			.OfType<TextField>()
+			.Single(field => field.Name == "QueryFilter");
+
+		Click(filter.GlobalVisualBounds.Center);
+		_context.TextInput("Bet");
+
+		Button byName = Descendants(first)
+			.OfType<Button>()
+			.Single(button => button.Text == "Name");
+
+		Click(byName.GlobalVisualBounds.Center);
+
+		EcsInspectorPanelState state = first.CaptureState();
+
+		first.RemoveFromParent();
+		first.Dispose();
+
+		using EcsInspectorPanel second = new(_session, state);
+
+		_context.Add(second);
+		_context.BeginFrame(0.2, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		TextField restored = Descendants(second)
+			.OfType<TextField>()
+			.Single(field => field.Name == "QueryFilter");
+
+		Assert.Equal("Bet", restored.Text);
+
+		List<Button> sorts = [.. Descendants(second).OfType<Button>()];
+
+		Assert.True(sorts.Single(button => button.Text == "Name").IsSelected);
+		Assert.False(sorts.Single(button => button.Text == "Scene order").IsSelected);
+	}
+
 	private void RunPositionQuery(EcsInspectorPanel panel)
 	{
 		CheckBox position = Descendants(panel)

@@ -401,3 +401,44 @@ Same branch, on top of `a19cba3`.
 ### Next
 
 - Project-owned gameplay assemblies (Milestone E).
+
+## Query result copying, keyboard navigation, and view state (October 2026)
+
+Same branch, on top of `096c4fa`.
+
+### What changed
+
+- **Copy Results.** A button in the query pager writes the filtered list
+  to the clipboard, one line per entity in the same format the rows
+  show. It copies the whole filtered list, not only the page on screen,
+  and reports the count on the status bar. An empty or unrun query
+  reports instead of clearing the clipboard.
+- **Arrow keys.** Up and Down move focus and selection between query
+  rows, skipping runtime-only rows because they have no authored object
+  to select. Navigation stays inside the current page.
+- **View state.** The filter and sort are captured in
+  `EcsInspectorPanelState`, the same way `ProjectPanelState` keeps the
+  project browser's view, so an interface-scale rebuild or reopening the
+  panel restores them. They already survived Play start and stop,
+  because the panel is not recreated then.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Tests` 282 passed, 0 failed.
+- Headless tests click **Copy Results** and compare the clipboard line by
+  line with the visible rows, focus a row and press Down then Up to check
+  focus and the session's active entity, and rebuild the panel from a
+  captured state to check the filter text and sort highlight come back.
+
+### Not verified here
+
+- No GPU or interactive session, so none of the controls have been seen
+  in a window, and the real platform clipboard was not exercised: the
+  tests use the in-process clipboard. Arrow navigation across page
+  boundaries is deliberately not implemented, so the last row of a page
+  does not move to the next page.
+
+### Next
+
+- Project-owned gameplay assemblies (Milestone E).

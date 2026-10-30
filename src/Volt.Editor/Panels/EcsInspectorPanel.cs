@@ -65,12 +65,13 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly Label _queryPageLabel;
 	private readonly Button _previousPage;
 	private readonly Button _nextPage;
+	private readonly Button _copyResults;
 	private readonly EmptyStateView _empty;
 	private readonly StackPanel _content;
 	private readonly List<(ComponentType Type, CheckBox Box)> _filters = [];
 	private readonly List<RuntimeQueryEntity> _queryMatches = [];
 	private readonly List<RuntimeQueryEntity> _queryView = [];
-	private QuerySort _querySort;
+	private EcsQuerySort _querySort;
 	private int _queryPage;
 	private readonly List<Vector3Field> _editors = [];
 	private readonly List<Button> _applyButtons = [];
@@ -80,9 +81,20 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private bool _disposed;
 
 	public EcsInspectorPanel(EditorSession session)
+		: this(session, null)
+	{
+	}
+
+	internal EcsInspectorPanel(
+		EditorSession session,
+		EcsInspectorPanelState? state)
 	{
 		ArgumentNullException.ThrowIfNull(session);
 		_session = session;
+
+		// The sort is read while the toggle buttons are built, so it has
+		// to be restored before they exist to get their highlight right.
+		_querySort = state?.Sort ?? EcsQuerySort.SceneOrder;
 
 		Padding = new UiThickness(10f);
 
@@ -242,9 +254,14 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		_queryFilter.TextChanged += _ => ApplyQueryView(resetPage: true);
 
-		_sortScene = CreateSortButton("Scene order", QuerySort.SceneOrder);
-		_sortName = CreateSortButton("Name", QuerySort.Name);
-		_sortArchetype = CreateSortButton("Archetype", QuerySort.Archetype);
+		if (state is not null && state.Filter.Length > 0)
+		{
+			_queryFilter.Text = state.Filter;
+		}
+
+		_sortScene = CreateSortButton("Scene order", EcsQuerySort.SceneOrder);
+		_sortName = CreateSortButton("Name", EcsQuerySort.Name);
+		_sortArchetype = CreateSortButton("Archetype", EcsQuerySort.Archetype);
 
 		StackPanel sortRow = new(UiOrientation.Horizontal)
 		{
@@ -273,6 +290,15 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		_queryPageLabel = MutedLabel();
 
+		_copyResults = new Button("Copy Results")
+		{
+			Font = Theme.Fonts.Small,
+			MinHeight = 20f,
+			TooltipText = "Copy the filtered results to the clipboard"
+		};
+
+		_copyResults.Clicked += _ => CopyResults();
+
 		_queryPager = new StackPanel(UiOrientation.Horizontal)
 		{
 			Spacing = 4f
@@ -281,6 +307,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		_queryPager.Add(_previousPage);
 		_queryPager.Add(_nextPage);
 		_queryPager.Add(_queryPageLabel);
+		_queryPager.Add(_copyResults);
 		_queryPager.IsVisible = false;
 
 		_queryRows = new StackPanel
@@ -739,6 +766,54 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		}
 	}
 
+	internal EcsInspectorPanelState CaptureState()
+	{
+		return new EcsInspectorPanelState
+		{
+			Filter = _queryFilter.Text,
+			Sort = _querySort
+		};
+	}
+
+	private void CopyResults()
+	{
+		if (_queryView.Count == 0)
+		{
+			_session.SetStatus("Run a query before copying its results");
+			return;
+		}
+
+		if (Context?.Clipboard is not IUiClipboard clipboard)
+		{
+			_session.SetStatus("The clipboard is not available");
+			return;
+		}
+
+		// The filter and sort define the list, so copying it whole is more
+		// useful than copying whichever page happens to be on screen.
+		clipboard.SetText(string.Join(
+			Environment.NewLine,
+			_queryView.Select(FormatRow)));
+
+		_session.SetStatus(_queryView.Count == 1
+			? "Copied 1 query result"
+			: $"Copied {_queryView.Count} query results");
+	}
+
+	private static string FormatRow(RuntimeQueryEntity match)
+	{
+		string name = match.Name.Length > 0
+			? match.Name
+			: "(runtime only)";
+
+		return string.Format(
+			CultureInfo.InvariantCulture,
+			"{0}   {1}   {2}",
+			name,
+			HandleText(match.Handle),
+			match.Archetype);
+	}
+
 	private void RunQuery()
 	{
 		RuntimeScene? runtime = _session.Play?.Runtime;
@@ -829,13 +904,13 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		view = _querySort switch
 		{
-			QuerySort.Name => view
+			EcsQuerySort.Name => view
 				.OrderBy(match => match.Name.Length == 0 ? 1 : 0)
 				.ThenBy(
 					match => match.Name,
 					StringComparer.OrdinalIgnoreCase)
 				.ThenBy(match => match.Handle.Index),
-			QuerySort.Archetype => view
+			EcsQuerySort.Archetype => view
 				.OrderBy(match => match.Archetype, StringComparer.Ordinal)
 				.ThenBy(
 					match => match.Name,
@@ -855,7 +930,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		RenderQueryPage();
 	}
 
-	private void SetQuerySort(QuerySort sort)
+	private void SetQuerySort(EcsQuerySort sort)
 	{
 		if (_querySort == sort)
 		{
@@ -863,9 +938,9 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		}
 
 		_querySort = sort;
-		_sortScene.IsSelected = sort == QuerySort.SceneOrder;
-		_sortName.IsSelected = sort == QuerySort.Name;
-		_sortArchetype.IsSelected = sort == QuerySort.Archetype;
+		_sortScene.IsSelected = sort == EcsQuerySort.SceneOrder;
+		_sortName.IsSelected = sort == EcsQuerySort.Name;
+		_sortArchetype.IsSelected = sort == EcsQuerySort.Archetype;
 		ApplyQueryView(resetPage: true);
 	}
 
@@ -901,19 +976,10 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		for (int index = start; index < end; index++)
 		{
 			RuntimeQueryEntity match = _queryView[index];
-			string name = match.Name.Length > 0
-				? match.Name
-				: "(runtime only)";
-
 			Guid? authoredId = match.AuthoredId;
 
 			_queryRows.Add(new QueryResultRow(
-				string.Format(
-					CultureInfo.InvariantCulture,
-					"{0}   {1}   {2}",
-					name,
-					HandleText(match.Handle),
-					match.Archetype),
+				FormatRow(match),
 				authoredId is Guid id ? () => _session.Select(id) : null)
 			{
 				Name = "QueryResultRow",
@@ -960,7 +1026,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		_queryResult.Text = string.Empty;
 	}
 
-	private Button CreateSortButton(string text, QuerySort sort)
+	private Button CreateSortButton(string text, EcsQuerySort sort)
 	{
 		Button button = new(text)
 		{
@@ -994,13 +1060,6 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 				: name;
 	}
 
-	private enum QuerySort
-	{
-		SceneOrder,
-		Name,
-		Archetype
-	}
-
 	/// <summary>
 	/// A query result row that selects the authored object it names.
 	/// </summary>
@@ -1030,14 +1089,64 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		protected override bool OnKeyDown(UiKeyEvent key)
 		{
-			if (_select is not null &&
-				key.Key is UiKey.Enter or UiKey.Space)
+			if (_select is null)
+			{
+				return base.OnKeyDown(key);
+			}
+
+			if (key.Key is UiKey.Enter or UiKey.Space)
 			{
 				OnClick(1);
 				return true;
 			}
 
+			if (key.Key is UiKey.Up or UiKey.Down)
+			{
+				return MoveToNeighbour(key.Key == UiKey.Down ? 1 : -1);
+			}
+
 			return base.OnKeyDown(key);
+		}
+
+		private bool MoveToNeighbour(int direction)
+		{
+			if (Parent is not Widget parent || direction == 0)
+			{
+				return false;
+			}
+
+			int index = -1;
+
+			for (int candidate = 0; candidate < parent.Children.Count; candidate++)
+			{
+				if (ReferenceEquals(parent.Children[candidate], this))
+				{
+					index = candidate;
+					break;
+				}
+			}
+
+			if (index < 0)
+			{
+				return false;
+			}
+
+			// Runtime-only rows are not focusable, so they are skipped
+			// rather than becoming a dead stop on the way down.
+			for (int candidate = index + direction;
+				candidate >= 0 && candidate < parent.Children.Count;
+				candidate += direction)
+			{
+				if (parent.Children[candidate] is QueryResultRow row &&
+					row.IsEnabled &&
+					row.Focus())
+				{
+					row.OnClick(1);
+					return true;
+				}
+			}
+
+			return false;
 		}
 	}
 }
