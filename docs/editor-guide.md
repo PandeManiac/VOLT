@@ -434,6 +434,8 @@ is running it shows:
 
 ![The Runtime ECS panel in Play Mode, with the Cube selected and resolved to its runtime entity](images/editor-ecs.png)
 
+![The Runtime ECS panel's query results, with the key hints and the pinned pager](images/editor-ecs-query.png)
+
 Values refresh four times a second instead of on every fixed step, and
 each capture copies every value it displays, so stopping Play Mode
 cannot leave the panel holding a reference into chunk storage.

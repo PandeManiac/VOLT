@@ -4,6 +4,7 @@ using Volt.Ui;
 using Volt.Ui.Docking;
 using Volt.Ui.Rendering;
 using Volt.Ui.Styling;
+using Volt.Ui.Widgets;
 
 namespace Volt.Editor;
 
@@ -35,7 +36,8 @@ internal static class EditorSnapshot
 		float uiScale = 1f,
 		DockLayout? layout = null,
 		string? defaultProjectFolder = null,
-		EcsInspectorPanelState? ecsPanelState = null)
+		EcsInspectorPanelState? ecsPanelState = null,
+		bool ecsScrollToEnd = false)
 	{
 		ArgumentNullException.ThrowIfNull(session);
 		ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -80,6 +82,23 @@ internal static class EditorSnapshot
 			frame = context.Draw();
 		}
 
+		if (ecsScrollToEnd)
+		{
+			// The query rows sit at the end of the panel's document, below
+			// the session summary, so this preset scrolls them into view.
+			EcsInspectorPanel? panel = Find<EcsInspectorPanel>(shell);
+			ScrollView? scroll = panel is null ? null : Find<ScrollView>(panel);
+
+			scroll?.ScrollToEnd();
+		}
+
+		// The panel rebuilds its rows from a live snapshot during Update,
+		// after this frame has already measured its children, so a frame
+		// drawn straight after a rebuild paints none of them. One more
+		// layout and draw with no update lets the new rows paint.
+		context.BeginFrame(SettleFrames / 60.0, size, UiPoint.Zero);
+		frame = context.Draw();
+
 		// The viewports published their requests while the final frame
 		// painted, so those are the requests this capture rasterizes.
 		viewportRenderer.RenderFrame();
@@ -96,5 +115,24 @@ internal static class EditorSnapshot
 		image.SavePng(path);
 
 		return image;
+	}
+
+	private static T? Find<T>(Widget root)
+		where T : Widget
+	{
+		if (root is T match)
+		{
+			return match;
+		}
+
+		foreach (Widget child in root.Children)
+		{
+			if (Find<T>(child) is T found)
+			{
+				return found;
+			}
+		}
+
+		return null;
 	}
 }

@@ -121,6 +121,66 @@ class CompareEditorDocsTests(unittest.TestCase):
             rows,
         )
 
+    def compare_files(
+        self,
+        reference: Path,
+        candidate: Path,
+    ) -> tuple[int, str, str]:
+        output = io.StringIO()
+        errors = io.StringIO()
+
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(
+            errors
+        ):
+            code = comparator.main([str(reference), str(candidate)])
+
+        return code, output.getvalue(), errors.getvalue()
+
+    def test_single_file_pair_passes(self) -> None:
+        reference = self.root / "baseline.png"
+        candidate = self.root / "window.png"
+        rows = make_rows(32, 32)
+
+        write_png(reference, 32, 32, rows)
+        write_png(candidate, 32, 32, [bytearray(row) for row in rows])
+
+        code, output, _ = self.compare_files(reference, candidate)
+
+        self.assertEqual(code, 0)
+        self.assertIn("window.png: OK", output)
+
+    def test_single_file_pair_reports_a_different_window(self) -> None:
+        reference = self.root / "baseline.png"
+        candidate = self.root / "window.png"
+        rows = make_rows(32, 32)
+        changed = [bytearray(row) for row in rows]
+
+        # A single pixel stays inside the tolerance; a band of them, as a
+        # moved panel produces, must fail.
+        for y in range(4, 8):
+            for x in range(32):
+                changed[y][x * 4] = 250
+
+        write_png(reference, 32, 32, rows)
+        write_png(candidate, 32, 32, changed)
+
+        code, output, errors = self.compare_files(reference, candidate)
+
+        self.assertEqual(code, 1)
+        self.assertIn("window.png: FAIL", output)
+        self.assertIn("does not match", errors)
+
+    def test_mixing_a_file_and_a_directory_is_rejected(self) -> None:
+        reference = self.root / "baseline.png"
+
+        write_png(reference, 16, 16, make_rows(16, 16))
+
+        with self.assertRaises(SystemExit) as caught:
+            with contextlib.redirect_stderr(io.StringIO()):
+                comparator.main([str(reference), str(self.candidate)])
+
+        self.assertEqual(caught.exception.code, 2)
+
     def test_identical_images_pass(self) -> None:
         self.write_pair()
 

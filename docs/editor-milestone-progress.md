@@ -621,6 +621,47 @@ Same branch, on top of `6715ba8`.
 
 - Project-owned gameplay assemblies (Milestone E).
 
+## Two ECS figures and a windowed comparison check (October 2026)
+
+Same branch, on top of `337d6ae`.
+
+### What changed
+
+- **The blank rows were a frame-ordering fault.** The ECS panel rebuilds
+  its rows from a live snapshot during `Update`, after the frame has
+  measured its children, so a frame drawn straight after a rebuild
+  painted none of them while still reserving their space. A probe of the
+  widget tree showed the rows existed with bounds; a probe rendering the
+  panel mid-frame and one frame later showed the difference. A capture
+  now takes one further layout and draw after its last update, and the
+  component editors and archetype rows paint.
+- **A second ECS figure.** `--snapshot-state ecs-query` leaves the
+  selection alone and scrolls the panel to its query rows, key hints, and
+  pinned pager, so the guide shows both the selection path and the query
+  path. `tools/capture-editor-docs.sh` writes `editor-ecs-query.png`, and
+  both ECS figures have golden baselines.
+- **Windowed captures can be compared.** `tools/compare-editor-docs.py`
+  accepts two PNG files as well as two directories, so a capture taken
+  from a real window under the Vulkan harness can be checked against a
+  committed image with the same per-channel and pixel tolerances.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Tests` 292 passed, 0 failed, including both ECS baselines.
+- `./tools/capture-editor-docs.sh --check` compares all five images.
+- `python3 tools/tests/test-compare-editor-docs.py` covers the file mode,
+  and `python3 tools/tests/test-doc-contents.py` still passes.
+
+### Not verified here
+
+- No GPU or display, so no windowed capture was taken: the file mode is
+  covered by synthetic images, not by a real window.
+
+### Next
+
+- Project-owned gameplay assemblies (Milestone E).
+
 ## The ECS panel in the guide's screenshots (October 2026)
 
 Same branch, on top of `07e13c5`.

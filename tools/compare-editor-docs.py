@@ -208,6 +208,47 @@ def compare(
     return differing, differing / total, worst
 
 
+def compare_pair(
+    reference: Path,
+    candidate: Path,
+    channel_tolerance: int,
+    pixel_tolerance: float,
+) -> int:
+    """Compare one reference PNG with one captured PNG."""
+
+    name = candidate.name
+
+    try:
+        differing, ratio, worst = compare(
+            reference,
+            candidate,
+            channel_tolerance,
+        )
+    except (PngError, OSError) as error:
+        print(f"{name}: ERROR: {error}", file=sys.stderr)
+        return 1
+
+    allowed = pixel_tolerance * 100.0
+    passed = ratio <= pixel_tolerance
+
+    print(
+        f"{name}: {'OK' if passed else 'FAIL'} "
+        f"(worst channel delta {worst}, "
+        f"{differing} differing pixels / {ratio * 100.0:.3f}%; "
+        f"allowed {channel_tolerance} per channel and "
+        f"{allowed:.3f}% of pixels)"
+    )
+
+    if not passed:
+        print(
+            f"{name} does not match {reference}.",
+            file=sys.stderr,
+        )
+        return 1
+
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -251,6 +292,19 @@ def main(argv: list[str]) -> int:
 
     if not 0.0 <= arguments.pixel_tolerance <= 1.0:
         parser.error("--pixel-tolerance must be between zero and one")
+
+    if arguments.reference.is_file() != arguments.candidate.is_file():
+        parser.error(
+            "give two directories or two PNG files, not one of each"
+        )
+
+    if arguments.reference.is_file():
+        return compare_pair(
+            arguments.reference,
+            arguments.candidate,
+            arguments.channel_tolerance,
+            arguments.pixel_tolerance,
+        )
 
     references = sorted(arguments.reference.glob("*.png"))
 

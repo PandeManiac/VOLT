@@ -18,6 +18,7 @@ It writes four 1440 by 900 captures to `docs/images`:
 | `editor-workspace.png` | `workspace` | Starter project, default layout, no selection |
 | `editor-authoring.png` | `authoring` | Starter cube selected, Move tool active, populated inspector |
 | `editor-ecs.png` | `ecs` | Play Mode running, cube selected, ECS panel showing its runtime entity |
+| `editor-ecs-query.png` | `ecs-query` | Play Mode running, ECS query rows, key hints, and pager |
 | `editor-start.png` | `start` | Start screen before a project is open |
 
 Pass `--check` to capture into a temporary directory and compare each
@@ -52,6 +53,29 @@ GitHub's slug rule. Run it directly; it uses only the standard library:
 ```bash
 python3 tools/tests/test-doc-contents.py
 ```
+
+## Comparing a windowed capture
+
+The documentation images come from the headless rasterizer, which draws
+the same widget tree the window paints but not through Vulkan. On a
+machine with a GPU, the headless harness can run the editor and save a
+real window capture:
+
+```bash
+tools/test-vulkan-headless.sh --project src/Volt.Editor \
+    --screenshots --output-dir artifacts/window
+```
+
+Then compare that PNG with the committed image, or with one of the
+golden baselines, using the same tolerances as the documentation check:
+
+```bash
+python3 tools/compare-editor-docs.py \
+    docs/images/editor-workspace.png artifacts/window/<capture>.png
+```
+
+The comparator accepts two directories, as CI uses it, or two PNG files
+for this single-image case.
 
 ## Headless Vulkan harness
 

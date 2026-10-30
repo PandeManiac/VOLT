@@ -20,7 +20,8 @@ usage() {
 		"Usage: tools/capture-editor-docs.sh [options]" \
 		"" \
 		"Writes docs/images/editor-workspace.png, editor-authoring.png," \
-		"editor-ecs.png, and editor-start.png from the editor's --snapshot" \
+		"editor-ecs.png, editor-ecs-query.png, and editor-start.png from" \
+		"the editor's --snapshot" \
 		"command." \
 		"" \
 		"Options:" \
@@ -107,6 +108,7 @@ capture() {
 capture editor-workspace.png workspace
 capture editor-authoring.png authoring
 capture editor-ecs.png ecs
+capture editor-ecs-query.png ecs-query
 capture editor-start.png start
 
 if [[ $CHECK -eq 1 ]]; then

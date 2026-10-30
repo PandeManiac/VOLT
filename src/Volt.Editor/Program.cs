@@ -56,7 +56,7 @@ internal static class Program
 				"[--project <folder>] [--frames <count>] " +
 				"[--width <pixels>] [--height <pixels>] " +
 				"[--ui-scale <factor>] [--snapshot <file>] " +
-				"[--snapshot-state <workspace|authoring|start|ecs>]");
+				"[--snapshot-state <workspace|authoring|start|ecs|ecs-query>]");
 
 			return 2;
 		}
@@ -372,32 +372,37 @@ internal static class Program
 			DockLayout? layout = null;
 			EcsInspectorPanelState? ecsPanelState = null;
 
-			if (state == "ecs")
+			if (state is "ecs" or "ecs-query")
 			{
-				// The panel reports the world Play Mode built, so the capture
-				// selects the starter scene's cube and runs a session: the
-				// selection shows the panel resolving an authored object to its
-				// runtime entity. A remembered Position query then matches both
-				// entities, and the taller bottom dock leaves room for the whole
-				// panel in one image.
-				SceneEntity? mesh = session.Scene?.Entities.FirstOrDefault(
-					entity => entity.GetComponent<MeshRendererData>() is not null);
+				// The panel reports the world Play Mode built, so both presets
+				// run a session and open the ECS tab. The plain preset selects
+				// the starter scene's cube, which shows the panel resolving an
+				// authored object to its runtime entity, and gives the bottom
+				// dock more room for that view. The query preset leaves the
+				// selection alone and scrolls to the rows, the key hints, and
+				// the pinned pager.
+				bool query = state == "ecs-query";
 
-				if (mesh is null)
+				if (!query)
 				{
-					throw new InvalidOperationException(
-						"The ECS snapshot needs a scene with a mesh object.");
+					SceneEntity? mesh = session.Scene?.Entities.FirstOrDefault(
+						entity => entity.GetComponent<MeshRendererData>() is not null);
+
+					if (mesh is null)
+					{
+						throw new InvalidOperationException(
+							"The ECS snapshot needs a scene with a mesh object.");
+					}
+
+					session.Select(mesh.Id);
 				}
 
-				session.Select(mesh.Id);
 				session.StartPlay();
 
 				layout = DockLayout.CreateEditorDefault();
 				layout.FindTabs("ecs")!.ActivePanelId = "ecs";
 
-				DockSplitNode? bottom = FindVerticalSplit(layout.Root);
-
-				if (bottom is not null)
+				if (!query && FindVerticalSplit(layout.Root) is { } bottom)
 				{
 					bottom.Ratio = 0.2f;
 				}
@@ -429,7 +434,8 @@ internal static class Program
 				defaultProjectFolder: state == "start"
 					? "~/VoltGame"
 					: null,
-				ecsPanelState: ecsPanelState);
+				ecsPanelState: ecsPanelState,
+				ecsScrollToEnd: state == "ecs-query");
 
 			Console.WriteLine(
 				$"Wrote {fullPath} ({image.Width}x{image.Height}).");
@@ -682,18 +688,18 @@ internal static class Program
 				case SnapshotStateArgument:
 					if (index + 1 >= args.Length)
 					{
-						error = "--snapshot-state requires workspace, authoring, " +
-							"start, or ecs.";
+						error = "--snapshot-state requires workspace, authoring, "
+							+ "start, ecs, or ecs-query.";
 						return false;
 					}
 
 					snapshotState = args[++index].ToLowerInvariant();
 
-					if (snapshotState is not
-						("workspace" or "authoring" or "start" or "ecs"))
+					if (snapshotState is not ("workspace" or "authoring" or "start" or
+						"ecs" or "ecs-query"))
 					{
-						error = "--snapshot-state must be workspace, authoring, " +
-							"start, or ecs.";
+						error = "--snapshot-state must be workspace, authoring, start, "
+							+ "ecs, or ecs-query.";
 						return false;
 					}
 

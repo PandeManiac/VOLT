@@ -143,6 +143,32 @@ public sealed class GoldenSnapshotTests : IDisposable
 	}
 
 	[Fact]
+	public void PlayModeEcsQuery_MatchesItsBaseline()
+	{
+		// The query view: no selection, the panel scrolled past its summary
+		// to the rows, the key hints, and the pinned pager.
+		_session.StartPlay();
+
+		DockLayout layout = DockLayout.CreateEditorDefault();
+		layout.FindTabs("ecs")!.ActivePanelId = "ecs";
+
+		UiRasterImage actual = EditorSnapshot.Capture(
+			_session,
+			Path.Combine(_root, "editor-ecs-query.png"),
+			1440,
+			900,
+			layout: layout,
+			ecsPanelState: new EcsInspectorPanelState
+			{
+				RequiredComponents =
+					[ComponentRegistry.Get<PositionComponent>()]
+			},
+			ecsScrollToEnd: true);
+
+		VerifyImage("editor-ecs-query.png", actual);
+	}
+
+	[Fact]
 	public void RotateWorldSnapState_MatchesItsBaseline()
 	{
 		_session.Tool = EditorTool.Rotate;
