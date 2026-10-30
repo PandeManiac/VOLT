@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using Volt.Ecs;
 using Volt.Ecs.Component;
 using Volt.Editor.Core.Scenes;
@@ -19,7 +20,9 @@ public sealed record RuntimeComponentSnapshot(
 	string TypeName,
 	int Size,
 	IReadOnlyList<RuntimeFieldSnapshot> Fields,
-	string? Note);
+	string? Note,
+	Vector3? Value = null,
+	RuntimeEditChannel? Editable = null);
 
 /// <summary>
 /// Measured storage statistics for one runtime archetype.
@@ -264,78 +267,143 @@ public sealed class RuntimeWorldSnapshot
 			ComponentRegistry.GetInfo(type);
 
 		Type componentType = metadata.ClrType;
+		string displayName = ShortName(componentType);
 
-		IReadOnlyList<RuntimeFieldSnapshot>? fields =
-			ReadFields(world, entity, componentType);
-
-		return new RuntimeComponentSnapshot(
-			ShortName(componentType),
-			componentType.Name,
-			metadata.Size,
-			fields ?? [],
-			fields is null
-				? $"No inspector formatter for {componentType.Name}; " +
-					$"{metadata.Size} bytes per entity."
-				: null);
-	}
-
-	private static IReadOnlyList<RuntimeFieldSnapshot>? ReadFields(
-		World world,
-		Entity entity,
-		Type componentType)
-	{
-		if (componentType == typeof(Volt.Ecs.Components.Spatial.PositionComponent))
-		{
-			return world.TryReadComponent<
-					Volt.Ecs.Components.Spatial.PositionComponent>(
-					entity,
-					out Volt.Ecs.Components.Spatial.PositionComponent position)
-				? Vector(position.Value.X, position.Value.Y, position.Value.Z)
-				: null;
-		}
-
-		if (componentType == typeof(Volt.Ecs.Components.Spatial.RotationComponent))
+		if (componentType ==
+			typeof(Volt.Ecs.Components.Spatial.RotationComponent))
 		{
 			return world.TryReadComponent<
 					Volt.Ecs.Components.Spatial.RotationComponent>(
 					entity,
 					out Volt.Ecs.Components.Spatial.RotationComponent rotation)
-				? Rotation(rotation.Value)
-				: null;
+				? new RuntimeComponentSnapshot(
+					displayName,
+					componentType.Name,
+					metadata.Size,
+					Rotation(rotation.Value),
+					"Stored as a world-space quaternion; rotation is not " +
+					"edited here. Change the authored Euler angles in the " +
+					"Inspector before Play instead.")
+				: new RuntimeComponentSnapshot(
+					displayName,
+					componentType.Name,
+					metadata.Size,
+					[],
+					"The rotation component is no longer readable.");
+		}
+
+		if (TryReadVector(world, entity, componentType, out Vector3 value))
+		{
+			return new RuntimeComponentSnapshot(
+				displayName,
+				componentType.Name,
+				metadata.Size,
+				Vector(value.X, value.Y, value.Z),
+				null,
+				value,
+				EditChannelFor(componentType));
+		}
+
+		return new RuntimeComponentSnapshot(
+			displayName,
+			componentType.Name,
+			metadata.Size,
+			[],
+			$"No inspector formatter for {componentType.Name}; " +
+				$"{metadata.Size} bytes per entity.");
+	}
+
+	/// <summary>
+	/// Gets the edit channel for a runtime vector component, or null
+	/// when the component's value is not editable from this panel.
+	/// </summary>
+	private static RuntimeEditChannel? EditChannelFor(Type componentType)
+	{
+		if (componentType == typeof(
+			Volt.Ecs.Components.Spatial.PositionComponent))
+		{
+			return RuntimeEditChannel.Position;
 		}
 
 		if (componentType == typeof(Volt.Ecs.Components.Spatial.ScaleComponent))
 		{
-			return world.TryReadComponent<
-					Volt.Ecs.Components.Spatial.ScaleComponent>(
-					entity,
-					out Volt.Ecs.Components.Spatial.ScaleComponent scale)
-				? Vector(scale.Value.X, scale.Value.Y, scale.Value.Z)
-				: null;
+			return RuntimeEditChannel.Scale;
 		}
 
 		if (componentType == typeof(Volt.Ecs.Components.Motion.VelocityComponent))
 		{
-			return world.TryReadComponent<
-					Volt.Ecs.Components.Motion.VelocityComponent>(
-					entity,
-					out Volt.Ecs.Components.Motion.VelocityComponent velocity)
-				? Vector(velocity.Value.X, velocity.Value.Y, velocity.Value.Z)
-				: null;
+			return RuntimeEditChannel.Velocity;
 		}
 
 		if (componentType ==
 			typeof(Volt.Ecs.Components.Motion.AngularVelocityComponent))
 		{
-			return world.TryReadComponent<
-					Volt.Ecs.Components.Motion.AngularVelocityComponent>(
-					entity,
-					out Volt.Ecs.Components.Motion.AngularVelocityComponent angular)
-				? Vector(angular.Value.X, angular.Value.Y, angular.Value.Z)
-				: null;
+			return RuntimeEditChannel.AngularVelocity;
 		}
 
 		return null;
+	}
+
+	/// <summary>
+	/// Reads the vector a runtime component stores, without retaining
+	/// a reference into chunk storage.
+	/// </summary>
+	private static bool TryReadVector(
+		World world,
+		Entity entity,
+		Type componentType,
+		out Vector3 value)
+	{
+		if (componentType == typeof(Volt.Ecs.Components.Spatial.PositionComponent))
+		{
+			if (world.TryReadComponent<
+				Volt.Ecs.Components.Spatial.PositionComponent>(
+				entity,
+				out Volt.Ecs.Components.Spatial.PositionComponent position))
+			{
+				value = position.Value;
+				return true;
+			}
+		}
+		else if (componentType ==
+			typeof(Volt.Ecs.Components.Spatial.ScaleComponent))
+		{
+			if (world.TryReadComponent<
+				Volt.Ecs.Components.Spatial.ScaleComponent>(
+				entity,
+				out Volt.Ecs.Components.Spatial.ScaleComponent scale))
+			{
+				value = scale.Value;
+				return true;
+			}
+		}
+		else if (componentType ==
+			typeof(Volt.Ecs.Components.Motion.VelocityComponent))
+		{
+			if (world.TryReadComponent<
+				Volt.Ecs.Components.Motion.VelocityComponent>(
+				entity,
+				out Volt.Ecs.Components.Motion.VelocityComponent velocity))
+			{
+				value = velocity.Value;
+				return true;
+			}
+		}
+		else if (componentType ==
+			typeof(Volt.Ecs.Components.Motion.AngularVelocityComponent))
+		{
+			if (world.TryReadComponent<
+				Volt.Ecs.Components.Motion.AngularVelocityComponent>(
+				entity,
+				out Volt.Ecs.Components.Motion.AngularVelocityComponent angular))
+			{
+				value = angular.Value;
+				return true;
+			}
+		}
+
+		value = default;
+		return false;
 	}
 
 	private static IReadOnlyList<RuntimeFieldSnapshot> Vector(

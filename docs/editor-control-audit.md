@@ -109,8 +109,10 @@ The profiler draws real frame-time and managed-memory timelines from
 The ECS panel reports the runtime world's entity and archetype counts,
 the selected object's real ECS handle and component values, measured
 chunk storage per archetype, and a component query that runs through
-`World.Query`. It refreshes on a timer while playing or paused. It is
-read-only; component values cannot be edited there yet.
+`World.Query`. It refreshes on a timer while playing or paused.
+Position, scale, velocity, and angular velocity can be edited in place.
+Each edit writes only the live ECS world, is discarded on Stop, and
+never reaches the authored scene or its undo history.
 
 ## Docking
 
@@ -128,8 +130,10 @@ controls; no visible control promises them:
   beyond discovery.
 - No custom C# gameplay assembly loading at runtime; gameplay is
   composed from built-in behaviours and authored component data.
-- The ECS panel cannot edit runtime components or list individual
-  query results; it reports measured counts and signatures.
+- The ECS panel edits only components the runtime entity already has,
+  and cannot add or remove them. It cannot edit rotation, and it does
+  not list individual query results; it reports measured counts and
+  signatures.
 - No IME candidate window or complex text shaping.
 - Gameplay and scene rendering use a single pass with no shadows or
   post-processing.

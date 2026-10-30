@@ -400,13 +400,24 @@ is running it shows:
 
 Values refresh four times a second instead of on every fixed step, and
 each capture copies every value it displays, so stopping Play Mode
-cannot leave the panel holding a reference into chunk storage. The panel
-is read-only: runtime component editing needs defined write-back
-semantics and is not implemented yet.
+cannot leave the panel holding a reference into chunk storage.
+
+Position, scale, velocity, and angular velocity are editable while Play
+Mode is running or paused. The write-back rule is deliberately narrow:
+an edit changes the live ECS component and nothing else. It does not
+touch the authored scene, mark it dirty, or create an undo entry, and
+stopping Play discards it with the rest of the world. The panel only
+writes components the entity already has; it never adds or removes one,
+because that would migrate the entity between archetypes from the UI
+thread. A running system can overwrite the value on its next tick, and
+the panel says so rather than implying the edit is permanent. Change
+saved values in the authored Inspector.
+
+Rotation stays read-only here: the runtime stores a world-space
+quaternion, while authored Euler angles live in the Inspector.
 
 Inspecting a paused world works the same way, which is the useful case
-for comparing a simulated pose with the authored transform. The authored
-Inspector keeps editing serialized data; the ECS panel never writes it.
+for comparing a simulated pose with the authored transform.
 
 ## Running a game without the editor
 
@@ -470,9 +481,10 @@ not yet a mesh-rendering game framework.
 - Gameplay logic is currently composed from the built-in behaviours
   (`Spin`, `Move`) and authored component data. Loading user-authored
   C# assemblies into a separate runtime is not implemented.
-- The ECS panel is read-only. Runtime component edits, entity creation
-  at runtime, and per-entity query result lists are not implemented;
-  the query reports matched archetypes and counts.
+- The ECS panel edits only components the selected runtime entity
+  already has. Runtime entity creation, adding or removing components,
+  rotation editing, and per-entity query result lists are not
+  implemented; the query reports matched archetypes and counts.
 - Floating dock windows, asset thumbnails, and an asset import pipeline
   beyond discovery are not implemented.
 - Text entry covers Unicode text and clipboard operations. IME

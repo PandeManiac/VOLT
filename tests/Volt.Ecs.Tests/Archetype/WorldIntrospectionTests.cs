@@ -71,7 +71,7 @@ public sealed class WorldIntrospectionTests
 		world.DestroyEntity(entity);
 
 		Assert.False(world.TryGetSignature(entity, out ComponentSignature signature));
-		Assert.Equal(0, signature.Count);
+		Assert.True(signature.Count == 0);
 	}
 
 	[Fact]

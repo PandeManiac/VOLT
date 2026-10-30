@@ -205,6 +205,48 @@ to linear when the target format carries the transfer function, and
 
 ### Next
 
-- Runtime component editing with explicit write-back rules.
 - Per-entity query results with paging.
 - Project-owned gameplay assemblies, which is Milestone E.
+
+## Runtime component editing (October 2026)
+
+Same branch, on top of `dd0367b`.
+
+### What changed
+
+- **`RuntimeWorldEditor`.** `Apply` writes Position, Scale, Velocity, or
+  AngularVelocity into the live Play Mode world. The session overload
+  refuses work unless Play Mode is running or paused; the runtime
+  overload additionally rejects non-finite values, an authored id with
+  no runtime entity, a dead handle, and a component the entity does not
+  have. It never adds or removes components, which would migrate the
+  entity between archetypes from the UI thread.
+- **Write-back rule.** An edit changes the live ECS component only. It
+  never mutates the authored scene, marks it dirty, or creates an undo
+  entry, and stopping Play discards it with the world. A running system
+  can overwrite the value on the next tick; the panel reports that.
+- **`RuntimeComponentSnapshot`.** Now carries the raw `Vector3` and an
+  optional `RuntimeEditChannel`, so the panel edits the exact stored
+  value instead of re-parsing a three-decimal display string. Rotation
+  remains read-only and explains why: the runtime holds a world-space
+  quaternion, not authored Euler angles.
+- **ECS panel.** Position and scale (and motion values when present)
+  render as axis fields. A field that has focus pauses the panel's
+  four-per-second rebuild so typing is not interrupted; disposing the
+  editors before a rebuild releases their handlers.
+
+### Verified in the cloud
+
+- Release build and the full solution suite (see the session report for
+  the exact counts).
+- `RuntimeWorldEditorTests` covers live-world writes, authored-data
+  isolation, missing components, unknown ids, non-finite input, the
+  stopped/running/stopped session boundary, and the snapshot's editable
+  marker.
+
+### Not verified here
+
+- The panel has not been driven interactively, and no GPU exists in the
+  workspace. The editing path is covered at the snapshot and world
+  levels; the focused-field refresh hold and the row layout have not
+  been captured in a window.

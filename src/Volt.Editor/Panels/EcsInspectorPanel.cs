@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using Volt.Ecs.Component;
 using Volt.Editor.Core.Runtime;
 using Volt.Editor.Viewport;
@@ -52,6 +53,8 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly EmptyStateView _empty;
 	private readonly StackPanel _content;
 	private readonly List<(ComponentType Type, CheckBox Box)> _filters = [];
+	private readonly List<Vector3Field> _editors = [];
+	private readonly Label _editStatus;
 
 	private double _elapsed;
 	private bool _disposed;
@@ -102,12 +105,31 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		doc.Add(_entityHandle);
 		doc.Add(_entityArchetype);
 
+		doc.Add(new Label(
+			"Position, scale, and existing motion values are editable. " +
+			"Edits write to the live ECS world only: they never touch the " +
+			"saved scene, and stopping Play discards them. Running systems " +
+			"may overwrite a value on the next tick.")
+		{
+			Font = Theme.Fonts.Small,
+			TextColor = Theme.Palette.TextDisabled,
+			Wrap = UiTextWrap.Wrap
+		});
+
 		_componentRows = new StackPanel
 		{
 			Spacing = 2f
 		};
 
+		_editStatus = new Label(string.Empty)
+		{
+			Font = Theme.Fonts.Small,
+			TextColor = Theme.Palette.TextMuted,
+			Wrap = UiTextWrap.Wrap
+		};
+
 		doc.Add(_componentRows);
+		doc.Add(_editStatus);
 		doc.Add(new Separator());
 
 		doc.Add(new Label("Archetypes")
@@ -273,7 +295,10 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		if (runtime is null)
 		{
+			DisposeEditors();
+			_componentRows.ClearChildren();
 			_queryResult.Text = string.Empty;
+			_editStatus.Text = string.Empty;
 			return;
 		}
 
@@ -295,6 +320,15 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 	private void RefreshSelectedEntity(RuntimeEntitySnapshot? entity)
 	{
+		if (_editors.Any(editor => editor.IsEditing))
+		{
+			// Rebuilding the rows would destroy the field the developer
+			// is typing into, so the panel holds its refresh until the
+			// edit commits or focus moves on.
+			return;
+		}
+
+		DisposeEditors();
 		_componentRows.ClearChildren();
 
 		if (entity is null)
@@ -339,6 +373,27 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 				});
 			}
 
+			if (component.Editable is RuntimeEditChannel channel &&
+				component.Value is Vector3 vector)
+			{
+				Vector3Field editor = new()
+				{
+					Format = "0.###",
+					Step = 0.1f
+				};
+
+				editor.SetValue(vector, notify: false);
+
+				Guid authoredId = entity.AuthoredId;
+
+				editor.ValueChanged += field =>
+					ApplyEdit(authoredId, channel, field.Value);
+
+				_editors.Add(editor);
+				_componentRows.Add(editor);
+				continue;
+			}
+
 			foreach (RuntimeFieldSnapshot field in component.Fields)
 			{
 				_componentRows.Add(new Label($"{field.Label}: {field.Value}")
@@ -348,6 +403,38 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 				});
 			}
 		}
+	}
+
+	private void ApplyEdit(
+		Guid authoredId,
+		RuntimeEditChannel channel,
+		Vector3 value)
+	{
+		if (_session.Play is not PlaySession play)
+		{
+			return;
+		}
+
+		RuntimeEditResult result = RuntimeWorldEditor.Apply(
+			play,
+			authoredId,
+			channel,
+			value);
+
+		_editStatus.Text = result.Message;
+		_editStatus.TextColor = result.Applied
+			? Theme.Palette.TextMuted
+			: Theme.Palette.Warning;
+	}
+
+	private void DisposeEditors()
+	{
+		foreach (Vector3Field editor in _editors)
+		{
+			editor.Dispose();
+		}
+
+		_editors.Clear();
 	}
 
 	private void RefreshArchetypes(
