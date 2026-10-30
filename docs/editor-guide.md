@@ -427,8 +427,9 @@ is running it shows:
   filter, scene order, nothing checked, and no results. The filter, the
   sort, and the checked
   components survive a panel rebuild, and a remembered query runs by
-  itself once Play Mode has built a world. A manual pass over these
-  controls is the checklist at the end of this guide.
+  itself once Play Mode has built a world, and a hint line under the
+  rows lists the keys. A manual pass over these controls is the
+  checklist at the end of this guide.
 
 Values refresh four times a second instead of on every fixed step, and
 each capture copies every value it displays, so stopping Play Mode

@@ -4,6 +4,23 @@ Volt.Ui is VOLT's native, retained-mode user interface framework. It
 does not depend on Volt.Ecs, a graphics API, SDL, or the editor. The
 editor is one consumer of it; games are expected to be another.
 
+## Contents
+
+- [Design in one page](#design-in-one-page)
+- [Coordinate system](#coordinate-system)
+- [Minimal headless example](#minimal-headless-example)
+- [Widget lifetime](#widget-lifetime)
+- [Layout](#layout)
+- [Text and fonts](#text-and-fonts)
+- [Controls](#controls)
+- [Styling, metrics, and icons](#styling-metrics-and-icons)
+- [Docking](#docking)
+- [Rendering integration](#rendering-integration)
+- [Headless rasterization](#headless-rasterization)
+- [Testing](#testing)
+- [Measured performance](#measured-performance)
+- [Current limitations](#current-limitations)
+
 ## Design in one page
 
 - **Retained widget tree.** Each widget owns its children, its layout

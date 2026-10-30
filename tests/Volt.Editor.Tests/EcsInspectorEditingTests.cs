@@ -945,6 +945,44 @@ public sealed class EcsInspectorEditingTests : IDisposable
 	}
 
 	[Fact]
+	public void QueryResults_ShowKeyHintsWithTheRows()
+	{
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Label hints = Descendants(panel)
+			.OfType<Label>()
+			.Single(label => label.Name == "QueryKeyHints");
+
+		Assert.False(
+			hints.IsVisible,
+			"The hints mean nothing before a query has matched anything.");
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.True(hints.IsVisible);
+		Assert.Contains("Home and End", hints.Text, StringComparison.Ordinal);
+		Assert.Contains("Ctrl+R", hints.Text, StringComparison.Ordinal);
+		Assert.Contains("Page Up", hints.Text, StringComparison.Ordinal);
+
+		Button reset = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Reset");
+
+		Click(reset.GlobalVisualBounds.Center);
+		_context.BeginFrame(0.2, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.False(
+			hints.IsVisible,
+			"The hints must leave with the rows they describe.");
+	}
+
+	[Fact]
 	public void QueryResults_PagerStaysOutsideTheScrollingDocument()
 	{
 		// Enough entities to fill a page and enable Next, and enough of

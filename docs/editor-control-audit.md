@@ -4,6 +4,21 @@ Every visible control in the editor is listed with its state. The
 inventory exists so a later change cannot quietly leave a control that
 looks usable but edits nothing.
 
+## Contents
+
+- [How each entry was checked](#how-each-entry-was-checked)
+- [Menus](#menus)
+- [Toolbar](#toolbar)
+- [Hierarchy](#hierarchy)
+- [Inspector](#inspector)
+- [Scene viewport](#scene-viewport)
+- [Game viewport](#game-viewport)
+- [Project browser](#project-browser)
+- [Console and Profiler](#console-and-profiler)
+- [ECS inspector](#ecs-inspector)
+- [Docking](#docking)
+- [Known intentional limitations](#known-intentional-limitations)
+
 ## How each entry was checked
 
 - The action is wired in `EditorShell` (menus, toolbar) or in the
@@ -132,7 +147,7 @@ selection between rows and step onto the next or previous page from the
 edge of one, `Page Up` and `Page Down` jump a whole page at a time, and
 `Home` and `End` reach the ends of the whole list, and **Reset**, or
 `Ctrl+R` on a focused row, clears the filter, the sort, and the checked
-components.
+components. A hint line under the rows lists those keys.
 The filter,
 the sort, and the checked components are part of the panel's captured
 state, so they come back after an interface-scale rebuild or reopening

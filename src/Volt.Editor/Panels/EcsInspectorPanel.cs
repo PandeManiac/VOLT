@@ -41,6 +41,12 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private const double RefreshIntervalSeconds = 0.25;
 	private const int QueryPageSize = 8;
 
+	// Shown under the result rows so the keys the rows answer are
+	// discoverable without reading the guide.
+	private const string QueryKeyHints =
+		"Rows: Up and Down move, Page Up and Page Down change the page, " +
+		"Home and End jump to the ends, and Ctrl+R resets the view.";
+
 	private readonly EditorSession _session;
 	private readonly Label _world;
 	private readonly Label _state;
@@ -54,6 +60,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly StackPanel _componentRows;
 	private readonly StackPanel _archetypeRows;
 	private readonly StackPanel _queryFilters;
+	private readonly Label _queryHints;
 	private readonly Label _queryResult;
 	private readonly Button _runQuery;
 	private readonly TextField _queryFilter;
@@ -340,6 +347,15 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			Spacing = 1f
 		};
 
+		_queryHints = new Label(QueryKeyHints)
+		{
+			Name = "QueryKeyHints",
+			Font = Theme.Fonts.Small,
+			TextColor = Theme.Palette.TextDisabled,
+			Wrap = UiTextWrap.Wrap,
+			IsVisible = false
+		};
+
 		_queryResult = new Label(string.Empty)
 		{
 			Font = Theme.Fonts.Small,
@@ -351,6 +367,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		doc.Add(_queryFilter);
 		doc.Add(sortRow);
 		doc.Add(_queryRows);
+		doc.Add(_queryHints);
 		doc.Add(_queryResult);
 
 		ScrollView scroll = new()
@@ -998,6 +1015,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		if (_queryView.Count == 0)
 		{
 			_queryPager.IsVisible = false;
+			_queryHints.IsVisible = false;
 			_queryPageLabel.Text = string.Empty;
 
 			if (_queryMatches.Count > 0)
@@ -1061,6 +1079,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			count);
 
 		_queryPager.IsVisible = true;
+		_queryHints.IsVisible = true;
 	}
 
 	/// <summary>
@@ -1189,6 +1208,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		_queryPage = 0;
 		_queryRows.ClearChildren();
 		_queryPager.IsVisible = false;
+		_queryHints.IsVisible = false;
 		_queryPageLabel.Text = string.Empty;
 		_queryResult.Text = string.Empty;
 	}

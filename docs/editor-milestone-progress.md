@@ -589,6 +589,34 @@ Same branch, on top of `fde7206`.
 - No GPU or interactive session, so the shortcut was only driven through
   the headless input context, not a real keyboard.
 
+## Key hints and document contents (October 2026)
+
+Same branch, on top of `6715ba8`.
+
+### What changed
+
+- **Key hints.** A muted line under the query rows says what the keys do:
+  Up and Down move, Page Up and Page Down change the page, Home and End
+  jump to the ends, and Ctrl+R resets the view. It appears with the rows
+  and leaves with them, so it costs no space before a query runs.
+- **Contents lists.** The UI framework guide and the editor control audit
+  had no table of contents either; both now open with one, matching the
+  editor guide. The milestone log keeps its date-ordered sections without
+  one, because it is read as a history rather than navigated.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Tests` 290 passed, 0 failed.
+- A headless test checks the hint is hidden before a query, appears with
+  the rows with the expected keys in its text, and goes away when the
+  view is reset.
+
+### Not verified here
+
+- No GPU or interactive session, so the hint line has not been seen in a
+  window; its presence, visibility, and text are asserted instead.
+
 ### Next
 
 - Project-owned gameplay assemblies (Milestone E).
