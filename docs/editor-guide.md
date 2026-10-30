@@ -68,8 +68,8 @@ small per-channel difference and a fraction of a percent of differing
 pixels so a new runtime does not fail the build while a moved panel, a
 lost label, or a wrong colour does. After an intentional interface
 change, rewrite the baselines with
-`VOLT_UPDATE_SNAPSHOTS=1 dotnet test tests/Volt.Editor.Tests --filter GoldenSnapshotTests`
-and review the new images before committing them.
+`VOLT_UPDATE_SNAPSHOTS=1 dotnet test tests/Volt.Editor.Tests --filter
+GoldenSnapshotTests` and review the new images before committing them.
 
 `--snapshot-state` selects what a capture shows. `workspace` is the
 default: a temporary starter project with no selection. `authoring`
@@ -423,8 +423,9 @@ is running it shows:
   edge of one. `Page Up` and `Page Down` jump a whole page and land on
   the row the arrow would have reached, while `Home` and `End` reach the
   first and last selectable row of the whole list. **Reset**, or
-  `Ctrl+R` on a focused row, returns the section to its initial state: no filter, scene order, nothing
-  checked, and no results. The filter, the sort, and the checked
+  `Ctrl+R` on a focused row, returns the section to its initial state: no
+  filter, scene order, nothing checked, and no results. The filter, the
+  sort, and the checked
   components survive a panel rebuild, and a remembered query runs by
   itself once Play Mode has built a world. A manual pass over these
   controls is the checklist at the end of this guide.
