@@ -548,6 +548,27 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 		foreach (RuntimeComponentSnapshot component in entity.Components)
 		{
+			bool editable = component.Editable is RuntimeEditChannel &&
+				component.Value is Vector3;
+
+			if (!editable && component.Fields.Count == 0 &&
+				component.Note is string compact)
+			{
+				// Nothing here can be edited or read as a value, so the
+				// component is one fact rather than a section: its name and
+				// the reason it has no editor share a single line instead of
+				// reserving a heading and a note of their own.
+				_componentRows.Add(new Label(
+					$"{component.DisplayName} - {compact}")
+				{
+					Font = Theme.Fonts.Small,
+					TextColor = Theme.Palette.TextDisabled,
+					Wrap = UiTextWrap.Wrap
+				});
+
+				continue;
+			}
+
 			_componentRows.Add(new Label(component.DisplayName)
 			{
 				Font = Theme.Fonts.PanelHeader,

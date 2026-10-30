@@ -621,6 +621,40 @@ Same branch, on top of `6715ba8`.
 
 - Project-owned gameplay assemblies (Milestone E).
 
+## Compact rows and a frame-order test (October 2026)
+
+Same branch, on top of `27adb36`.
+
+### What changed
+
+- **One line for a component with no editor.** A component that has
+  neither an editable channel nor readable fields is now a single muted
+  line, `MeshRenderer - No inspector formatter for MeshRendererComponent;
+  16 bytes per entity.`, instead of an accent heading plus a note that
+  reserved two rows for one fact.
+- **The frame ordering has a test.** `EcsInspectorFrameTests` rebuilds the
+  panel's rows during the update phase, then asserts that the frame drawn
+  straight afterwards paints almost none of them while the next layout
+  and draw paints them. That is the extra frame a capture now takes, so a
+  future change that rebuilds rows during draw, or drops the extra frame,
+  fails here as well as in the image comparison.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Tests` 293 passed, 0 failed.
+- `./tools/capture-editor-docs.sh --check` compares all five images.
+- The documentation comparator and contents checkers still pass.
+
+### Not verified here
+
+- No GPU or display: the compact line was reviewed in the headless
+  capture, not in a window.
+
+### Next
+
+- Project-owned gameplay assemblies (Milestone E).
+
 ## Two ECS figures and a windowed comparison check (October 2026)
 
 Same branch, on top of `337d6ae`.
