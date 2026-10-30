@@ -1113,6 +1113,50 @@ public sealed class EcsInspectorEditingTests : IDisposable
 				StringComparison.Ordinal));
 	}
 
+	[Fact]
+	public void ATickingWorld_DoesNotRebuildTheRowUnderAnActiveEdit()
+	{
+		SceneEntity player = _session.CreateEntity("Player")!;
+		player.Transform.Position = new Vector3(1f, 2f, 3f);
+
+		_session.Select(player.Id);
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(520f, 900f), UiPoint.Zero);
+
+		NumericField x = PositionXField(panel);
+
+		Click(x.GlobalVisualBounds.Center);
+		Assert.True(_context.KeyDown(UiKey.A, UiKeyModifiers.Control));
+		_context.TextInput("7.5");
+
+		// The world changes underneath the edit, which is what would
+		// rebuild the row if the panel did not hold its refresh.
+		RuntimeScene runtime = _session.Play!.Runtime!;
+		Entity entity = runtime.Find(player.Id)!.Entity;
+
+		runtime.World.GetComponent<PositionComponent>(entity).Value =
+			new Vector3(4f, 5f, 6f);
+
+		panel.Tick(0.3, 1f);
+
+		Assert.Same(x, _context.FocusedWidget);
+		Assert.Equal("7.5", x.Text);
+
+		Assert.True(_context.KeyDown(UiKey.Enter));
+
+		x.ClearFocus();
+		panel.Tick(0.3, 1f);
+
+		NumericField rebuilt = PositionXField(panel);
+
+		Assert.NotSame(x, rebuilt);
+		Assert.Equal("7.5", rebuilt.Text);
+	}
+
 	private static Button ApplyToSceneButton(NumericField field)
 	{
 		// The field sits in an axis row, the axis row sits in the

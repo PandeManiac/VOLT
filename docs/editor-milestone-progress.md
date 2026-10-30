@@ -621,6 +621,45 @@ Same branch, on top of `6715ba8`.
 
 - Project-owned gameplay assemblies (Milestone E).
 
+## Query rows, edit safety, and a refresh measurement (October 2026)
+
+Same branch, on top of `12f3dfd`.
+
+### What changed
+
+- **The query list follows the same rule as the rows.** Its matches are
+  rebuilt only when the list it shows changes, so a repeated apply with
+  the same filter, sort, and matches leaves the rows in place. A query is
+  re-run when the world's structure changes, which is when an entity
+  appearing or leaving can change what is already listed, rather than on
+  every refresh.
+- **An edit survives a moving world.** A new test types into a runtime
+  position field, then writes a different value straight into the live
+  world's column and refreshes the panel: the focused field and its typed
+  text survive, and the row is rebuilt with the committed value once the
+  edit ends.
+- **Measured cost.** With 2000 refreshes on a steady world, a refresh that
+  skips the rebuild took about 30 us, while a refresh that rewrites the
+  selected entity's rows took about 51 us, so the gating removes roughly
+  21 us from each of the four refreshes a second. These are timings from
+  the headless test harness, not from a windowed editor.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Tests` 298 passed, 0 failed.
+- `./tools/capture-editor-docs.sh --check` compares all five images.
+- The documentation comparator and contents checkers still pass.
+
+### Not verified here
+
+- No GPU or display: no windowed timing, and the query-gating behaviour is
+  checked through widget identity rather than a live window session.
+
+### Next
+
+- Project-owned gameplay assemblies (Milestone E).
+
 ## Compact rows and a frame-order test (October 2026)
 
 Same branch, on top of `27adb36`.

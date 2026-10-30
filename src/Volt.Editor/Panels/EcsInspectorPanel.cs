@@ -91,6 +91,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	// an unchanged world does not tear the rows down on every tick.
 	private string _selectedKey = string.Empty;
 	private string _archetypesKey = string.Empty;
+	private string _queryKey = string.Empty;
 
 	private double _elapsed;
 	private bool _disposed;
@@ -520,14 +521,18 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		}
 
 		string archetypesKey = ArchetypesKey(snapshot.Archetypes);
+		bool structureChanged = archetypesKey != _archetypesKey;
 
-		if (archetypesKey != _archetypesKey)
+		if (structureChanged)
 		{
 			_archetypesKey = archetypesKey;
 			RefreshArchetypes(snapshot.Archetypes);
 		}
 
-		if (started && _queryIntent)
+		// An entity appearing or leaving can change the rows a running
+		// query already lists, so the query is re-run when the world's
+		// structure changes rather than on every tick.
+		if (_queryIntent && (started || structureChanged))
 		{
 			RunQuery();
 		}
@@ -1106,7 +1111,26 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			_queryPage = 0;
 		}
 
-		RenderQueryPage();
+		// The rows are rebuilt only when the list they show changes, so a
+		// repeated apply with the same filter, sort, and matches leaves the
+		// existing rows in place.
+		string key = QueryViewKey();
+
+		if (key != _queryKey)
+		{
+			_queryKey = key;
+			RenderQueryPage();
+		}
+	}
+
+	private string QueryViewKey()
+	{
+		return string.Join(
+			'\u0001',
+			_queryFilter.Text.Trim(),
+			_querySort.ToString(),
+			_queryPage.ToString(CultureInfo.InvariantCulture),
+			string.Join('\u0002', _queryView.Select(FormatRow)));
 	}
 
 	private void SetQuerySort(EcsQuerySort sort)
@@ -1326,6 +1350,10 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		_queryHints.IsVisible = false;
 		_queryPageLabel.Text = string.Empty;
 		_queryResult.Text = string.Empty;
+
+		// The panel now shows an empty list, so that is the list a later
+		// apply must differ from before it rebuilds the rows.
+		_queryKey = QueryViewKey();
 	}
 
 	private Button CreateSortButton(string text, EcsQuerySort sort)

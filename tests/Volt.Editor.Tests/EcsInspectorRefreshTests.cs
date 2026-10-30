@@ -1,6 +1,9 @@
+using Volt.Ecs.Component;
+using Volt.Ecs.Components.Spatial;
 using Volt.Editor.Core.Scenes;
 using Volt.Editor.Panels;
 using Volt.Ui;
+using Volt.Ui.Input;
 using Volt.Ui.Layout;
 using Volt.Ui.Widgets;
 
@@ -93,6 +96,105 @@ public sealed class EcsInspectorRefreshTests : IDisposable
 		_context.BeginFrame(0.0, new UiSize(1140f, 660f), UiPoint.Zero);
 
 		Assert.NotSame(first, PositionHeading(panel));
+	}
+
+	[Fact]
+	public void ASteadyWorld_KeepsTheQueryRowsInPlace()
+	{
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(
+			_session,
+			new EcsInspectorPanelState
+			{
+				RequiredComponents =
+					[ComponentRegistry.Get<PositionComponent>()]
+			});
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(1140f, 660f), UiPoint.Zero);
+
+		Label first = QueryRow(panel);
+
+		Assert.NotNull(first);
+
+		panel.Tick(0.3, 1f);
+		_context.BeginFrame(0.0, new UiSize(1140f, 660f), UiPoint.Zero);
+
+		Assert.Same(first, QueryRow(panel));
+	}
+
+	[Fact]
+	public void FilteringTheQuery_RebuildsItsRows()
+	{
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(
+			_session,
+			new EcsInspectorPanelState
+			{
+				RequiredComponents =
+					[ComponentRegistry.Get<PositionComponent>()]
+			});
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(1140f, 660f), UiPoint.Zero);
+
+		Label first = QueryRow(panel);
+
+		TextField? filter = QueryFilter(panel);
+
+		Assert.NotNull(filter);
+		Assert.True(filter.Focus());
+
+		// Typing, rather than assigning Text, is what raises the change the
+		// panel listens to.
+		Assert.True(_context.KeyDown(UiKey.A, UiKeyModifiers.Control));
+		_context.TextInput("Cube");
+		_context.BeginFrame(0.0, new UiSize(1140f, 660f), UiPoint.Zero);
+
+		Assert.NotSame(first, QueryRow(panel));
+	}
+
+	private static Label QueryRow(Widget root)
+	{
+		if (root is Label label &&
+			label.GetType().Name == "QueryResultRow")
+		{
+			return label;
+		}
+
+		foreach (Widget child in root.Children)
+		{
+			Label? found = QueryRow(child);
+
+			if (found is not null)
+			{
+				return found;
+			}
+		}
+
+		return null!;
+	}
+
+	private static TextField? QueryFilter(Widget root)
+	{
+		if (root is TextField { Name: "QueryFilter" } filter)
+		{
+			return filter;
+		}
+
+		foreach (Widget child in root.Children)
+		{
+			TextField? found = QueryFilter(child);
+
+			if (found is not null)
+			{
+				return found;
+			}
+		}
+
+		return null;
 	}
 
 	private static Label PositionHeading(Widget root)
