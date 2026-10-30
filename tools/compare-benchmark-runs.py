@@ -14,12 +14,14 @@ The table is the only part of a run this needs, so a recorded
 BenchmarkRun.txt is enough. Each input may also be a directory holding
 one or a downloaded CI artifact archive, which is how two hosted runs
 are quoted against each other instead of against the committed
-baseline.
+baseline. ``--json`` writes the same comparison as JSON, so a series of
+downloaded artifacts can be tracked by a script.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import zipfile
@@ -210,6 +212,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="exit non-zero when the --overhead quotient exceeds this value",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="write a JSON summary to stdout instead of the table",
+    )
     args = parser.parse_args(argv)
 
     if args.max_overhead is not None and args.overhead is None:
@@ -246,23 +253,28 @@ def main(argv: list[str] | None = None) -> int:
         print("No rows matched the requested job.", file=sys.stderr)
         return 2
 
-    print(f"{'method':<24}{'job':<12}{'baseline':>12}{'current':>12}{'ratio':>8}")
-
     over: list[str] = []
+    methods: list[dict[str, object]] = []
 
     for method, job, base_mean, current_mean, ratio in rows:
-        flag = ""
+        exceeded = args.max_ratio is not None and ratio > args.max_ratio
 
-        if args.max_ratio is not None and ratio > args.max_ratio:
-            flag = "  over"
+        if exceeded:
             over.append(method)
 
-        print(
-            f"{method:<24}{job:<12}"
-            f"{base_mean:10.3f}us{current_mean:10.3f}us{ratio:8.2f}{flag}"
+        methods.append(
+            {
+                "method": method,
+                "job": job,
+                "baseline_us": round(base_mean, 6),
+                "current_us": round(current_mean, 6),
+                "ratio": round(ratio, 6),
+                "over_limit": exceeded,
+            }
         )
 
     over_overhead: list[str] = []
+    overhead_summary: dict[str, object] | None = None
 
     if args.overhead is not None:
         numerator, denominator = parse_overhead_spec(args.overhead)
@@ -290,25 +302,85 @@ def main(argv: list[str] | None = None) -> int:
             print("No rows matched the requested job.", file=sys.stderr)
             return 2
 
-        print(f"\n{numerator} over {denominator}:")
+        quoted: list[dict[str, object]] = []
 
         for job, base_over, base_under, current_over, current_under in overhead_rows:
             base_quotient = base_over / base_under
             current_quotient = current_over / current_under
-            flag = ""
-
-            if (
+            exceeded = (
                 args.max_overhead is not None
                 and current_quotient > args.max_overhead
-            ):
-                flag = "  over"
+            )
+
+            if exceeded:
                 over_overhead.append(job)
 
-            print(
-                f"  {job}: {base_over:.3f}us/{base_under:.3f}us -> "
-                f"{current_over:.3f}us/{current_under:.3f}us  "
-                f"{base_quotient:.2f}x -> {current_quotient:.2f}x{flag}"
+            quoted.append(
+                {
+                    "job": job,
+                    "baseline_numerator_us": round(base_over, 6),
+                    "baseline_denominator_us": round(base_under, 6),
+                    "current_numerator_us": round(current_over, 6),
+                    "current_denominator_us": round(current_under, 6),
+                    "baseline_quotient": round(base_quotient, 6),
+                    "current_quotient": round(current_quotient, 6),
+                    "over_limit": exceeded,
+                }
             )
+
+        overhead_summary = {
+            "numerator": numerator,
+            "denominator": denominator,
+            "max": args.max_overhead,
+            "rows": quoted,
+        }
+
+    if args.json:
+        json.dump(
+            {
+                "baseline": str(args.baseline),
+                "current": str(args.current),
+                "job": args.job,
+                "max_ratio": args.max_ratio,
+                "methods": methods,
+                "overhead": overhead_summary,
+                "exceeded": bool(over or over_overhead),
+            },
+            sys.stdout,
+            indent=2,
+        )
+        print()
+    else:
+        print(
+            f"{'method':<24}{'job':<12}{'baseline':>12}{'current':>12}{'ratio':>8}"
+        )
+
+        for row in methods:
+            flag = "  over" if row["over_limit"] else ""
+
+            print(
+                f"{row['method']:<24}{row['job']:<12}"
+                f"{row['baseline_us']:10.3f}us{row['current_us']:10.3f}us"
+                f"{row['ratio']:8.2f}{flag}"
+            )
+
+        if overhead_summary is not None:
+            print(
+                f"\n{overhead_summary['numerator']} over "
+                f"{overhead_summary['denominator']}:"
+            )
+
+            for row in overhead_summary["rows"]:
+                flag = "  over" if row["over_limit"] else ""
+
+                print(
+                    f"  {row['job']}: {row['baseline_numerator_us']:.3f}us/"
+                    f"{row['baseline_denominator_us']:.3f}us -> "
+                    f"{row['current_numerator_us']:.3f}us/"
+                    f"{row['current_denominator_us']:.3f}us  "
+                    f"{row['baseline_quotient']:.2f}x -> "
+                    f"{row['current_quotient']:.2f}x{flag}"
+                )
 
     if over and args.max_ratio is not None:
         print(

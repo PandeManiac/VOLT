@@ -118,10 +118,38 @@ jobs:
       - name: Record the refresh benchmark
         run: OUTPUT_DIR="$RUNNER_TEMP/ecs-refresh" ./tools/benchmark-ecs-refresh.sh
 
+      # The means differ between machine classes while the quotient does
+      # not, so a hosted run is judged against the last successful hosted
+      # run when one left its artifact behind. The committed run is the
+      # fallback for the first run after this step, or an expired artifact.
+      - name: Choose the baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          baseline=tools/benchmark-results/ecs-refresh-2026-10-30/BenchmarkRun.txt
+          run_id=$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=master&status=success&per_page=1" \
+            --jq '.workflow_runs[0].id // empty')
+
+          if [ -n "$run_id" ] \
+            && gh run download "$run_id" --name ecs-refresh-benchmark \
+              --dir "$RUNNER_TEMP/previous"; then
+            found=$(find "$RUNNER_TEMP/previous" -name BenchmarkRun.txt -print -quit)
+
+            if [ -n "$found" ]; then
+              baseline=$found
+            fi
+          fi
+
+          printf 'BASELINE=%s\n' "$baseline" >> "$GITHUB_ENV"
+          printf 'Comparing against %s\n' "$baseline"
+
       - name: Compare with the recorded baseline
         run: >-
           python3 tools/compare-benchmark-runs.py
-          --baseline tools/benchmark-results/ecs-refresh-2026-10-30/BenchmarkRun.txt
+          --baseline "$BASELINE"
           --current "$RUNNER_TEMP/ecs-refresh/BenchmarkRun.txt"
           --job ShortRun
           --max-ratio 2.0

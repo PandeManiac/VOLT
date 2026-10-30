@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import tempfile
 import unittest
 import zipfile
@@ -421,6 +422,90 @@ class ArtifactTests(ComparatorTestCase):
         )
 
         self.assertEqual(2, status)
+
+
+class JsonTests(ComparatorTestCase):
+    """The machine-readable form of the same comparison."""
+
+    def pair(self, steady: str, rebuilding: str) -> list[tuple[str, str, str]]:
+        return [
+            ("SteadyRefresh", "ShortRun", steady),
+            ("RebuildingRefresh", "ShortRun", rebuilding),
+        ]
+
+    def test_writes_each_method_and_its_ratio(self) -> None:
+        baseline = self.write("base.txt", [("Steady", "ShortRun", "8 us")])
+        current = self.write("now.txt", [("Steady", "ShortRun", "10 us")])
+
+        status, output = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--json",
+        )
+
+        payload = json.loads(output)
+
+        self.assertEqual(0, status)
+        self.assertEqual("Steady", payload["methods"][0]["method"])
+        self.assertAlmostEqual(1.25, payload["methods"][0]["ratio"])
+        self.assertIsNone(payload["overhead"])
+        self.assertFalse(payload["exceeded"])
+
+    def test_includes_the_quotient_and_its_limit(self) -> None:
+        baseline = self.write("base.txt", self.pair("9 us", "16.2 us"))
+        current = self.write("now.txt", self.pair("8.5 us", "15.1 us"))
+
+        status, output = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--job", "ShortRun",
+            "--overhead", "RebuildingRefresh:SteadyRefresh",
+            "--max-overhead", "2.2",
+            "--json",
+        )
+
+        payload = json.loads(output)
+        quoted = payload["overhead"]["rows"][0]
+
+        self.assertEqual(0, status)
+        self.assertEqual("RebuildingRefresh", payload["overhead"]["numerator"])
+        self.assertAlmostEqual(1.8, quoted["baseline_quotient"])
+        self.assertAlmostEqual(
+            1.776, quoted["current_quotient"], places=3
+        )
+        self.assertFalse(quoted["over_limit"])
+
+    def test_marks_a_quotient_over_the_limit_and_exits_one(self) -> None:
+        baseline = self.write("base.txt", self.pair("8 us", "16 us"))
+        current = self.write("now.txt", self.pair("8 us", "20 us"))
+
+        status, output = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--job", "ShortRun",
+            "--overhead", "RebuildingRefresh:SteadyRefresh",
+            "--max-overhead", "2.2",
+            "--json",
+        )
+
+        payload = json.loads(output)
+
+        self.assertEqual(1, status)
+        self.assertTrue(payload["exceeded"])
+        self.assertTrue(payload["overhead"]["rows"][0]["over_limit"])
+
+    def test_writes_nothing_when_an_input_is_missing(self) -> None:
+        baseline = self.write("base.txt", self.pair("8 us", "16 us"))
+        current = self.write("now.txt", [("SteadyRefresh", "ShortRun", "8 us")])
+
+        status, output = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--json",
+        )
+
+        self.assertEqual(2, status)
+        self.assertEqual("", output)
 
 
 if __name__ == "__main__":

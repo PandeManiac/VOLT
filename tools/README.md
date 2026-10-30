@@ -142,13 +142,27 @@ python3 tools/tests/test-compare-benchmark-runs.py
 ```
 
 CI records a run on a hosted runner and fails when a mean exceeds twice
-its recorded baseline, or when the quotient exceeds 2.2. Hosted runners
-are shared and vary by several percent between runs, so the per-mean gate
-catches a collapsed path rather than small drift, while the quotient
-catches a rebuilding slowdown the wide limit would pass; compare two
-recorded runs when the change matters. CI keeps its own run as the
-`ecs-refresh-benchmark` artifact, so the numbers a hosted machine
-measured can be compared with the committed baseline after the fact.
+its baseline, or when the quotient exceeds 2.2. Each run keeps its
+numbers as the `ecs-refresh-benchmark` artifact, and the next run takes
+the last successful master run's artifact as its baseline, falling back
+to the committed run when there is none yet: means vary by several
+percent between machines, so a hosted run is judged against the same
+machine class whenever one is available. The per-mean limit stays wide
+because a shared runner is noisy; the quotient catches a rebuilding
+slowdown the wide limit would pass.
+
+`--json` writes the same comparison as JSON instead of the table, which
+makes a series of downloaded artifacts easy to follow:
+
+```bash
+python3 tools/compare-benchmark-runs.py \
+    --baseline artifacts/ecs-refresh-benchmark-1.zip \
+    --current artifacts/ecs-refresh-benchmark-2.zip \
+    --job ShortRun --overhead RebuildingRefresh:SteadyRefresh --json
+```
+
+The exit codes do not change: 1 when a limit is exceeded, 2 for bad or
+missing input, 0 otherwise.
 
 ## Comparing a windowed capture
 

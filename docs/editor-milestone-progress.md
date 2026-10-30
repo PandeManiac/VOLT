@@ -665,6 +665,13 @@ Same branch, on top of `12f3dfd`.
   machine that moved both means. The comparison is
   `tools/compare-benchmark-runs.py`, which reads the summary table of a
   recorded run, so a saved `BenchmarkRun.txt` is enough to check one.
+- **A hosted run is judged against another hosted run.** The benchmark
+  job takes the last successful master run's artifact as its baseline
+  and falls back to the committed run when there is none, so the means
+  are compared within one machine class instead of across two. `--json`
+  writes the same comparison for a script to follow over many artifacts,
+  and the comparator reads a downloaded archive or extracted directory
+  directly.
 - **The selected entity's header follows a rename.** The header read the
   name captured when Play started, and the rebuild key was built from the
   same text, so a rename changed neither. Both now resolve the authored
