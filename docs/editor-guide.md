@@ -409,10 +409,12 @@ is running it shows:
   move between rows and continue onto the next or previous page at the
   edge of one. `Page Up` and `Page Down` jump a whole page and land on
   the row the arrow would have reached, while `Home` and `End` reach the
-  first and last selectable row of the whole list. The filter, the
-  sort, and the
-  checked components survive a panel rebuild, and a remembered query
-  runs by itself once Play Mode has built a world.
+  first and last selectable row of the whole list. **Reset** returns
+  the section to its initial state: no filter, scene order, nothing
+  checked, and no results. The filter, the sort, and the checked
+  components survive a panel rebuild, and a remembered query runs by
+  itself once Play Mode has built a world. A manual pass over these
+  controls is the checklist at the end of this guide.
 
 Values refresh four times a second instead of on every fixed step, and
 each capture copies every value it displays, so stopping Play Mode
@@ -539,6 +541,73 @@ not yet a mesh-rendering game framework.
   its own overflow rather than scrolling it. The strict
   no-geometry-outside-the-window check therefore runs at the window the
   editor opens with.
+
+## Runtime ECS panel: manual checklist
+
+The headless tests cover every item below, but the cloud runner has no
+GPU and no interactive session, so none of it has been seen in a window.
+Run this pass on a desktop build before calling the panel done.
+
+### Setup
+
+- Open or create a project and add two or three objects, so a `Position`
+  query returns more than one authored row.
+- Dock the **Runtime ECS** panel and press Play. It should report the
+  world name, state, entity count, and archetype count.
+
+### Selection and editing
+
+1. Select an object in the hierarchy. The panel names it, shows its ECS
+   handle and archetype, and lists its editable vectors.
+2. Click the X field of Position and type `12.5`. While typing, the rows
+   must not rebuild underneath the field and the text must stay put.
+3. Press Enter. The status line confirms the value went to the live
+   world, the authored transform is unchanged, and the divergence line
+   reports that position now differs.
+4. Click **Apply to Scene**. The object moves, one undo step is added,
+   and the divergence line reports a match. Undo restores both.
+5. Change position and scale in the world, then click **Apply Transform
+   to Scene**. Both come back as a single undo step.
+
+### Query
+
+1. Check `Position` and click **Run Query**. The matched archetypes and
+   entity count are reported, and one page of rows appears.
+2. Click a row: the Inspector selects that authored object. A
+   runtime-only row is greyed out, takes no focus, and does nothing.
+3. Type in the filter field: the rows narrow and the counter reads
+   `N of M entities`. Press **Scene order**, **Name**, and **Archetype**:
+   the rows reorder and the pressed button stays highlighted.
+4. **Prev** and **Next** change the page. The pager row stays visible at
+   the bottom of the panel even with the document scrolled to the top.
+5. **Copy Results** puts the whole filtered list on the clipboard, one
+   entity per line, and the status bar reports how many.
+6. Focus a row and press Down past the last row: focus and selection
+   move to the first row of the next page. Press Up past the first row:
+   they move to the last row of the previous page.
+7. Press `Page Down` and `Page Up`: the page changes and focus lands on
+   its first and last row.
+8. Press `End`, then `Home`: focus and selection jump to the last and
+   first selectable row of the whole list, across pages.
+9. Type a filter, choose a sort, then press **Reset**: the filter
+   clears, scene order is selected, every component unchecks, and the
+   rows and the pager disappear.
+
+### Across rebuilds and Play
+
+1. With a filter, a sort, and checked components set, stop Play and
+   start it again. The checks are still checked and the query answers
+   itself with no click.
+2. Change the interface scale so the panel is rebuilt. The filter, the
+   sort, the checks, and the results should come back.
+3. Close and reopen the panel. The same view state returns.
+
+### Known gaps
+
+- Runtime-only rows cannot be selected by design, so the arrow and page
+  keys skip them.
+- The panel reads a snapshot four times a second, so a value written by
+  a running system can lag one refresh behind.
 
 ## Where to look
 

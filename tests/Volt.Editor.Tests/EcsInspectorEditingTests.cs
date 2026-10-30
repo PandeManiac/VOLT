@@ -844,6 +844,69 @@ public sealed class EcsInspectorEditingTests : IDisposable
 	}
 
 	[Fact]
+	public void QueryResults_ResetClearsTheFilterSortAndChecks()
+	{
+		_session.CreateEntity("Alpha");
+		_session.CreateEntity("Beta");
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		RunPositionQuery(panel);
+		_context.BeginFrame(0.1, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Button byName = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Name");
+
+		Click(byName.GlobalVisualBounds.Center);
+
+		TextField filter = Descendants(panel)
+			.OfType<TextField>()
+			.Single(field => field.Name == "QueryFilter");
+
+		Click(filter.GlobalVisualBounds.Center);
+		_context.TextInput("Al");
+		_context.BeginFrame(0.2, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Single(QueryRows(panel));
+
+		Button reset = Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Reset");
+
+		Click(reset.GlobalVisualBounds.Center);
+		_context.BeginFrame(0.3, new UiSize(600f, 4000f), UiPoint.Zero);
+
+		Assert.Empty(QueryRows(panel));
+
+		TextField cleared = Descendants(panel)
+			.OfType<TextField>()
+			.Single(field => field.Name == "QueryFilter");
+
+		Assert.Equal(string.Empty, cleared.Text);
+
+		Assert.False(Descendants(panel)
+			.OfType<CheckBox>()
+			.Single(box => box.Text == "Position")
+			.IsChecked);
+
+		Assert.True(Descendants(panel)
+			.OfType<Button>()
+			.Single(button => button.Text == "Scene order")
+			.IsSelected);
+
+		EcsInspectorPanelState state = panel.CaptureState();
+
+		Assert.Equal(string.Empty, state.Filter);
+		Assert.Equal(EcsQuerySort.SceneOrder, state.Sort);
+		Assert.Empty(state.RequiredComponents);
+	}
+
+	[Fact]
 	public void QueryResults_PagerStaysOutsideTheScrollingDocument()
 	{
 		// Enough entities to fill a page and enable Next, and enough of

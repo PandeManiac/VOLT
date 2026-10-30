@@ -532,6 +532,35 @@ Same branch, on top of `dd29eb1`.
 - No GPU or interactive session, so the keys have only been driven
   through the headless input context, not a real window.
 
+## Reset view and a manual checklist (October 2026)
+
+Same branch, on top of `851845f`.
+
+### What changed
+
+- **Reset.** A **Reset** button beside the sort buttons returns the
+  query section to its initial state in one click: the filter clears, the
+  sort returns to scene order, every component unchecks, and both the
+  results and the remembered query go with them.
+- **Checklist.** The editor guide ends with the manual pass over the
+  panel that headless tests cannot stand in for. It went in as a
+  section because `/docs/*` is ignored, so a new file there would not
+  have been tracked.
+
+### Verified in the cloud
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Tests` 288 passed, 0 failed.
+- A headless test runs a filtered, name-sorted query, clicks **Reset**,
+  and checks the rows are gone, the filter is empty, nothing is checked,
+  scene order is selected, and the captured state holds no remembered
+  components.
+
+### Not verified here
+
+- No GPU or interactive session, so the button has not been seen in a
+  window. The checklist is the manual pass that covers the rest.
+
 ### Next
 
 - Project-owned gameplay assemblies (Milestone E).

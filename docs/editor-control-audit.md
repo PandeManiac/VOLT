@@ -130,7 +130,8 @@ scrolling with it. **Copy Results** writes the filtered list to the
 clipboard as one line per entity. The arrow keys move focus and
 selection between rows and step onto the next or previous page from the
 edge of one, `Page Up` and `Page Down` jump a whole page at a time, and
-`Home` and `End` reach the ends of the whole list.
+`Home` and `End` reach the ends of the whole list, and **Reset**
+clears the filter, the sort, and the checked components.
 The filter,
 the sort, and the checked components are part of the panel's captured
 state, so they come back after an interface-scale rebuild or reopening

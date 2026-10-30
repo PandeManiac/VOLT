@@ -66,6 +66,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly Button _previousPage;
 	private readonly Button _nextPage;
 	private readonly Button _copyResults;
+	private readonly Button _resetView;
 	private readonly EmptyStateView _empty;
 	private readonly StackPanel _content;
 	private readonly List<(ComponentType Type, CheckBox Box)> _filters = [];
@@ -276,6 +277,15 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		_sortName = CreateSortButton("Name", EcsQuerySort.Name);
 		_sortArchetype = CreateSortButton("Archetype", EcsQuerySort.Archetype);
 
+		_resetView = new Button("Reset")
+		{
+			Font = Theme.Fonts.Small,
+			MinHeight = 20f,
+			TooltipText = "Clear the filter, the sort, and the checked components"
+		};
+
+		_resetView.Clicked += _ => ResetQueryView();
+
 		StackPanel sortRow = new(UiOrientation.Horizontal)
 		{
 			Spacing = 4f
@@ -284,6 +294,7 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		sortRow.Add(_sortScene);
 		sortRow.Add(_sortName);
 		sortRow.Add(_sortArchetype);
+		sortRow.Add(_resetView);
 
 		_previousPage = new Button("Prev")
 		{
@@ -1147,6 +1158,27 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		return _queryRows.Children.Count > row &&
 			_queryRows.Children[row] is QueryResultRow target &&
 			target.FocusAndSelect();
+	}
+
+	/// <summary>
+	/// Returns the query section to its initial state: no filter, scene
+	/// order, nothing required, and no results.
+	/// </summary>
+	private void ResetQueryView()
+	{
+		// The field raises TextChanged, which re-sorts the view, so it
+		// is cleared before the components and the results go.
+		_queryFilter.Text = string.Empty;
+
+		foreach ((ComponentType _, CheckBox box) in _filters)
+		{
+			box.IsChecked = false;
+		}
+
+		SetQuerySort(EcsQuerySort.SceneOrder);
+		ClearQuery();
+		_queryIntent = false;
+		_session.SetStatus("Query view reset");
 	}
 
 	private void ClearQuery()
