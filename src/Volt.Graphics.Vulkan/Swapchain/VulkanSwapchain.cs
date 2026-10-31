@@ -26,23 +26,25 @@ public sealed unsafe class VulkanSwapchain : IDisposable
 	private const int MaxEnumerationAttempts = 4;
 
 	private readonly VulkanInstance _instance;
+	private readonly PhysicalDevice _physicalDevice;
 	private readonly VulkanLogicalDevice _device;
 	private readonly VulkanSurface _surface;
 	private readonly KhrSwapchain _extension;
-	private readonly Image[] _images;
 
+	private Image[] _images;
+	private CompositeAlphaFlagsKHR _compositeAlpha;
 	private SwapchainKHR _handle;
 	private bool _disposed;
 
-	public Format ImageFormat { get; }
+	public Format ImageFormat { get; private set; }
 
-	public ColorSpaceKHR ColorSpace { get; }
+	public ColorSpaceKHR ColorSpace { get; private set; }
 
-	public PresentModeKHR PresentMode { get; }
+	public PresentModeKHR PresentMode { get; private set; }
 
-	public Extent2D Extent { get; }
+	public Extent2D Extent { get; private set; }
 
-	public ImageUsageFlags ImageUsage { get; }
+	public ImageUsageFlags ImageUsage { get; private set; }
 
 	public uint ImageCount => (uint)_images.Length;
 
@@ -211,9 +213,11 @@ public sealed unsafe class VulkanSwapchain : IDisposable
 			}
 
 			_instance = instance;
+			_physicalDevice = physicalDevice;
 			_device = device;
 			_surface = surface;
 			_extension = extension;
+			_compositeAlpha = compositeAlpha;
 			_handle = createdHandle;
 			_images = images;
 
@@ -237,6 +241,127 @@ public sealed unsafe class VulkanSwapchain : IDisposable
 			extension.Dispose();
 			throw;
 		}
+	}
+
+	/// <summary>
+	/// Recreates the swapchain in place at a new framebuffer size.
+	/// </summary>
+	/// <remarks>
+	/// The caller must first ensure that no acquired image or submitted
+	/// frame still references the current swapchain. This method does
+	/// not wait for the device.
+	///
+	/// The previous handle is offered to Vulkan as the old swapchain so
+	/// the driver can carry over internal resources, then destroyed once
+	/// the replacement exists. A failed recreation leaves this instance
+	/// unchanged and usable.
+	///
+	/// When the plan reports that dependent objects must be rebuilt,
+	/// image views, render passes, framebuffers, and pipelines that were
+	/// created for the previous format or present mode are stale.
+	/// </remarks>
+	public VulkanSwapchainRecreationPlan Recreate(
+		uint framebufferWidth,
+		uint framebufferHeight)
+	{
+		ThrowIfDisposed();
+
+		VulkanSwapchainSupport support = VulkanSwapchainSupport.Query(
+			_instance,
+			_physicalDevice,
+			_surface);
+
+		VulkanSwapchainRecreationPlan plan =
+			VulkanSwapchainRecreation.Plan(
+				support,
+				framebufferWidth,
+				framebufferHeight,
+				new SurfaceFormatKHR(ImageFormat, ColorSpace),
+				PresentMode,
+				ImageUsage,
+				_compositeAlpha);
+
+		SwapchainCreateInfoKHR createInfo = new()
+		{
+			SType = StructureType.SwapchainCreateInfoKhr,
+			Surface = _surface.Handle,
+			MinImageCount = plan.ImageCount,
+			ImageFormat = plan.Format.Format,
+			ImageColorSpace = plan.Format.ColorSpace,
+			ImageExtent = plan.Extent,
+			ImageArrayLayers = 1,
+			ImageUsage = plan.ImageUsage,
+			ImageSharingMode = SharingMode.Exclusive,
+			PreTransform = plan.PreTransform,
+			CompositeAlpha = plan.CompositeAlpha,
+			PresentMode = plan.PresentMode,
+			Clipped = Vk.True,
+			OldSwapchain = _handle
+		};
+
+		SwapchainKHR createdHandle = default;
+
+		Result result = _extension.CreateSwapchain(
+			_device.Handle,
+			in createInfo,
+			null,
+			out createdHandle);
+
+		if (result != Result.Success)
+		{
+			throw new InvalidOperationException(
+				$"Recreate Vulkan swapchain failed: {result}.");
+		}
+
+		if (createdHandle.Handle == 0)
+		{
+			throw new InvalidOperationException(
+				"Vulkan returned a null swapchain handle.");
+		}
+
+		Image[] images;
+
+		try
+		{
+			images = EnumerateImages(
+				_extension,
+				_device.Handle,
+				createdHandle);
+
+			if (images.Length == 0)
+			{
+				throw new InvalidOperationException(
+					"Vulkan returned a swapchain without images.");
+			}
+		}
+
+		catch
+		{
+			_extension.DestroySwapchain(
+				_device.Handle,
+				createdHandle,
+				null);
+
+			throw;
+		}
+
+		SwapchainKHR previousHandle = _handle;
+
+		_handle = createdHandle;
+		_images = images;
+		ImageFormat = plan.Format.Format;
+		ColorSpace = plan.Format.ColorSpace;
+		PresentMode = plan.PresentMode;
+		Extent = plan.Extent;
+		ImageUsage = plan.ImageUsage;
+		_compositeAlpha = plan.CompositeAlpha;
+
+		_extension.DestroySwapchain(
+			_device.Handle,
+			previousHandle,
+			null);
+
+		return plan;
 	}
 
 	/// <summary>
