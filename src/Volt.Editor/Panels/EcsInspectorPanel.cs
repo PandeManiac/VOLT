@@ -31,9 +31,13 @@ namespace Volt.Editor.Panels;
 /// Snapshots are captured on a timer rather than on every runtime
 /// update. Play Mode raises an update at the fixed-step rate, and
 /// rebuilding labels at 60 Hz would spend more time formatting a table
-/// than anyone can read. Nothing here retains a reference into chunk
-/// storage: <see cref="RuntimeWorldSnapshot"/> copies every value it
-/// displays, so stopping Play Mode cannot leave a dangling view.
+/// than anyone can read. The panel therefore does not subscribe to
+/// <see cref="EditorSession.RuntimeUpdated"/>: the timer below is what
+/// schedules a capture, and a moving entity's rows are rebuilt four
+/// times a second rather than every frame. Nothing here retains a
+/// reference into chunk storage: <see cref="RuntimeWorldSnapshot"/>
+/// copies every value it displays, so stopping Play Mode cannot leave a
+/// dangling view.
 /// </para>
 /// </remarks>
 internal sealed class EcsInspectorPanel : Panel, IFrameTick
@@ -106,6 +110,13 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 	private double _elapsed;
 	private bool _disposed;
+
+	/// <summary>
+	/// How many times the panel has captured the world. The tests use it
+	/// to check that the refresh timer, not the simulation rate, sets the
+	/// pace.
+	/// </summary>
+	internal int RefreshCount { get; private set; }
 
 	public EcsInspectorPanel(EditorSession session)
 		: this(session, null)
@@ -413,8 +424,11 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		_session.SceneChanged += OnSceneChanged;
 		_session.SelectionChanged += OnSessionChanged;
 		_session.PlayStateChanged += OnSessionChanged;
-		_session.RuntimeUpdated += OnSessionChanged;
 
+		// RuntimeUpdated is deliberately not subscribed: it fires once per
+		// frame that advanced a fixed step, and Tick already refreshes on
+		// its own timer. Listening would capture the world at frame rate
+		// and rebuild a moving entity's rows with it.
 		Refresh();
 	}
 
@@ -447,7 +461,6 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		_session.SceneChanged -= OnSceneChanged;
 		_session.SelectionChanged -= OnSessionChanged;
 		_session.PlayStateChanged -= OnSessionChanged;
-		_session.RuntimeUpdated -= OnSessionChanged;
 		base.Dispose();
 	}
 
@@ -476,6 +489,8 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 
 	private void Refresh()
 	{
+		RefreshCount++;
+
 		RuntimeScene? runtime = _session.Play?.Runtime;
 
 		// A world appearing is the moment a remembered query becomes

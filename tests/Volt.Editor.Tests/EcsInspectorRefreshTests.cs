@@ -221,6 +221,35 @@ public sealed class EcsInspectorRefreshTests : IDisposable
 		Assert.Contains("Renamed", LabelTexts(panel));
 	}
 
+	[Fact]
+	public void RuntimeUpdates_WaitForTheRefreshTimer()
+	{
+		_session.StartPlay();
+
+		using EcsInspectorPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(1140f, 660f), UiPoint.Zero);
+
+		int captures = panel.RefreshCount;
+
+		// A fixed step raises a runtime update, as a playing frame does.
+		// Capturing on it would rebuild a moving entity's rows at frame
+		// rate instead of the four times a second the panel displays at.
+		_session.Update(1.0);
+
+		Assert.Equal(captures, panel.RefreshCount);
+
+		// The timer is what schedules the next capture.
+		panel.Tick(0.1, 1f);
+
+		Assert.Equal(captures, panel.RefreshCount);
+
+		panel.Tick(0.2, 1f);
+
+		Assert.Equal(captures + 1, panel.RefreshCount);
+	}
+
 	private static string[] QueryRowTexts(Widget root)
 	{
 		List<string> texts = [];
