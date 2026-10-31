@@ -39,6 +39,13 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 	private double _elapsed;
 	private bool _disposed;
 
+	/// <summary>
+	/// How many times the panel has sampled the session. The tests use it
+	/// to check that the sample timer, not the simulation rate, sets the
+	/// pace.
+	/// </summary>
+	internal int RefreshCount { get; private set; }
+
 	public ProfilerPanel(EditorSession session)
 	{
 		ArgumentNullException.ThrowIfNull(session);
@@ -127,8 +134,12 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 		_session.SceneChanged += OnSessionChanged;
 		_session.SelectionChanged += OnSessionChanged;
 		_session.PlayStateChanged += OnSessionChanged;
-		_session.RuntimeUpdated += OnSessionChanged;
 
+		// RuntimeUpdated is deliberately not subscribed: it fires once per
+		// frame that advanced a fixed step, and Tick samples on its own
+		// timer. Listening would format every label, sample the GC, and
+		// recapture both graphs at frame rate, inflating the very
+		// allocations this panel reports.
 		Refresh();
 	}
 
@@ -161,7 +172,6 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 		_session.SceneChanged -= OnSessionChanged;
 		_session.SelectionChanged -= OnSessionChanged;
 		_session.PlayStateChanged -= OnSessionChanged;
-		_session.RuntimeUpdated -= OnSessionChanged;
 		base.Dispose();
 	}
 
@@ -172,6 +182,7 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 
 	private void Refresh()
 	{
+
 		_scene.Text =
 			$"Scene entities: {_session.Scene?.EntityCount ?? 0}   " +
 			$"Selection: {_session.Selection.Count}";
@@ -196,6 +207,8 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 
 	private void RefreshFrame()
 	{
+		RefreshCount++;
+
 		FrameTimeline frames = _session.Frames;
 		MemoryTimeline allocations = _session.Allocations;
 
