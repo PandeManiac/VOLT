@@ -164,4 +164,42 @@ public sealed class VulkanSwapchainRecreationTests
 				ImageUsageFlags.TransferDstBit,
 				CompositeAlphaFlagsKHR.OpaqueBitKhr));
 	}
+
+	[Fact]
+	public void Plan_FallsBackWhenPreviousCompositeAlphaIsUnsupported()
+	{
+		SurfaceCapabilitiesKHR capabilities = new()
+		{
+			MinImageCount = 2,
+			MaxImageCount = 3,
+			CurrentExtent = new Extent2D(uint.MaxValue, uint.MaxValue),
+			MinImageExtent = new Extent2D(1, 1),
+			MaxImageExtent = new Extent2D(4096, 4096),
+			SupportedUsageFlags = ImageUsageFlags.ColorAttachmentBit,
+			SupportedCompositeAlpha =
+				CompositeAlphaFlagsKHR.PreMultipliedBitKhr,
+			CurrentTransform =
+				SurfaceTransformFlagsKHR.IdentityBitKhr
+		};
+
+		VulkanSwapchainSupport support = new(
+			capabilities,
+			[Bgra],
+			[PresentModeKHR.FifoKhr]);
+
+		VulkanSwapchainRecreationPlan plan =
+			VulkanSwapchainRecreation.Plan(
+				support,
+				640,
+				480,
+				Bgra,
+				PresentModeKHR.FifoKhr,
+				ImageUsageFlags.ColorAttachmentBit,
+				CompositeAlphaFlagsKHR.OpaqueBitKhr);
+
+		Assert.Equal(
+			CompositeAlphaFlagsKHR.PreMultipliedBitKhr,
+			plan.CompositeAlpha);
+		Assert.False(plan.RequiresDependentRebuild);
+	}
 }
