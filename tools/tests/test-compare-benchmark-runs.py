@@ -494,6 +494,73 @@ class JsonTests(ComparatorTestCase):
         self.assertTrue(payload["exceeded"])
         self.assertTrue(payload["overhead"]["rows"][0]["over_limit"])
 
+    def test_writes_the_report_to_a_file(self) -> None:
+        baseline = self.write("base.txt", [("Steady", "ShortRun", "8 us")])
+        current = self.write("now.txt", [("Steady", "ShortRun", "10 us")])
+        report = self.directory / "comparison.json"
+
+        status, output = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--json-output", str(report),
+        )
+
+        payload = json.loads(report.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, status)
+        self.assertIn("Steady", output)
+        self.assertAlmostEqual(1.25, payload["methods"][0]["ratio"])
+
+    def test_writes_no_file_when_an_input_is_incomplete(self) -> None:
+        baseline = self.write("base.txt", self.pair("8 us", "16 us"))
+        current = self.write(
+            "now.txt",
+            [("SteadyRefresh", "ShortRun", "8 us")],
+        )
+        report = self.directory / "comparison.json"
+
+        status, output = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--json-output", str(report),
+        )
+
+        self.assertEqual(2, status)
+        self.assertEqual("", output)
+        self.assertFalse(report.exists())
+
+    def test_writes_the_file_when_a_limit_is_exceeded(self) -> None:
+        baseline = self.write("base.txt", self.pair("8 us", "16 us"))
+        current = self.write("now.txt", self.pair("8 us", "20 us"))
+        report = self.directory / "comparison.json"
+
+        status, _ = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--job", "ShortRun",
+            "--overhead", "RebuildingRefresh:SteadyRefresh",
+            "--max-overhead", "2.2",
+            "--json-output", str(report),
+        )
+
+        payload = json.loads(report.read_text(encoding="utf-8"))
+
+        self.assertEqual(1, status)
+        self.assertTrue(payload["exceeded"])
+
+    def test_rejects_both_json_destinations(self) -> None:
+        baseline = self.write("base.txt", [("Steady", "ShortRun", "8 us")])
+        current = self.write("now.txt", [("Steady", "ShortRun", "8 us")])
+
+        status, _ = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+            "--json",
+            "--json-output", str(self.directory / "comparison.json"),
+        )
+
+        self.assertEqual(2, status)
+
     def test_writes_nothing_when_an_input_is_missing(self) -> None:
         baseline = self.write("base.txt", self.pair("8 us", "16 us"))
         current = self.write("now.txt", [("SteadyRefresh", "ShortRun", "8 us")])
@@ -506,6 +573,77 @@ class JsonTests(ComparatorTestCase):
 
         self.assertEqual(2, status)
         self.assertEqual("", output)
+
+
+class AmbiguousRunTests(ComparatorTestCase):
+    """Rows that cannot be paired, or a table that moved its columns."""
+
+    def typed_summary(
+        self, rows: list[tuple[str, str, str, str]]
+    ) -> str:
+        lines = [
+            "| Type | Method | Job | Mean |",
+            "|----- |------- | --- |-----:|",
+        ]
+
+        for type_name, method, job, mean in rows:
+            lines.append(f"| {type_name} | {method} | {job} | {mean} |")
+
+        return "\n".join(lines) + "\n"
+
+    def test_finds_the_mean_column_by_name(self) -> None:
+        text = self.typed_summary(
+            [
+                ("First", "Steady", "ShortRun", "8 us"),
+                ("Second", "Rebuilding", "ShortRun", "16 us"),
+            ]
+        )
+
+        self.assertEqual(
+            {("Steady", "ShortRun"): 8.0, ("Rebuilding", "ShortRun"): 16.0},
+            comparator.parse_means(text),
+        )
+
+    def test_rejects_a_run_that_quotes_one_row_twice(self) -> None:
+        baseline = self.write("base.txt", [("Steady", "ShortRun", "8 us")])
+        current = self.write(
+            "now.txt",
+            [
+                ("Steady", "ShortRun", "8 us"),
+                ("Steady", "ShortRun", "9 us"),
+            ],
+        )
+
+        status, output = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+        )
+
+        self.assertEqual(2, status)
+        self.assertEqual("", output)
+
+    def test_names_a_method_two_types_share(self) -> None:
+        text = self.typed_summary(
+            [
+                ("First", "Steady", "ShortRun", "8 us"),
+                ("Second", "Steady", "ShortRun", "9 us"),
+            ]
+        )
+
+        with self.assertRaises(comparator.AmbiguousRows):
+            comparator.parse_means(text)
+
+    def test_fails_when_the_current_run_has_no_rows(self) -> None:
+        baseline = self.write("base.txt", [("Steady", "ShortRun", "8 us")])
+        current = self.directory / "now.txt"
+        current.write_text("nothing here\n", encoding="utf-8")
+
+        status, _ = self.run_comparator(
+            "--baseline", str(baseline),
+            "--current", str(current),
+        )
+
+        self.assertEqual(2, status)
 
 
 if __name__ == "__main__":

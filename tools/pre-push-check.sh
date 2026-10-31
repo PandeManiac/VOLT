@@ -66,6 +66,8 @@ run "formatting" \
 run "document tooling" python3 tools/tests/test-compare-editor-docs.py
 run "benchmark tooling" python3 tools/tests/test-compare-benchmark-runs.py
 run "benchmark trend tooling" python3 tools/tests/test-benchmark-trend.py
+run "benchmark run verification" python3 tools/tests/test-verify-benchmark-run.py
+run "benchmark recording script" ./tools/tests/test-benchmark-ecs-refresh.sh
 run "document contents" python3 tools/tests/test-doc-contents.py
 
 shell_sources=()

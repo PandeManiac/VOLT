@@ -32,9 +32,12 @@ UNITS = {"ns": 0.001, "us": 1.0, "µs": 1.0, "ms": 1000.0, "s": 1_000_000.0}
 
 VALUE = re.compile(r"^(?P<number>[0-9]+(?:\.[0-9]+)?)\s*(?P<unit>ns|us|µs|ms|s)$")
 
-# Column order of the summary table: Method, Job, Toolchain,
-# IterationCount, LaunchCount, WarmupCount, Mean, ...
-MEAN_COLUMN = 6
+# The summary table names its columns in a header row, which is found by
+# name rather than by position: BenchmarkDotNet adds a Type column when a
+# run holds more than one benchmark class, which moves the rest right.
+METHOD_COLUMN = "Method"
+JOB_COLUMN = "Job"
+MEAN_COLUMN = "Mean"
 
 # The file a run directory or an artifact archive is expected to hold.
 RUN_FILENAME = "BenchmarkRun.txt"
@@ -69,36 +72,81 @@ def read_run(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def parse_means(text: str) -> dict[tuple[str, str], float]:
-    """Returns {(method, job): mean in microseconds} from a run's summary."""
-    means: dict[tuple[str, str], float] = {}
-    in_table = False
+class AmbiguousRows(ValueError):
+    """Raised when a summary names the same method and job twice."""
+
+
+def parse_rows(text: str) -> list[tuple[str, str, str]]:
+    """Returns (method, job, mean cell) for each row of a run's summary.
+
+    Only a table with a job column is read, because rows are paired by
+    method and job: a table without one cannot be compared against
+    another run.
+    """
+    rows: list[tuple[str, str, str]] = []
+    columns: dict[str, int] | None = None
 
     for line in text.splitlines():
         stripped = line.strip()
 
         if not stripped.startswith("|"):
-            in_table = False
+            columns = None
             continue
 
         cells = [cell.strip() for cell in stripped.strip("|").split("|")]
 
-        if cells and cells[0] == "Method":
-            in_table = True
+        if all(name in cells for name in (METHOD_COLUMN, JOB_COLUMN, MEAN_COLUMN)):
+            columns = {
+                name: cells.index(name)
+                for name in (METHOD_COLUMN, JOB_COLUMN, MEAN_COLUMN)
+            }
             continue
 
-        if not in_table or len(cells) <= MEAN_COLUMN:
+        if columns is None:
             continue
 
-        method, job, mean = cells[0], cells[1], cells[MEAN_COLUMN]
+        if len(cells) <= max(columns.values()):
+            continue
+
+        method = cells[columns[METHOD_COLUMN]]
+
+        if not method:
+            continue
+
+        rows.append(
+            (
+                method,
+                cells[columns[JOB_COLUMN]],
+                cells[columns[MEAN_COLUMN]],
+            )
+        )
+
+    return rows
+
+
+def parse_means(
+    text: str,
+    source: str = "the run",
+) -> dict[tuple[str, str], float]:
+    """Returns {(method, job): mean in microseconds} from a run's summary."""
+    means: dict[tuple[str, str], float] = {}
+
+    for method, job, mean in parse_rows(text):
         match = VALUE.match(mean)
 
-        if not method or match is None:
+        if match is None:
             continue
 
-        means[(method, job)] = (
-            float(match.group("number")) * UNITS[match.group("unit")]
-        )
+        key = (method, job)
+
+        if key in means:
+            raise AmbiguousRows(
+                f"{source} quotes {method} ({job}) more than once, so one "
+                "of the two rows cannot be paired with the other run; "
+                "record one benchmark class per run"
+            )
+
+        means[key] = float(match.group("number")) * UNITS[match.group("unit")]
 
     return means
 
@@ -133,6 +181,20 @@ def compare(
         )
 
     return rows, missing
+
+
+def write_json(document: dict[str, object], destination: Path) -> None:
+    """Writes a comparison beside the file, then moves it into place.
+
+    A comparison that fails returns before this is called, so a bad input
+    cannot leave an empty report behind for the trend tool to read.
+    """
+    temporary = destination.with_name(destination.name + ".tmp")
+    temporary.write_text(
+        json.dumps(document, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(destination)
 
 
 def parse_overhead_spec(spec: str) -> tuple[str, str]:
@@ -217,10 +279,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="write a JSON summary to stdout instead of the table",
     )
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="write the JSON summary to PATH and the table to stdout; a "
+        "failed comparison writes no file",
+    )
     args = parser.parse_args(argv)
 
     if args.max_overhead is not None and args.overhead is None:
         print("--max-overhead needs --overhead.", file=sys.stderr)
+        return 2
+
+    if args.json and args.json_output is not None:
+        print(
+            "--json writes to stdout and --json-output writes a file; "
+            "choose one.",
+            file=sys.stderr,
+        )
         return 2
 
     try:
@@ -230,12 +308,23 @@ def main(argv: list[str] | None = None) -> int:
         print(error, file=sys.stderr)
         return 2
 
-    baseline = parse_means(baseline_text)
-    current = parse_means(current_text)
+    try:
+        baseline = parse_means(baseline_text, str(args.baseline))
+        current = parse_means(current_text, str(args.current))
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 2
 
     if not baseline:
         print(
-            f"{args.baseline}: no summary table found",
+            f"{args.baseline}: no usable benchmark rows found",
+            file=sys.stderr,
+        )
+        return 2
+
+    if not current:
+        print(
+            f"{args.current}: no usable benchmark rows found",
             file=sys.stderr,
         )
         return 2
@@ -244,7 +333,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if missing:
         print(
-            "The current run is missing: " + ", ".join(missing),
+            "The current run is missing: "
+            + ", ".join(missing)
+            + ". A row of NA counts as missing; check the recording log.",
             file=sys.stderr,
         )
         return 2
@@ -335,20 +426,25 @@ def main(argv: list[str] | None = None) -> int:
             "rows": quoted,
         }
 
+    document = {
+        "baseline": str(args.baseline),
+        "current": str(args.current),
+        "job": args.job,
+        "max_ratio": args.max_ratio,
+        "methods": methods,
+        "overhead": overhead_summary,
+        "exceeded": bool(over or over_overhead),
+    }
+
+    if args.json_output is not None:
+        try:
+            write_json(document, args.json_output)
+        except OSError as error:
+            print(f"{args.json_output}: {error.strerror}", file=sys.stderr)
+            return 2
+
     if args.json:
-        json.dump(
-            {
-                "baseline": str(args.baseline),
-                "current": str(args.current),
-                "job": args.job,
-                "max_ratio": args.max_ratio,
-                "methods": methods,
-                "overhead": overhead_summary,
-                "exceeded": bool(over or over_overhead),
-            },
-            sys.stdout,
-            indent=2,
-        )
+        json.dump(document, sys.stdout, indent=2)
         print()
     else:
         print(

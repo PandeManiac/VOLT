@@ -141,6 +141,46 @@ Its tests use only the standard library:
 python3 tools/tests/test-compare-benchmark-runs.py
 ```
 
+BenchmarkDotNet finds the project it wraps by walking up from the working
+directory to the nearest folder holding a solution or project file, then
+searching that folder and every subfolder for `Volt.Benchmarks.csproj`. It
+refuses to build the launched jobs when the search finds two copies.
+`Volt.slnx` makes the repository root that folder for a run started
+anywhere in the checkout, so neither `--project` nor the working directory
+narrows it: a performance lab or an exported experiment beside the root
+still collides. The recording script therefore builds from a scratch copy
+of the sources a benchmark needs, made from the working tree so an edit in
+progress is still what runs. The copy holds exactly one benchmark project,
+and it is removed after a successful run and named when a run fails.
+Reproduce the old failure and confirm the fix with copies beside the root:
+
+```bash
+mkdir -p artifacts/repro/benchmarks/Volt.Benchmarks
+cp benchmarks/Volt.Benchmarks/Volt.Benchmarks.csproj \
+    artifacts/repro/benchmarks/Volt.Benchmarks/
+./tools/benchmark-ecs-refresh.sh
+rm -rf artifacts/repro
+```
+
+Both `ShortRun` rows must carry a mean. BenchmarkDotNet exits 0 even when a
+launched benchmark fails to build: its row reads `NA` and the summary lists
+it under `Benchmarks with issues`. A process status alone would record that
+run as a success, so the script checks the recorded table with
+`tools/verify-benchmark-run.py` and exits non-zero, keeping the log, when a
+required measurement is absent. A comparison with bad or incomplete input
+writes no JSON report at all.
+
+The recording script's tests replace `dotnet` with a mock, so they need
+neither .NET nor a benchmark run:
+
+```bash
+python3 tools/tests/test-verify-benchmark-run.py
+./tools/tests/test-benchmark-ecs-refresh.sh
+```
+
+Hosted CI puts two nested copies of the benchmark project in place before
+recording, so the duplicate search stays covered on every benchmark run.
+
 CI records a run on a hosted runner and fails when a mean exceeds twice
 its baseline, or when the quotient exceeds 2.2. Each run keeps its
 numbers as the `ecs-refresh-benchmark` artifact, and the next run takes
@@ -170,6 +210,13 @@ python3 tools/compare-benchmark-runs.py \
 
 The exit codes do not change: 1 when a limit is exceeded, 2 for bad or
 missing input, 0 otherwise.
+
+`--json-output PATH` writes the same document to a file while the table
+still goes to stdout. The report is written beside `PATH` and moved into
+place only once a comparison produced one, so a failed comparison leaves
+no empty document for `tools/benchmark-trend.py` to read; CI uses it for
+that reason. A limit that was exceeded still writes the report, since that
+is when its numbers matter most.
 
 `tools/benchmark-trend.py` reads several of those documents and prints
 the quotient in the order they are given, so a set of downloaded

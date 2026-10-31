@@ -72,6 +72,13 @@ jobs:
         run: |
           python3 tools/tests/test-compare-benchmark-runs.py
           python3 tools/tests/test-benchmark-trend.py
+          python3 tools/tests/test-verify-benchmark-run.py
+
+      # The recording script runs the real benchmark in the job below; here
+      # a mock dotnet checks that it scopes BenchmarkDotNet's project search,
+      # propagates a failed process, and rejects a run without measurements.
+      - name: Test the benchmark recording script
+        run: ./tools/tests/test-benchmark-ecs-refresh.sh
 
       # The guides open with contents lists; a renamed section must not
       # silently leave a dead anchor or an unlisted heading behind.
@@ -117,6 +124,22 @@ jobs:
 
       - name: Restore
         run: dotnet restore Volt.slnx
+
+      # A real checkout can hold copies of the benchmark project: a
+      # performance lab, an exported experiment. BenchmarkDotNet finds the
+      # project it wraps by searching the solution root below the working
+      # directory, and refuses to build the launched jobs when it finds two,
+      # while still exiting 0. Those copies are placed here on every run, so
+      # the fixed recording script keeps proving it is immune to them and the
+      # completeness check turns any recurrence into a failing step.
+      - name: Add nested copies of the benchmark project
+        run: |
+          for directory in artifacts/nested VOLT-Performance-Lab/workspaces/example; do
+            mkdir -p "$directory/benchmarks/Volt.Benchmarks"
+            cp benchmarks/Volt.Benchmarks/Volt.Benchmarks.csproj \
+              "$directory/benchmarks/Volt.Benchmarks/"
+          done
+          find . -name Volt.Benchmarks.csproj -not -path '*/obj/*'
 
       - name: Record the refresh benchmark
         run: OUTPUT_DIR="$RUNNER_TEMP/ecs-refresh" ./tools/benchmark-ecs-refresh.sh
@@ -164,29 +187,32 @@ jobs:
           set -uo pipefail
 
           source="${BASELINE_SOURCE:-the chosen baseline}"
+          run="$RUNNER_TEMP/ecs-refresh/BenchmarkRun.txt"
+          json="$RUNNER_TEMP/ecs-refresh/comparison.json"
+          arguments=(
+            --baseline "$BASELINE"
+            --current "$run"
+            --job ShortRun
+            --max-ratio 2.0
+            --overhead RebuildingRefresh:SteadyRefresh
+            --max-overhead 2.2
+          )
 
-          output=$(python3 tools/compare-benchmark-runs.py \
-            --baseline "$BASELINE" \
-            --current "$RUNNER_TEMP/ecs-refresh/BenchmarkRun.txt" \
-            --job ShortRun \
-            --max-ratio 2.0 \
-            --overhead RebuildingRefresh:SteadyRefresh \
-            --max-overhead 2.2 2>&1)
+          # --json-output writes the report beside the file and moves it
+          # into place only once it holds a document, so an input error
+          # cannot leave an empty file for the trend tool to read. Status 1
+          # means a limit was exceeded, which still writes a valid report.
+          set +e
+          output=$(python3 tools/compare-benchmark-runs.py "${arguments[@]}" \
+            --json-output "$json" 2>&1)
           status=$?
+          set -e
 
-          python3 tools/compare-benchmark-runs.py \
-            --baseline "$BASELINE" \
-            --current "$RUNNER_TEMP/ecs-refresh/BenchmarkRun.txt" \
-            --job ShortRun \
-            --max-ratio 2.0 \
-            --overhead RebuildingRefresh:SteadyRefresh \
-            --max-overhead 2.2 \
-            --json > "$RUNNER_TEMP/ecs-refresh/comparison.json"
-          json_status=$?
-
-          if [ "$json_status" -ne 0 ]; then
-            printf 'JSON report generation failed with status %d\n' "$json_status" >&2
-            status=$json_status
+          if [ -f "$json" ]; then
+            python3 -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' \
+              "$json"
+          else
+            rm -f "$json"
           fi
 
           printf '%s\n' "$output"
@@ -213,12 +239,15 @@ jobs:
           name: ecs-refresh-benchmark
           path: ${{ runner.temp }}/ecs-refresh/BenchmarkRun.txt
 
+      # A comparison that produced no document leaves no file, and an empty
+      # report must not be published as though it were one.
       - name: Keep the JSON comparison report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ecs-refresh-comparison-json
           path: ${{ runner.temp }}/ecs-refresh/comparison.json
+          if-no-files-found: ignore
 
   # Hardware validation is a deliberately requested workflow run, not a
   # dependency of ordinary pushes. A missing self-hosted GPU runner must not
