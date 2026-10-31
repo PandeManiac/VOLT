@@ -145,7 +145,10 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 
 	public void Tick(double deltaSeconds, float dpiScale)
 	{
-		if (_disposed || !double.IsFinite(deltaSeconds))
+		// A docked-but-inactive profiler still receives ticks. Sampling it
+		// while it is hidden would format labels, read the GC, and repaint
+		// graphs nobody can see, so the timer only runs while it is shown.
+		if (_disposed || !IsVisible || !double.IsFinite(deltaSeconds))
 		{
 			return;
 		}

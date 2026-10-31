@@ -72,6 +72,28 @@ public sealed class ProfilerRefreshTests : IDisposable
 	}
 
 	[Fact]
+	public void AHiddenPanel_DoesNotSample()
+	{
+		using ProfilerPanel panel = new(_session);
+
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(1140f, 660f), UiPoint.Zero);
+
+		int samples = panel.RefreshCount;
+
+		// A docked panel behind another tab still receives ticks.
+		panel.IsVisible = false;
+		panel.Tick(0.5, 1f);
+
+		Assert.Equal(samples, panel.RefreshCount);
+
+		panel.IsVisible = true;
+		panel.Tick(0.11, 1f);
+
+		Assert.Equal(samples + 1, panel.RefreshCount);
+	}
+
+	[Fact]
 	public void APlayStateChange_SamplesImmediately()
 	{
 		_session.StartPlay();
