@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Numerics;
 using Volt.Ecs;
@@ -118,6 +119,18 @@ public sealed class RuntimeWorldSnapshot
 	/// than the three-decimal precision the panel displays.
 	/// </remarks>
 	public const float DivergenceTolerance = 0.0005f;
+
+	// A signature formats to the same text every refresh, and a signature
+	// and a type name are both small and few, so the panel's four-a-second
+	// capture can reuse them instead of rebuilding a description from a
+	// fresh string array each time. The bounds keep a long-lived process
+	// that builds many worlds from retaining an unbounded set.
+	private const int CacheLimit = 512;
+
+	private static readonly ConcurrentDictionary<ComponentSignature, string>
+		SignatureDescriptions = new();
+
+	private static readonly ConcurrentDictionary<Type, string> ShortNames = new();
 
 	private RuntimeWorldSnapshot(
 		string worldName,
@@ -381,6 +394,24 @@ public sealed class RuntimeWorldSnapshot
 	{
 		ArgumentNullException.ThrowIfNull(signature);
 
+		if (SignatureDescriptions.TryGetValue(signature, out string? cached))
+		{
+			return cached;
+		}
+
+		string description = BuildSignatureDescription(signature);
+
+		if (SignatureDescriptions.Count < CacheLimit)
+		{
+			SignatureDescriptions.TryAdd(signature, description);
+		}
+
+		return description;
+	}
+
+	private static string BuildSignatureDescription(
+		ComponentSignature signature)
+	{
 		if (signature.Count == 0)
 		{
 			return "(no components)";
@@ -608,13 +639,25 @@ public sealed class RuntimeWorldSnapshot
 
 	private static string ShortName(Type type)
 	{
+		if (ShortNames.TryGetValue(type, out string? cached))
+		{
+			return cached;
+		}
+
 		string name = type.Name;
 		const string Suffix = "Component";
 
-		return name.EndsWith(Suffix, StringComparison.Ordinal) &&
+		string shortName = name.EndsWith(Suffix, StringComparison.Ordinal) &&
 			name.Length > Suffix.Length
 				? name[..^Suffix.Length]
 				: name;
+
+		if (ShortNames.Count < CacheLimit)
+		{
+			ShortNames.TryAdd(type, shortName);
+		}
+
+		return shortName;
 	}
 }
 

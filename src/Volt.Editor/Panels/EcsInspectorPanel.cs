@@ -93,6 +93,13 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private string _archetypesKey = string.Empty;
 	private string _queryKey = string.Empty;
 
+	// The values the world and count labels were last built from, so a
+	// tick that finds them unchanged does not format them again.
+	private string _worldName = string.Empty;
+	private PlayState? _shownState;
+	private int _shownEntityCount = -1;
+	private int _shownArchetypeCount = -1;
+
 	// Set when the authored scene changes: a rename changes a name a query
 	// lists without changing the world's structure.
 	private bool _sceneDirty;
@@ -498,17 +505,35 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			return;
 		}
 
-		_world.Text = $"World: {snapshot.WorldName}";
-		_state.Text = $"State: {snapshot.State}";
-		_entityCount.Text = string.Format(
-			CultureInfo.InvariantCulture,
-			"Entities: {0:N0}",
-			snapshot.EntityCount);
+		if (_worldName != snapshot.WorldName)
+		{
+			_worldName = snapshot.WorldName;
+			_world.Text = $"World: {snapshot.WorldName}";
+		}
 
-		_archetypeCount.Text = string.Format(
-			CultureInfo.InvariantCulture,
-			"Archetypes: {0:N0}",
-			snapshot.Archetypes.Count);
+		if (_shownState != snapshot.State)
+		{
+			_shownState = snapshot.State;
+			_state.Text = $"State: {snapshot.State}";
+		}
+
+		if (_shownEntityCount != snapshot.EntityCount)
+		{
+			_shownEntityCount = snapshot.EntityCount;
+			_entityCount.Text = string.Format(
+				CultureInfo.InvariantCulture,
+				"Entities: {0:N0}",
+				snapshot.EntityCount);
+		}
+
+		if (_shownArchetypeCount != snapshot.Archetypes.Count)
+		{
+			_shownArchetypeCount = snapshot.Archetypes.Count;
+			_archetypeCount.Text = string.Format(
+				CultureInfo.InvariantCulture,
+				"Archetypes: {0:N0}",
+				snapshot.Archetypes.Count);
+		}
 
 		RuntimeEntitySnapshot? entity = snapshot.SelectedEntity;
 
