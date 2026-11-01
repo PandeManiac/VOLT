@@ -935,3 +935,61 @@ Nothing from that branch was redone; this work follows it.
 - Format a project's bound component values in the ECS panel instead of a
   size-only line, so runtime inspection reaches custom gameplay.
 - Asset import (PNG texture or glTF mesh) as the next vertical slice.
+
+## Runtime inspection of project gameplay (November 2026)
+
+Branch `feat/volt-game-authoring-next`, on top of `1241323`.
+
+### What changed
+
+- **Component descriptions.** `GameplayRegistrar.DescribeComponent<T>`
+  registers a display name and a projection over a project's unmanaged
+  component, backed by the `RuntimeComponentFormatters` registry. The
+  runtime inspector has no field names for native storage, so without a
+  description the best it could say was the component's name and size.
+- **Snapshot.** `RuntimeWorldSnapshot` consults the registry for components
+  with no built-in shape. A description that throws becomes a note on that
+  one component and leaves the rest of the entity readable; a component
+  with no description keeps the size line it always had. Descriptions read
+  through the world's copying accessor, so nothing holds a reference into
+  chunk storage.
+- **Systems view.** `RuntimeWorldSnapshot.Systems` carries each system's
+  name and whether it still ticks, and the ECS panel reports the count,
+  the names, and a `(skipped)` marker for a system the runtime faulted.
+  The line is rebuilt only when the set changes. A world with no game code
+  says so rather than showing an empty heading.
+- **Unload honesty.** Unloading an assembly now detaches its runtime
+  descriptions, which a formatter's closure over a CLR type would
+  otherwise keep reachable. The claim that the load context is collected
+  was withdrawn: the process-wide component registry records every
+  component's CLR type for the life of the process, so an assembly that
+  registers components cannot be proven collected. No hot reload is
+  claimed.
+- **Scaffold and sample** describe their component, so a new project's
+  runtime state is readable in Play Mode from the start.
+
+### Verified here
+
+- Release build: 0 warnings, 0 errors.
+- `Volt.Editor.Core.Tests`: 88 passed. New cases cover live values through
+  a description, a throwing description, a component with no description,
+  culture-independent number formatting, and a snapshot that marks the
+  faulted fixture system while leaving the healthy one active.
+- `Volt.Editor.Tests`: 307 passed, including the editor path that renders
+  the snapshot after building a project's game code.
+- The `editor-ecs.png` golden baseline was regenerated for the new line and
+  reviewed: the panel shows `Systems: none (built-in behaviours only)` for
+  a scene without game code. The baseline update mode rewrites every
+  baseline, so the four with no visual change were restored from HEAD and
+  the suite re-run to prove only one capture genuinely moved.
+
+### Not verified here
+
+- No GPU and no display server; the panel is exercised through the
+  headless CPU capture, not a window.
+- Windows was not available.
+
+### Next
+
+- List the project's game code in the Project Browser.
+- Asset import (PNG texture or glTF mesh) as the next vertical slice.

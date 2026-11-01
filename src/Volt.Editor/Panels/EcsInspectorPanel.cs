@@ -55,6 +55,15 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 	private readonly Label _world;
 	private readonly Label _state;
 	private readonly Label _entityCount;
+
+	private readonly Label _systemCount;
+
+	private readonly Label _systemNames;
+
+	// Null until the first capture, so a world with no systems still gets
+	// its line written: an empty key would compare equal to the initial
+	// value and leave the label blank.
+	private string? _shownSystemKey;
 	private readonly Label _archetypeCount;
 	private readonly Label _entityName;
 	private readonly Label _entityHandle;
@@ -151,10 +160,21 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 		_entityCount = MutedLabel();
 		_archetypeCount = MutedLabel();
 
+		_systemCount = MutedLabel();
+
+		_systemNames = new Label(string.Empty)
+		{
+			Font = Theme.Fonts.Small,
+			TextColor = Theme.Palette.TextDisabled,
+			Wrap = UiTextWrap.Wrap
+		};
+
 		doc.Add(_world);
 		doc.Add(_state);
 		doc.Add(_entityCount);
 		doc.Add(_archetypeCount);
+		doc.Add(_systemCount);
+		doc.Add(_systemNames);
 		doc.Add(new Separator());
 
 		doc.Add(new Label("Selected runtime entity")
@@ -517,6 +537,9 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 			_divergence.Text = string.Empty;
 			_selectedKey = string.Empty;
 			_archetypesKey = string.Empty;
+			_shownSystemKey = null;
+			_systemCount.Text = "Systems: none";
+			_systemNames.Text = string.Empty;
 			return;
 		}
 
@@ -548,6 +571,20 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 				CultureInfo.InvariantCulture,
 				"Archetypes: {0:N0}",
 				snapshot.Archetypes.Count);
+		}
+
+		// The project's systems are the part of a running world the editor
+		// otherwise cannot show: which code is ticking, and which code is
+		// no longer ticking because it failed.
+		string systemKey = string.Join(
+			'\u0003',
+			snapshot.Systems.Select(system =>
+				$"{system.Name}:{system.Active}"));
+
+		if (_shownSystemKey != systemKey)
+		{
+			_shownSystemKey = systemKey;
+			UpdateSystems(snapshot.Systems);
 		}
 
 		RuntimeEntitySnapshot? entity = snapshot.SelectedEntity;
@@ -776,6 +813,43 @@ internal sealed class EcsInspectorPanel : Panel, IFrameTick
 				entity.Handle.ToString(),
 				entity.Archetype,
 				string.Join('\u0002', entity.Components.Select(ComponentKey)));
+	}
+
+	/// <summary>
+	/// Reports which gameplay systems the running world executes.
+	/// </summary>
+	/// <remarks>
+	/// A skipped system is the visible outcome of the runtime's fault
+	/// isolation, so it is labelled where the system itself is listed
+	/// rather than only in the Console.
+	/// </remarks>
+	private void UpdateSystems(IReadOnlyList<RuntimeSystemSnapshot> systems)
+	{
+		if (systems.Count == 0)
+		{
+			_systemCount.Text = "Systems: none (built-in behaviours only)";
+			_systemNames.Text = string.Empty;
+			return;
+		}
+
+		int skipped = systems.Count(system => !system.Active);
+
+		_systemCount.Text = skipped == 0
+			? string.Format(
+				CultureInfo.InvariantCulture,
+				"Systems: {0:N0}",
+				systems.Count)
+			: string.Format(
+				CultureInfo.InvariantCulture,
+				"Systems: {0:N0} ({1:N0} skipped)",
+				systems.Count,
+				skipped);
+
+		_systemNames.Text = string.Join(
+			"  ·  ",
+			systems.Select(system => system.Active
+				? system.Name
+				: $"{system.Name} (skipped)"));
 	}
 
 	private static string ComponentKey(RuntimeComponentSnapshot component)

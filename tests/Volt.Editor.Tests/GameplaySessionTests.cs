@@ -132,6 +132,12 @@ public sealed class GameplaySessionTests : IDisposable
 			projectComponent.Fields,
 			field => field.Label == "Speed");
 
+		// And the running system is named, so the panel can show which
+		// project code is ticking.
+		Assert.Contains(
+			snapshot.Systems,
+			system => system.Name == "PlayerMotorSystem" && system.Active);
+
 		_session.Stop();
 
 		// Play Mode discards its world and never writes back.

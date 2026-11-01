@@ -264,6 +264,53 @@ public sealed class GameplayAssemblyTests
 	}
 
 	[Fact]
+	public void TheSnapshotListsSystemsAndMarksTheFaultedOne()
+	{
+		ComponentCatalog catalog = new();
+
+		using GameplayAssembly assembly =
+			GameplayAssembly.Load(GameplayFixtureAssembly.Path, catalog).Assembly!;
+
+		SceneDocument scene = new("Fixture");
+		SceneEntity entity = scene.CreateEntity("Spinner");
+		entity.AddComponent(catalog.Get("volt.fixture.spin").Create());
+
+		using RuntimeScene runtime = new(
+			scene,
+			componentBindings: assembly.Registration.Bindings,
+			systems: assembly.Registration.Systems);
+
+		runtime.Update(PlaySession.FixedDeltaSeconds);
+
+		RuntimeWorldSnapshot snapshot = RuntimeWorldSnapshot.Capture(
+			runtime,
+			PlayState.Playing,
+			entity.Id);
+
+		RuntimeSystemSnapshot spin = Assert.Single(
+			snapshot.Systems,
+			system => system.Name == "FixtureSpinSystem");
+
+		Assert.True(spin.Active);
+
+		// The fixture's throwing system failed its first step, and the
+		// snapshot says so rather than silently dropping it.
+		RuntimeSystemSnapshot faulty = Assert.Single(
+			snapshot.Systems,
+			system => system.Name == "FixtureThrowingSystem");
+
+		Assert.False(faulty.Active);
+
+		// A world built without game code reports no systems at all.
+		using RuntimeScene plain = new(new SceneDocument("Plain"));
+
+		Assert.Empty(RuntimeWorldSnapshot.Capture(
+			plain,
+			PlayState.Playing,
+			null).Systems);
+	}
+
+	[Fact]
 	public void AProjectComponentDrivesRealSystemExecution()
 	{
 		ComponentCatalog catalog = new();

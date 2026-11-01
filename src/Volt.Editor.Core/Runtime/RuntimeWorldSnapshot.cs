@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Numerics;
 using Volt.Ecs;
 using Volt.Ecs.Component;
+using Volt.Editor.Core.Gameplay;
 using Volt.Editor.Core.Scenes;
 
 namespace Volt.Editor.Core.Runtime;
@@ -56,6 +57,17 @@ public sealed record RuntimeArchetypeSnapshot(
 		? 0f
 		: (float)EntityCount / Capacity;
 }
+
+/// <summary>
+/// One gameplay system the running world executes.
+/// </summary>
+/// <param name="Name">The system's type name.</param>
+/// <param name="Active">
+/// Whether the system still ticks. A system that threw is reported once
+/// and skipped for the rest of that session, so this is the difference
+/// between a system that runs and one that no longer does.
+/// </param>
+public sealed record RuntimeSystemSnapshot(string Name, bool Active);
 
 /// <summary>
 /// A runtime entity, its real ECS handle, and the values actually stored
@@ -154,12 +166,14 @@ public sealed class RuntimeWorldSnapshot
 		PlayState state,
 		int entityCount,
 		IReadOnlyList<RuntimeArchetypeSnapshot> archetypes,
+		IReadOnlyList<RuntimeSystemSnapshot> systems,
 		RuntimeEntitySnapshot? selectedEntity)
 	{
 		WorldName = worldName;
 		State = state;
 		EntityCount = entityCount;
 		Archetypes = archetypes;
+		Systems = systems;
 		SelectedEntity = selectedEntity;
 	}
 
@@ -171,12 +185,22 @@ public sealed class RuntimeWorldSnapshot
 
 	public IReadOnlyList<RuntimeArchetypeSnapshot> Archetypes { get; }
 
+	/// <summary>
+	/// Gets the gameplay systems the world executes, in execution order.
+	/// </summary>
+	/// <remarks>
+	/// A world built without a project's game code has none, which is the
+	/// ordinary case for a project whose scripts are not built yet.
+	/// </remarks>
+	public IReadOnlyList<RuntimeSystemSnapshot> Systems { get; }
+
 	public RuntimeEntitySnapshot? SelectedEntity { get; }
 
 	public static RuntimeWorldSnapshot Empty { get; } = new(
 		"No runtime world",
 		PlayState.Stopped,
 		0,
+		[],
 		[],
 		null);
 
@@ -223,11 +247,21 @@ public sealed class RuntimeWorldSnapshot
 			selected = CaptureEntity(world, info);
 		}
 
+		List<RuntimeSystemSnapshot> systems = [];
+
+		foreach (IGameplaySystem system in runtime.Systems)
+		{
+			systems.Add(new RuntimeSystemSnapshot(
+				system.GetType().Name,
+				runtime.IsSystemActive(system)));
+		}
+
 		return new RuntimeWorldSnapshot(
 			"Play Session",
 			state,
 			world.Count,
 			archetypes,
+			systems,
 			selected);
 	}
 
