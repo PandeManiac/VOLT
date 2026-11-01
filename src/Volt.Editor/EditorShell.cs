@@ -5,6 +5,7 @@ using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
 using Volt.Editor.Panels;
 using Volt.Editor.Rendering;
+using Volt.Editor.Validation;
 using Volt.Editor.Viewport;
 using Volt.Ui;
 using Volt.Ui.Docking;
@@ -771,6 +772,12 @@ public sealed class EditorShell : Panel
 			assets,
 			"New Material",
 			() => Guard("New material", CreateNewMaterial),
+			() => _session.Project is not null);
+
+		AddCommand(
+			assets,
+			"Validate Project",
+			() => Guard("Validate project", ValidateProject),
 			() => _session.Project is not null);
 
 		MenuItem create = bar.AddMenu("GameObject");
@@ -1953,6 +1960,35 @@ public sealed class EditorShell : Panel
 		_session.CreateScene(
 			relative,
 			$"Scene {index - 1}");
+	}
+
+	/// <summary>
+	/// Reports broken asset references through the Console.
+	/// </summary>
+	/// <remarks>
+	/// The same check the headless command runs, so the editor and a build
+	/// machine cannot disagree about whether a project is sound.
+	/// </remarks>
+	private void ValidateProject()
+	{
+		EditorProject project = _session.Project ??
+			throw new InvalidOperationException("No project is open.");
+
+		ProjectValidationReport report =
+			ProjectValidator.Validate(project.RootPath);
+
+		foreach (ProjectIssue issue in report.Issues)
+		{
+			_session.Log(
+				$"{issue.Location}: {issue.Message}",
+				issue.Severity == ProjectIssueSeverity.Error
+					? EditorLogLevel.Error
+					: EditorLogLevel.Warning);
+		}
+
+		_session.SetStatus(report.IsValid
+			? $"Project valid ({report.Warnings} warnings)"
+			: $"Project validation found {report.Errors} errors");
 	}
 
 	private void CreateNewMaterial()

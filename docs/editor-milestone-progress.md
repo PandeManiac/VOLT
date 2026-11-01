@@ -1213,3 +1213,44 @@ ever carried editor messages.
 
 - Texture import, starting with a PNG decoder and a UV path.
 - Filtering the Console by source so game messages can be isolated.
+
+## Project validation (November 2026)
+
+Scenes now reference imported meshes, materials, a startup scene, and an
+optional gameplay assembly. A renamed or deleted file leaves the scene
+opening and part of it silently missing, and nothing reported that a
+project was unsound until someone noticed a hole in the viewport.
+
+- `ProjectValidator` walks the project the way the editor would: it opens
+  the manifest, loads the startup scene and every other scene, resolves
+  each visible mesh and material reference through the same resolver the
+  viewports use, and checks that recorded game code exists and has been
+  built. Every problem is collected, so one broken scene does not hide
+  the rest.
+- Severity distinguishes what breaks rendering from what merely needs
+  attention: an unresolvable mesh, unloadable scene, or missing game-code
+  project is an error; an unassigned mesh, unreadable material, or
+  unbuilt assembly is a warning.
+- `Volt.Editor --validate-project <folder>` prints the report and uses the
+  exit code as the contract: 0 valid, 1 errors, 2 unusable command. It
+  never creates a window or a GPU device, so it runs on a build machine.
+- **Assets → Validate Project** runs the same check in the editor and
+  writes each issue to the Console at its severity.
+- Verified: release build with 0 warnings and 0 errors;
+  `Volt.Editor.Tests` 331 passed, including a sound project with an
+  imported mesh and material, a missing mesh as an error naming the
+  entity, an unreadable material as a warning, a malformed scene reported
+  without hiding the startup scene, a folder without a manifest, and
+  recorded game code whose project file is gone; the headless command was
+  also run against a folder without a project and returned exit code 1
+  with the manifest message.
+
+### Not verified here
+
+- No display server: the menu action is exercised through the validator it
+  calls, not by opening the window.
+
+### Next
+
+- Texture import, starting with a PNG decoder and a UV path.
+- Running validation as part of the editor's own startup check.

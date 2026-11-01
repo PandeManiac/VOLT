@@ -5,6 +5,7 @@ using Volt.Editor.Core.Scenes;
 using Volt.Editor.Input;
 using Volt.Editor.Panels;
 using Volt.Editor.Rendering;
+using Volt.Editor.Validation;
 using Volt.Ui.Docking;
 using Volt.Ui.Layout;
 using Volt.Ui.Rendering;
@@ -26,6 +27,7 @@ internal static class Program
 {
 	private const string ValidationArgument = "--validation";
 	private const string ProjectArgument = "--project";
+	private const string ValidateProjectArgument = "--validate-project";
 	private const string FramesArgument = "--frames";
 	private const string WidthArgument = "--width";
 	private const string HeightArgument = "--height";
@@ -38,6 +40,25 @@ internal static class Program
 	[STAThread]
 	private static int Main(string[] args)
 	{
+		// Validation is a headless command: it reports what a project
+		// references and exits without creating a window or a GPU device.
+		for (int index = 0; index < args.Length; index++)
+		{
+			if (args[index] != ValidateProjectArgument)
+			{
+				continue;
+			}
+
+			if (index + 1 >= args.Length)
+			{
+				Console.Error.WriteLine(
+					"--validate-project requires a folder.");
+				return 2;
+			}
+
+			return RunProjectValidation(Path.GetFullPath(args[index + 1]));
+		}
+
 		if (!TryParseArguments(
 				args,
 				out bool validation,
@@ -53,7 +74,8 @@ internal static class Program
 			Console.Error.WriteLine(error);
 			Console.Error.WriteLine(
 				"Usage: Volt.Editor [--validation] " +
-				"[--project <folder>] [--frames <count>] " +
+				"[--project <folder>] [--validate-project <folder>] " +
+				"[--frames <count>] " +
 				"[--width <pixels>] [--height <pixels>] " +
 				"[--ui-scale <factor>] [--snapshot <file>] " +
 				"[--snapshot-state <workspace|authoring|start|ecs|ecs-query>]");
@@ -82,6 +104,38 @@ internal static class Program
 
 			return 1;
 		}
+	}
+
+	/// <summary>
+	/// Validates a project and prints what it found.
+	/// </summary>
+	/// <remarks>
+	/// The exit code is the automation contract: zero when nothing stops
+	/// the project from opening and drawing, one when something does, and
+	/// two when the command itself is unusable.
+	/// </remarks>
+	private static int RunProjectValidation(string rootPath)
+	{
+		ProjectValidationReport report = ProjectValidator.Validate(rootPath);
+
+		Console.WriteLine($"VOLT project validation: {rootPath}");
+
+		foreach (ProjectIssue issue in report.Issues)
+		{
+			string severity = issue.Severity == ProjectIssueSeverity.Error
+				? "error"
+				: "warning";
+
+			Console.WriteLine(
+				$"  {severity,-7} {issue.Location}: {issue.Message}");
+		}
+
+		Console.WriteLine(
+			$"{report.Checks} check{(report.Checks == 1 ? string.Empty : "s")}, " +
+			$"{report.Errors} error{(report.Errors == 1 ? string.Empty : "s")}, " +
+			$"{report.Warnings} warning{(report.Warnings == 1 ? string.Empty : "s")}");
+
+		return report.IsValid ? 0 : 1;
 	}
 
 	private static int Run(
