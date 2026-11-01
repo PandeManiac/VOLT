@@ -133,9 +133,28 @@ public sealed class ComponentCatalog
 
 	private readonly List<EditorComponentDescriptor> s_ordered = [];
 
+	/// <summary>
+	/// Guards every read and write of the descriptor maps.
+	/// </summary>
+	/// <remarks>
+	/// Loading a project's gameplay assembly registers components while
+	/// panels may be reading metadata on another thread, and a panel must
+	/// never enumerate a list that is being changed underneath it.
+	/// </remarks>
+	private readonly Lock s_gate = new();
+
 	public static ComponentCatalog Default { get; } = CreateDefault();
 
-	public IReadOnlyList<EditorComponentDescriptor> All => s_ordered;
+	public IReadOnlyList<EditorComponentDescriptor> All
+	{
+		get
+		{
+			lock (s_gate)
+			{
+				return [.. s_ordered];
+			}
+		}
+	}
 
 	public static ComponentCatalog CreateDefault()
 	{
@@ -154,25 +173,28 @@ public sealed class ComponentCatalog
 	{
 		Type type = typeof(TComponent);
 
-		if (s_byType.ContainsKey(type))
+		lock (s_gate)
 		{
-			throw new InvalidOperationException(
-				$"Component type '{type.Name}' is already registered.");
+			if (s_byType.ContainsKey(type))
+			{
+				throw new InvalidOperationException(
+					$"Component type '{type.Name}' is already registered.");
+			}
+
+			EditorComponentAttribute attribute = GetAttribute(type);
+
+			if (s_byTypeId.ContainsKey(attribute.ComponentTypeId))
+			{
+				throw new InvalidOperationException(
+					$"Component type identifier '{attribute.ComponentTypeId}' " +
+					"is already registered.");
+			}
+
+			return AddDescriptor(
+				type,
+				attribute,
+				factory is null ? null : () => factory());
 		}
-
-		EditorComponentAttribute attribute = GetAttribute(type);
-
-		if (s_byTypeId.ContainsKey(attribute.ComponentTypeId))
-		{
-			throw new InvalidOperationException(
-				$"Component type identifier '{attribute.ComponentTypeId}' " +
-				"is already registered.");
-		}
-
-		return AddDescriptor(
-			type,
-			attribute,
-			factory is null ? null : () => factory());
 	}
 
 	/// <summary>
@@ -193,33 +215,36 @@ public sealed class ComponentCatalog
 		Type type = typeof(TComponent);
 		EditorComponentAttribute attribute = GetAttribute(type);
 
-		if (s_byType.TryGetValue(
-				type,
-				out EditorComponentDescriptor? existing) &&
-			string.Equals(
-				existing.TypeId,
+		lock (s_gate)
+		{
+			if (s_byType.TryGetValue(
+					type,
+					out EditorComponentDescriptor? existing) &&
+				string.Equals(
+					existing.TypeId,
+					attribute.ComponentTypeId,
+					StringComparison.Ordinal))
+			{
+				return existing;
+			}
+
+			if (s_byTypeId.TryGetValue(
 				attribute.ComponentTypeId,
-				StringComparison.Ordinal))
-		{
-			return existing;
-		}
+				out EditorComponentDescriptor? stale))
+			{
+				RemoveDescriptor(stale);
+			}
 
-		if (s_byTypeId.TryGetValue(
-			attribute.ComponentTypeId,
-			out EditorComponentDescriptor? stale))
-		{
-			RemoveDescriptor(stale);
-		}
+			if (s_byType.TryGetValue(type, out EditorComponentDescriptor? previous))
+			{
+				RemoveDescriptor(previous);
+			}
 
-		if (s_byType.TryGetValue(type, out EditorComponentDescriptor? previous))
-		{
-			RemoveDescriptor(previous);
+			return AddDescriptor(
+				type,
+				attribute,
+				factory is null ? null : () => factory());
 		}
-
-		return AddDescriptor(
-			type,
-			attribute,
-			factory is null ? null : () => factory());
 	}
 
 	private static EditorComponentAttribute GetAttribute(Type type)
@@ -302,7 +327,11 @@ public sealed class ComponentCatalog
 	public bool TryGet(string typeId, out EditorComponentDescriptor descriptor)
 	{
 		ArgumentNullException.ThrowIfNull(typeId);
-		return s_byTypeId.TryGetValue(typeId, out descriptor!);
+
+		lock (s_gate)
+		{
+			return s_byTypeId.TryGetValue(typeId, out descriptor!);
+		}
 	}
 
 	public bool TryGet(
@@ -310,25 +339,39 @@ public sealed class ComponentCatalog
 		out EditorComponentDescriptor descriptor)
 	{
 		ArgumentNullException.ThrowIfNull(componentType);
-		return s_byType.TryGetValue(componentType, out descriptor!);
+
+		lock (s_gate)
+		{
+			return s_byType.TryGetValue(componentType, out descriptor!);
+		}
 	}
 
 	public EditorComponentDescriptor Get(string typeId)
 	{
 		ArgumentNullException.ThrowIfNull(typeId);
 
-		return s_byTypeId.TryGetValue(typeId, out EditorComponentDescriptor? descriptor)
-			? descriptor
-			: throw new KeyNotFoundException(
-				$"No authored component is registered as '{typeId}'.");
+		lock (s_gate)
+		{
+			return s_byTypeId.TryGetValue(
+				typeId,
+				out EditorComponentDescriptor? descriptor)
+				? descriptor
+				: throw new KeyNotFoundException(
+					$"No authored component is registered as '{typeId}'.");
+		}
 	}
 
 	internal EditorComponentDescriptor GetForType(Type type)
 	{
-		return s_byType.TryGetValue(type, out EditorComponentDescriptor? descriptor)
-			? descriptor
-			: throw new KeyNotFoundException(
-				$"Component type '{type.Name}' is not registered.");
+		lock (s_gate)
+		{
+			return s_byType.TryGetValue(
+				type,
+				out EditorComponentDescriptor? descriptor)
+				? descriptor
+				: throw new KeyNotFoundException(
+					$"Component type '{type.Name}' is not registered.");
+		}
 	}
 
 	private static EditorPropertyKind ResolveKind(

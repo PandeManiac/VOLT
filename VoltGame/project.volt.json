@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "71182868-d8fb-4f21-9b00-3a2dda845205",
+  "name": "Sample Game",
+  "startupScene": "Scenes/Main.volt.scene.json",
+  "gameplay": {
+    "project": "Scripts/GameScripts.csproj",
+    "assembly": "Scripts/bin/Release/net10.0/GameScripts.dll"
+  }
+}

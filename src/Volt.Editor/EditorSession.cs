@@ -1,5 +1,6 @@
 using System.Numerics;
 using Volt.Editor.Core.Editing;
+using Volt.Editor.Core.Gameplay;
 using Volt.Editor.Core.Projects;
 using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
@@ -23,6 +24,8 @@ public sealed class EditorSession : IDisposable
 	private PlaySession? _play;
 	private readonly Func<long> _allocatedBytes;
 	private long _lastAllocatedBytes;
+	private GameplayAssembly? _gameplay;
+	private int _runtimeDiagnosticCount;
 	private bool _disposed;
 
 	/// <summary>
@@ -110,6 +113,21 @@ public sealed class EditorSession : IDisposable
 	}
 
 	public PlaySession? Play => _play;
+
+	/// <summary>
+	/// Gets the project's gameplay assembly while it is loaded.
+	/// </summary>
+	/// <remarks>
+	/// The assembly is loaded by an explicit build or by starting Play,
+	/// never by opening a folder. It stays loaded across Play sessions so
+	/// stopping and starting again does not re-read the same code.
+	/// </remarks>
+	public GameplayAssembly? Gameplay => _gameplay;
+
+	/// <summary>
+	/// Gets the outcome of the most recent game-code build.
+	/// </summary>
+	public GameplayBuildResult? LastGameplayBuild { get; private set; }
 
 	public RuntimeInputState Input { get; } = new();
 
@@ -297,6 +315,7 @@ public sealed class EditorSession : IDisposable
 	private void CloseProjectCore()
 	{
 		Stop();
+		UnloadGameplay();
 
 		if (Scene is not null)
 		{
@@ -1275,6 +1294,82 @@ public sealed class EditorSession : IDisposable
 		SetStatus("Redo");
 	}
 
+	/// <summary>
+	/// Compiles the project's game code and loads what it produces.
+	/// </summary>
+	/// <remarks>
+	/// This is the explicit build workflow; nothing is compiled because a
+	/// folder was opened. Parsed compiler output goes to the Console with
+	/// its file, line, and column, and a failed build keeps the previously
+	/// loaded code so the last working build can still be played. An
+	/// unchanged scene is reloaded afterwards, which is what turns
+	/// previously preserved unknown components into the project's own
+	/// editable types; unsaved edits are never discarded for it.
+	/// </remarks>
+	public GameplayBuildResult? BuildGameCode()
+	{
+		ThrowIfDisposed();
+
+		EditorProject project = RequireProject();
+		string? projectFile = project.ResolveGameplayProjectPath();
+
+		if (projectFile is null)
+		{
+			Log(
+				"This project has no game code. Create a Scripts project " +
+				"first, then build it.",
+				EditorLogLevel.Warning);
+
+			SetStatus("No game code to build");
+			return null;
+		}
+
+		SetStatus("Building game code…");
+
+		// The engine this editor is running is already built, so a game
+		// build must not recompile it.
+		GameplayBuildResult result = GameplayProjectBuilder.Build(
+			projectFile,
+			buildReferencedProjects: false);
+
+		LastGameplayBuild = result;
+
+		foreach (GameplayBuildDiagnostic diagnostic in result.Diagnostics)
+		{
+			Log(
+				diagnostic.Describe(),
+				diagnostic.IsError
+					? EditorLogLevel.Error
+					: EditorLogLevel.Warning);
+		}
+
+		if (!result.Succeeded)
+		{
+			Log(
+				result.FailureMessage ?? "The game code did not build.",
+				EditorLogLevel.Error);
+
+			Log(
+				_gameplay is null
+					? "Play Mode will run the built-in behaviours only."
+					: $"Play Mode keeps using '{_gameplay.AssemblyName}' " +
+						"from the last successful build.",
+				EditorLogLevel.Warning);
+
+			SetStatus("Game code build failed");
+			return result;
+		}
+
+		SetStatus($"Built {Path.GetFileName(result.AssemblyPath)}");
+
+		if (result.AssemblyPath is string assemblyPath)
+		{
+			LoadGameplay(assemblyPath);
+		}
+
+		return result;
+	}
+
 	public void StartPlay()
 	{
 		ThrowIfDisposed();
@@ -1282,12 +1377,18 @@ public sealed class EditorSession : IDisposable
 		SceneDocument scene = RequireScene();
 		Stop();
 
+		// Play uses what is already built. Compiling is the developer's
+		// explicit action, not a side effect of pressing Play.
+		TryLoadProjectGameplay();
+
 		_play = new PlaySession(
 			scene,
 			Input,
 			assetExists: Project is EditorProject project
 				? project.AssetCatalog.FileExists
-				: null);
+				: null,
+			componentBindings: _gameplay?.Registration.Bindings,
+			systems: _gameplay?.Registration.Systems);
 
 		_play.StateChanged += OnPlayStateChanged;
 
@@ -1299,6 +1400,14 @@ public sealed class EditorSession : IDisposable
 			foreach (string diagnostic in runtime.Diagnostics)
 			{
 				Log(diagnostic, EditorLogLevel.Warning);
+			}
+
+			_runtimeDiagnosticCount = runtime.Diagnostics.Count;
+
+			if (_gameplay is not null)
+			{
+				Log(
+					$"Running project game code '{_gameplay.AssemblyName}'.");
 			}
 		}
 
@@ -1344,6 +1453,7 @@ public sealed class EditorSession : IDisposable
 		_play.StateChanged -= OnPlayStateChanged;
 		_play.Dispose();
 		_play = null;
+		_runtimeDiagnosticCount = 0;
 		Input.Clear();
 		PlayStateChanged?.Invoke(this);
 		RuntimeUpdated?.Invoke(this);
@@ -1359,6 +1469,10 @@ public sealed class EditorSession : IDisposable
 		}
 
 		int ticks = _play.Update((float)realDeltaSeconds);
+
+		// A system that fails mid-run reports once, through the same
+		// Console every other editor message uses.
+		ReportRuntimeDiagnostics();
 
 		if (ticks > 0)
 		{
@@ -1408,7 +1522,118 @@ public sealed class EditorSession : IDisposable
 			Scene.Changed -= OnSceneDocumentChanged;
 		}
 
+		UnloadGameplay();
+
 		_disposed = true;
+	}
+
+	/// <summary>
+	/// Loads a built gameplay assembly and reports what it declared.
+	/// </summary>
+	private void LoadGameplay(string assemblyPath)
+	{
+		UnloadGameplay();
+
+		GameplayAssemblyLoadResult result = GameplayAssembly.Load(
+			assemblyPath,
+			ComponentCatalog.Default);
+
+		foreach (string diagnostic in result.Diagnostics)
+		{
+			Log(diagnostic, EditorLogLevel.Warning);
+		}
+
+		if (!result.Succeeded)
+		{
+			Log(
+				result.Error ?? "The game code did not load.",
+				EditorLogLevel.Error);
+
+			SetStatus("Game code did not load");
+			return;
+		}
+
+		_gameplay = result.Assembly;
+
+		GameplayRegistrar registration = _gameplay!.Registration;
+
+		Log(
+			$"Loaded game code '{_gameplay.AssemblyName}': " +
+			$"{registration.Components.Count} component(s), " +
+			$"{registration.Bindings.Count} binding(s), " +
+			$"{registration.Systems.Count} system(s).");
+
+		if (IsSceneDirty)
+		{
+			Log(
+				"Save or reopen the scene to edit components this build " +
+				"introduced.",
+				EditorLogLevel.Warning);
+
+			return;
+		}
+
+		if (ScenePath is string path)
+		{
+			OpenScene(path);
+		}
+	}
+
+	private void UnloadGameplay()
+	{
+		if (_gameplay is null)
+		{
+			return;
+		}
+
+		_gameplay.Dispose();
+		_gameplay = null;
+	}
+
+	/// <summary>
+	/// Loads the project's already-built game code for Play Mode.
+	/// </summary>
+	/// <remarks>
+	/// A project with no build yet still plays; it runs the built-in
+	/// behaviours and the Console says how to produce game code.
+	/// </remarks>
+	private void TryLoadProjectGameplay()
+	{
+		if (_gameplay is not null || Project is not EditorProject project)
+		{
+			return;
+		}
+
+		if (!project.TryResolveGameplayAssembly(out string assemblyPath))
+		{
+			if (project.GameplayProjectPath is not null)
+			{
+				Log(
+					"No built game code was found. Use Assets → Build Game " +
+					$"Code to compile '{project.GameplayProjectPath}'.",
+					EditorLogLevel.Warning);
+			}
+
+			return;
+		}
+
+		LoadGameplay(assemblyPath);
+	}
+
+	private void ReportRuntimeDiagnostics()
+	{
+		if (_play?.Runtime is not RuntimeScene runtime)
+		{
+			return;
+		}
+
+		IReadOnlyList<string> diagnostics = runtime.Diagnostics;
+
+		while (_runtimeDiagnosticCount < diagnostics.Count)
+		{
+			Log(diagnostics[_runtimeDiagnosticCount], EditorLogLevel.Warning);
+			_runtimeDiagnosticCount++;
+		}
 	}
 
 	private bool RunGuarded(Action action)

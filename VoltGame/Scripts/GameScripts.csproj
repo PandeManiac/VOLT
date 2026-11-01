@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>GameScripts</AssemblyName>
+    <RootNamespace>GameScripts</RootNamespace>
+  </PropertyGroup>
+
+  <!-- The engine checkout this project builds against.
+       Override VoltRoot or set VOLT_ROOT on another machine. -->
+  <PropertyGroup>
+    <VoltRoot Condition="'$(VoltRoot)' == ''">$(VOLT_ROOT)</VoltRoot>
+    <VoltRoot Condition="'$(VoltRoot)' == ''">/home/berds/programming/csharp/volt</VoltRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(VoltRoot)/src/Volt.Editor.Core/Volt.Editor.Core.csproj" />
+  </ItemGroup>
+
+</Project>

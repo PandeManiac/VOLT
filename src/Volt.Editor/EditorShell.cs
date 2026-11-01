@@ -756,6 +756,13 @@ public sealed class EditorShell : Panel
 
 		AddCommand(
 			assets,
+			"Build Game Code",
+			() => Guard("Build game code", () =>
+				_session.BuildGameCode()),
+			() => _session.Project is not null);
+
+		AddCommand(
+			assets,
 			"New Scene",
 			() => Guard("New scene", CreateNewScene),
 			() => _session.Project is not null);
