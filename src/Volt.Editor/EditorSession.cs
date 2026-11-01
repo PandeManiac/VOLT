@@ -686,15 +686,8 @@ public sealed class EditorSession : IDisposable
 		// there and reported afterwards by name. Clearing them silently
 		// would turn a broken reference into a material that quietly lost
 		// its texture.
-		List<(string Image, string Material)> stale = [];
-
-		foreach (string id in ids)
-		{
-			foreach (string material in project.FindTextureReferences(id))
-			{
-				stale.Add((id, material));
-			}
-		}
+		List<(string Image, string Material)> stale =
+			CollectTextureReferences(project, ids);
 
 		bool wasDirty = IsSceneDirty;
 
@@ -715,21 +708,7 @@ public sealed class EditorSession : IDisposable
 		}
 
 		ProjectChanged?.Invoke(this);
-
-		foreach ((string image, string material) in stale)
-		{
-			Log(
-				$"'{material}' still names the deleted image '{image}'.",
-				EditorLogLevel.Warning);
-		}
-
-		if (stale.Count > 0)
-		{
-			Log(
-				$"{stale.Count} material reference(s) now name a deleted " +
-				"image.",
-				EditorLogLevel.Warning);
-		}
+		ReportDeletedTextureReferences(stale);
 
 		return ids.Count;
 	}
@@ -752,6 +731,9 @@ public sealed class EditorSession : IDisposable
 				"Close the scene before deleting its file.");
 		}
 
+		List<(string Image, string Material)> stale =
+			CollectTextureReferences(project, [assetId]);
+
 		project.DeleteAsset(assetId);
 
 		int changed = Scene?.ReplaceAssetReference(
@@ -766,6 +748,54 @@ public sealed class EditorSession : IDisposable
 		}
 
 		ProjectChanged?.Invoke(this);
+		ReportDeletedTextureReferences(stale);
+	}
+
+	/// <summary>
+	/// Collects the materials that name any of the images about to go.
+	/// </summary>
+	/// <remarks>
+	/// It must run before the files are removed: afterwards a material can
+	/// still be read, but only the report explains why its image is gone.
+	/// </remarks>
+	private static List<(string Image, string Material)>
+		CollectTextureReferences(
+			EditorProject project,
+			IReadOnlyList<string> ids)
+	{
+		List<(string Image, string Material)> stale = [];
+
+		foreach (string id in ids)
+		{
+			foreach (string material in project.FindTextureReferences(id))
+			{
+				stale.Add((id, material));
+			}
+		}
+
+		return stale;
+	}
+
+	/// <summary>
+	/// Reports the materials left naming a deleted image.
+	/// </summary>
+	private void ReportDeletedTextureReferences(
+		IReadOnlyList<(string Image, string Material)> stale)
+	{
+		foreach ((string image, string material) in stale)
+		{
+			Log(
+				$"'{material}' still names the deleted image '{image}'.",
+				EditorLogLevel.Warning);
+		}
+
+		if (stale.Count > 0)
+		{
+			Log(
+				$"{stale.Count} material reference(s) now name a deleted " +
+				"image.",
+				EditorLogLevel.Warning);
+		}
 	}
 
 	public void SetStartupScene()

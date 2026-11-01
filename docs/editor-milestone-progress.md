@@ -1718,6 +1718,11 @@ that still name the image, by name, in the Console, followed by a count.
 its own: it returns the materials that name one image, ignores materials
 that use others, and returns nothing for a path no material names.
 
+Both delete entry points now share one helper, so deleting a single image
+from a test or a script reports the same way as the browser's multi-delete.
+The singular path is covered by two tests: one asserts the warning names
+the material, the other asserts an unused image produces no warning at all.
+
 ### Not verified here
 
 - No display server: the rename and delete dialogs were not exercised,
