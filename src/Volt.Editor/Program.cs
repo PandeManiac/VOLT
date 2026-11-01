@@ -183,6 +183,7 @@ internal static class Program
 		DockLayout layout = LoadWorkspace(projectRoot);
 
 		session.TargetFrameRate = settings.TargetFrameRate;
+		session.ConsoleFilter = EditorConsoleFilter.FromSettings(settings);
 
 		Volt.Platform.Windows.WindowSize initialWindowSize = new(
 			width ?? settings.WindowWidth,

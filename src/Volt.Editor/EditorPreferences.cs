@@ -122,6 +122,10 @@ internal sealed class EditorPreferences : IDisposable
 		EditorSettings settings = new()
 		{
 			TargetFrameRate = _session.TargetFrameRate,
+			ConsoleShowInfo = _session.ConsoleFilter.ShowInfo,
+			ConsoleShowWarnings = _session.ConsoleFilter.ShowWarnings,
+			ConsoleShowErrors = _session.ConsoleFilter.ShowErrors,
+			ConsoleSource = _session.ConsoleFilter.SourceSetting,
 			InterfaceScale = _shell.UiScale,
 			WindowWidth = windowWidth,
 			WindowHeight = windowHeight,
@@ -156,6 +160,7 @@ internal sealed class EditorPreferences : IDisposable
 		ProjectRevision++;
 
 		_session.TargetFrameRate = Current.TargetFrameRate;
+		_session.ConsoleFilter = EditorConsoleFilter.FromSettings(Current);
 		_shell.RequestUiScale(Current.InterfaceScale);
 	}
 

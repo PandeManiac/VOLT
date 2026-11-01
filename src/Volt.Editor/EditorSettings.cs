@@ -103,6 +103,27 @@ public sealed class EditorSettings
 	public float InterfaceScale { get; set; } = DefaultInterfaceScale;
 
 	/// <summary>
+	/// Gets or sets whether the Console shows informational messages.
+	/// </summary>
+	public bool ConsoleShowInfo { get; set; } = true;
+
+	/// <summary>
+	/// Gets or sets whether the Console shows warnings.
+	/// </summary>
+	public bool ConsoleShowWarnings { get; set; } = true;
+
+	/// <summary>
+	/// Gets or sets whether the Console shows errors.
+	/// </summary>
+	public bool ConsoleShowErrors { get; set; } = true;
+
+	/// <summary>
+	/// Gets or sets which Console source the panel isolates: all,
+	/// editor, validation, or game.
+	/// </summary>
+	public string ConsoleSource { get; set; } = "all";
+
+	/// <summary>
 	/// Gets or sets the logical width the editor window reopens at.
 	/// </summary>
 	public int WindowWidth { get; set; } = DefaultWindowWidth;
@@ -163,6 +184,19 @@ public sealed class EditorSettings
 	}
 
 	/// <summary>
+	/// Returns the persisted spelling of a Console source, or
+	/// <c>all</c> for anything this build does not recognize.
+	/// </summary>
+	public static string NormalizeConsoleSource(string? source)
+	{
+		string value = source?.Trim().ToLowerInvariant() ?? string.Empty;
+
+		return value is "editor" or "validation" or "game"
+			? value
+			: "all";
+	}
+
+	/// <summary>
 	/// Brings a typed window width into the supported range.
 	/// </summary>
 	public static int ClampWindowWidth(int width)
@@ -207,6 +241,10 @@ public sealed class EditorSettings
 			TargetFrameRate = IsValidTargetFrameRate(TargetFrameRate)
 				? TargetFrameRate
 				: DefaultTargetFrameRate,
+			ConsoleShowInfo = ConsoleShowInfo,
+			ConsoleShowWarnings = ConsoleShowWarnings,
+			ConsoleShowErrors = ConsoleShowErrors,
+			ConsoleSource = NormalizeConsoleSource(ConsoleSource),
 			InterfaceScale = ClampInterfaceScale(InterfaceScale),
 			WindowWidth = ClampWindowWidth(WindowWidth),
 			WindowHeight = ClampWindowHeight(WindowHeight),

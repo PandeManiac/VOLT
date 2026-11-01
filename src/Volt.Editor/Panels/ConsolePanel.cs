@@ -32,10 +32,6 @@ public sealed class ConsolePanel : Panel
 	private readonly IconButton _clear;
 	private readonly Dropdown _source;
 
-	private bool _showInfo = true;
-	private bool _showWarnings = true;
-	private bool _showErrors = true;
-	private EditorLogSource? _sourceFilter;
 	private bool _disposed;
 
 	public ConsolePanel(EditorSession session)
@@ -56,23 +52,29 @@ public sealed class ConsolePanel : Panel
 			Spacing = 4f
 		};
 
+		EditorConsoleFilter initial = _session.ConsoleFilter;
+
 		_info = CreateFilter(UiIcon.Info, "Show information messages", () =>
-		{
-			_showInfo = !_showInfo;
-			Rebuild();
-		});
+			SetFilter(_session.ConsoleFilter with
+			{
+				ShowInfo = !_session.ConsoleFilter.ShowInfo
+			}));
 
 		_warnings = CreateFilter(UiIcon.Warning, "Show warnings", () =>
-		{
-			_showWarnings = !_showWarnings;
-			Rebuild();
-		});
+			SetFilter(_session.ConsoleFilter with
+			{
+				ShowWarnings = !_session.ConsoleFilter.ShowWarnings
+			}));
 
 		_errors = CreateFilter(UiIcon.Error, "Show errors", () =>
-		{
-			_showErrors = !_showErrors;
-			Rebuild();
-		});
+			SetFilter(_session.ConsoleFilter with
+			{
+				ShowErrors = !_session.ConsoleFilter.ShowErrors
+			}));
+
+		_info.IsActive = initial.ShowInfo;
+		_warnings.IsActive = initial.ShowWarnings;
+		_errors.IsActive = initial.ShowErrors;
 
 		_clear = new IconButton(UiIcon.Trash, "Clear the console")
 		{
@@ -91,11 +93,13 @@ public sealed class ConsolePanel : Panel
 			MinHeight = 24f
 		};
 
-		_source.SetItems(["All sources", "Editor", "Validation", "Game"], 0);
+		_source.SetItems(
+			["All sources", "Editor", "Validation", "Game"],
+			SourceIndex(initial.Source));
 
 		_source.SelectionChanged += _ =>
 		{
-			_sourceFilter = _source.SelectedIndex switch
+			EditorLogSource? source = _source.SelectedIndex switch
 			{
 				1 => EditorLogSource.Editor,
 				2 => EditorLogSource.Validation,
@@ -103,7 +107,7 @@ public sealed class ConsolePanel : Panel
 				_ => null
 			};
 
-			Rebuild();
+			SetFilter(_session.ConsoleFilter with { Source = source });
 		};
 
 		header.Add(_info);
@@ -148,6 +152,7 @@ public sealed class ConsolePanel : Panel
 		Add(_emptyHost);
 
 		_session.LogChanged += OnLogChanged;
+		_session.SettingsChanged += OnSettingsChanged;
 	}
 
 	protected override void OnAttached()
@@ -167,6 +172,7 @@ public sealed class ConsolePanel : Panel
 
 		_disposed = true;
 		_session.LogChanged -= OnLogChanged;
+		_session.SettingsChanged -= OnSettingsChanged;
 		base.Dispose();
 	}
 
@@ -203,6 +209,7 @@ public sealed class ConsolePanel : Panel
 
 		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
 		IReadOnlyList<EditorLogEntry> entries = _session.LogEntries;
+		EditorConsoleFilter filter = _session.ConsoleFilter;
 
 		int info = entries.Count(entry => entry.Level == EditorLogLevel.Info);
 		int warnings = entries.Count(entry => entry.Level == EditorLogLevel.Warning);
@@ -212,9 +219,7 @@ public sealed class ConsolePanel : Panel
 		_warnings.Text = warnings.ToString(CultureInfo.InvariantCulture);
 		_errors.Text = errors.ToString(CultureInfo.InvariantCulture);
 
-		_info.IsActive = _showInfo;
-		_warnings.IsActive = _showWarnings;
-		_errors.IsActive = _showErrors;
+		SynchChrome(filter);
 
 		int start = Math.Max(0, entries.Count - 200);
 		int shown = 0;
@@ -223,8 +228,7 @@ public sealed class ConsolePanel : Panel
 		{
 			EditorLogEntry entry = entries[index];
 
-			if (!IsSeverityVisible(entry.Level) ||
-				!IsSourceVisible(entry.Source))
+			if (!filter.Shows(entry.Level, entry.Source))
 			{
 				continue;
 			}
@@ -251,19 +255,53 @@ public sealed class ConsolePanel : Panel
 		_scroll.ScrollToEnd();
 	}
 
-	private bool IsSourceVisible(EditorLogSource source)
+	/// <summary>
+	/// Writes the filter to the session, which owns it and raises the
+	/// settings event the preferences coordinator persists.
+	/// </summary>
+	private void SetFilter(EditorConsoleFilter filter)
 	{
-		return _sourceFilter is not EditorLogSource filter ||
-			source == filter;
+		_session.ConsoleFilter = filter;
+		SynchChrome(filter);
+		Rebuild();
 	}
 
-	private bool IsSeverityVisible(EditorLogLevel level)
+	private void OnSettingsChanged(EditorSession session)
 	{
-		return level switch
+		SynchChrome(session.ConsoleFilter);
+		Rebuild();
+	}
+
+	/// <summary>
+	/// Makes the header controls show the filter the session holds.
+	/// </summary>
+	/// <remarks>
+	/// A scale change rebuilds the panels, and the preferences coordinator
+	/// can replace the filter when a project is adopted, so the controls
+	/// follow the value instead of owning it.
+	/// </remarks>
+	private void SynchChrome(EditorConsoleFilter filter)
+	{
+		_info.IsActive = filter.ShowInfo;
+		_warnings.IsActive = filter.ShowWarnings;
+		_errors.IsActive = filter.ShowErrors;
+
+		int index = SourceIndex(filter.Source);
+
+		if (_source.SelectedIndex != index)
 		{
-			EditorLogLevel.Error => _showErrors,
-			EditorLogLevel.Warning => _showWarnings,
-			_ => _showInfo
+			_source.SelectedIndex = index;
+		}
+	}
+
+	private static int SourceIndex(EditorLogSource? source)
+	{
+		return source switch
+		{
+			EditorLogSource.Editor => 1,
+			EditorLogSource.Validation => 2,
+			EditorLogSource.Game => 3,
+			_ => 0
 		};
 	}
 

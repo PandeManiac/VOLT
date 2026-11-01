@@ -1358,3 +1358,39 @@ levels, so seeing a game's output meant scrolling past everything else.
 
 - Texture import, starting with a PNG decoder and a UV path.
 - Remembering the chosen Console filters between sessions.
+
+## The Console filter is a remembered setting (November 2026)
+
+The Console could filter by severity and source, but the choice lived in
+the panel: it reset when the interface scale rebuilt the chrome, and it
+did not survive a restart. A developer who always silences info messages
+had to silence them every session.
+
+- `EditorConsoleFilter` is a value - which severities, which source - and
+  it lives on `EditorSession` beside the target frame rate, announcing a
+  change through the existing settings event. The panel's controls now
+  show the session's filter instead of owning it, so a rebuild or a
+  project switch cannot leave the chrome and the rows disagreeing.
+- `EditorSettings` persists the three severity toggles and the source
+  spelling (`all`, `editor`, `validation`, `game`). An unknown or missing
+  spelling normalizes to `all`, and a file written before this change
+  loads with every message visible - the behaviour those files were
+  written against.
+- Startup and project adoption both apply the saved filter, so the choice
+  follows the project the way the rest of the workspace settings do.
+- Verified: release build with 0 warnings and 0 errors;
+  `Volt.Editor.Tests` 349 passed, including the severity/source matrix,
+  the default showing everything, the session announcing exactly one
+  change per distinct value, a save/load round trip, an unknown source
+  falling back to `all`, an older file defaulting to showing everything,
+  and a round trip through every source spelling.
+
+### Not verified here
+
+- No display server: the panel is exercised through the session value it
+  reads, not by toggling the controls in a window.
+
+### Next
+
+- Texture import, starting with a PNG decoder and a UV path.
+- Remembering the selected dock tab and scroll position the same way.

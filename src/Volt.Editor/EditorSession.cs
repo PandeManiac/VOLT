@@ -165,6 +165,7 @@ public sealed class EditorSession : IDisposable
 	private bool _gridSnapping;
 	private float _snapStep = 0.25f;
 	private int _targetFrameRate = EditorSettings.DefaultTargetFrameRate;
+	private EditorConsoleFilter _consoleFilter = EditorConsoleFilter.Default;
 
 	public EditorTool Tool
 	{
@@ -249,6 +250,29 @@ public sealed class EditorSession : IDisposable
 	/// rather than being clamped silently: a hand-edited settings file
 	/// that says zero should behave like one that says nothing.
 	/// </remarks>
+	/// <summary>
+	/// Gets or sets which Console entries the panel shows.
+	/// </summary>
+	/// <remarks>
+	/// The session owns it so the panel keeps its filters across the
+	/// interface rebuild a scale change causes, and so the preferences
+	/// coordinator can persist it.
+	/// </remarks>
+	public EditorConsoleFilter ConsoleFilter
+	{
+		get => _consoleFilter;
+		set
+		{
+			if (_consoleFilter == value)
+			{
+				return;
+			}
+
+			_consoleFilter = value;
+			SettingsChanged?.Invoke(this);
+		}
+	}
+
 	public int TargetFrameRate
 	{
 		get => _targetFrameRate;
