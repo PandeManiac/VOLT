@@ -383,6 +383,20 @@ public static class GameplayProjectScaffold
 		builder.AppendLine("\t\t\t\tSpeed = component.Speed");
 		builder.AppendLine("\t\t\t});");
 		builder.AppendLine();
+		builder.AppendLine();
+		builder.AppendLine("\t\t// Lets Play Mode show this component's live values in the ECS");
+		builder.AppendLine("\t\t// panel: native storage has no field names of its own.");
+		builder.AppendLine(
+			"\t\tregistrar.DescribeComponent<PlayerMotorState>(");
+		builder.AppendLine("\t\t\t\"Player Motor\",");
+		builder.AppendLine("\t\t\tstate =>");
+		builder.AppendLine("\t\t\t[");
+		builder.AppendLine(
+			"\t\t\t\tRuntimeFieldSnapshot.Number(\"Speed\", state.Speed),");
+		builder.AppendLine(
+			"\t\t\t\tRuntimeFieldSnapshot.Number(\"Axis X\", state.Axis.X)");
+		builder.AppendLine("\t\t\t]);");
+		builder.AppendLine();
 		builder.AppendLine("\t\tregistrar.AddSystem<PlayerMotorSystem>();");
 		builder.AppendLine("\t}");
 		builder.AppendLine("}");

@@ -1,3 +1,4 @@
+using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
 
 namespace Volt.Editor.Core.Gameplay;
@@ -30,6 +31,7 @@ public sealed class GameplayRegistrar
 	private readonly List<EditorComponentDescriptor> _components = [];
 	private readonly List<GameplayComponentBinding> _bindings = [];
 	private readonly List<IGameplaySystem> _systems = [];
+	private readonly List<IRuntimeComponentFormatter> _descriptions = [];
 	private readonly List<string> _diagnostics;
 
 	internal GameplayRegistrar(
@@ -66,6 +68,12 @@ public sealed class GameplayRegistrar
 	public IReadOnlyList<IGameplaySystem> Systems => _systems;
 
 	/// <summary>
+	/// Gets the runtime component descriptions this module registered.
+	/// </summary>
+	public IReadOnlyList<IRuntimeComponentFormatter> Descriptions =>
+		_descriptions;
+
+	/// <summary>
 	/// Gets the diagnostics collected while registering.
 	/// </summary>
 	public IReadOnlyList<string> Diagnostics => _diagnostics;
@@ -74,7 +82,10 @@ public sealed class GameplayRegistrar
 	/// Gets whether this module contributed nothing at all.
 	/// </summary>
 	public bool IsEmpty =>
-		_components.Count == 0 && _bindings.Count == 0 && _systems.Count == 0;
+		_components.Count == 0 &&
+		_bindings.Count == 0 &&
+		_systems.Count == 0 &&
+		_descriptions.Count == 0;
 
 	/// <summary>
 	/// Registers an authored component so the inspector can add and edit
@@ -147,6 +158,27 @@ public sealed class GameplayRegistrar
 
 		_bindings.Add(binding);
 		return binding;
+	}
+
+	/// <summary>
+	/// Describes an unmanaged component so Play Mode can show its values.
+	/// </summary>
+	/// <remarks>
+	/// Without a description the runtime inspector can only report that the
+	/// component exists and how large it is, because native storage has no
+	/// field names. The projection reads the value the world stores, so it
+	/// shows live gameplay state rather than authored data.
+	/// </remarks>
+	public IRuntimeComponentFormatter DescribeComponent<TComponent>(
+		string displayName,
+		Func<TComponent, IReadOnlyList<RuntimeFieldSnapshot>> describe)
+		where TComponent : unmanaged
+	{
+		IRuntimeComponentFormatter formatter =
+			RuntimeComponentFormatters.Register(displayName, describe);
+
+		_descriptions.Add(formatter);
+		return formatter;
 	}
 
 	/// <summary>

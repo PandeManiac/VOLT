@@ -1561,7 +1561,8 @@ public sealed class EditorSession : IDisposable
 			$"Loaded game code '{_gameplay.AssemblyName}': " +
 			$"{registration.Components.Count} component(s), " +
 			$"{registration.Bindings.Count} binding(s), " +
-			$"{registration.Systems.Count} system(s).");
+			$"{registration.Systems.Count} system(s), " +
+			$"{registration.Descriptions.Count} runtime description(s).");
 
 		if (IsSceneDirty)
 		{

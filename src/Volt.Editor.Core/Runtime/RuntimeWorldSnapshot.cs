@@ -11,7 +11,24 @@ namespace Volt.Editor.Core.Runtime;
 /// One named value of a runtime component, already formatted for
 /// display.
 /// </summary>
-public sealed record RuntimeFieldSnapshot(string Label, string Value);
+public sealed record RuntimeFieldSnapshot(string Label, string Value)
+{
+	/// <summary>
+	/// Formats a number for display with three decimals at most.
+	/// </summary>
+	/// <remarks>
+	/// Gameplay values are read from native storage many times a second, so
+	/// this keeps a float from printing its full binary expansion and keeps
+	/// the digits culture-independent: a locale that writes a decimal comma
+	/// must not change a scene's or a capture's text.
+	/// </remarks>
+	public static RuntimeFieldSnapshot Number(string label, float value)
+	{
+		return new RuntimeFieldSnapshot(
+			label,
+			value.ToString("0.###", CultureInfo.InvariantCulture));
+	}
+}
 
 /// <summary>
 /// The runtime value of one component on one entity.
@@ -506,12 +523,66 @@ public sealed class RuntimeWorldSnapshot
 				EditChannelFor(componentType));
 		}
 
+		// A project-owned component has no built-in shape, so the project
+		// describes it. This is the only path by which custom gameplay state
+		// becomes readable in Play Mode.
+		if (RuntimeComponentFormatters.TryGet(
+			type,
+			out IRuntimeComponentFormatter formatter))
+		{
+			return DescribeWithFormatter(
+				formatter,
+				world,
+				entity,
+				metadata.Size);
+		}
+
 		return new RuntimeComponentSnapshot(
 			displayName,
 			componentType.Name,
 			metadata.Size,
 			[],
 			$"No inspector formatter; {metadata.Size} bytes per entity.");
+	}
+
+	/// <summary>
+	/// Builds a snapshot from a project's description of its component.
+	/// </summary>
+	/// <remarks>
+	/// A formatter is user code. If it throws, the panel must still describe
+	/// the entity and must not paint a half-built section, so the failure
+	/// becomes the note and the other components stay readable.
+	/// </remarks>
+	private static RuntimeComponentSnapshot DescribeWithFormatter(
+		IRuntimeComponentFormatter formatter,
+		World world,
+		Entity entity,
+		int size)
+	{
+		try
+		{
+			IReadOnlyList<RuntimeFieldSnapshot> fields =
+				formatter.Describe(world, entity);
+
+			return new RuntimeComponentSnapshot(
+				formatter.DisplayName,
+				formatter.TypeName,
+				size,
+				fields,
+				fields.Count == 0
+					? "The component is no longer present on this entity."
+					: null);
+		}
+
+		catch (Exception exception)
+		{
+			return new RuntimeComponentSnapshot(
+				formatter.DisplayName,
+				formatter.TypeName,
+				size,
+				[],
+				$"Its formatter failed: {exception.Message}");
+		}
 	}
 
 	/// <summary>

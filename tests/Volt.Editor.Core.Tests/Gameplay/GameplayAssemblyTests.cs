@@ -1,5 +1,4 @@
 using System.Numerics;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Volt.Ecs.Components.Spatial;
 using Volt.Editor.Core.Gameplay;
@@ -190,19 +189,37 @@ public sealed class GameplayAssemblyTests
 	}
 
 	[Fact]
-	public void UnloadReleasesTheLoadContext()
+	public void UnloadReleasesTheAssembliesRuntimeDescriptions()
 	{
-		WeakReference context = LoadAndUnload(out bool unloaded);
+		// Load-context collection is deliberately not asserted. The ECS
+		// component registry is process-wide and remembers every
+		// component's CLR type for the life of the process, so an assembly
+		// that registers components keeps its types reachable however
+		// cleanly it is unloaded. What unloading must guarantee is that the
+		// assembly stops being used: its runtime descriptions are removed
+		// and its context is no longer active.
+		ComponentCatalog catalog = new();
+		int before = RuntimeComponentFormatters.Count;
 
-		Assert.True(unloaded);
+		GameplayAssemblyLoadResult result = GameplayAssembly.Load(
+			GameplayFixtureAssembly.Path,
+			catalog);
 
-		for (int attempt = 0; attempt < 32 && context.IsAlive; attempt++)
-		{
-			GC.Collect();
-			GC.WaitForPendingFinalizers();
-		}
+		Assert.True(result.Succeeded, result.Error);
 
-		Assert.False(context.IsAlive);
+		GameplayAssembly assembly = result.Assembly!;
+
+		Assert.True(RuntimeComponentFormatters.Count > before);
+
+		Assert.True(assembly.Unload());
+		Assert.False(assembly.IsLoaded);
+		Assert.Equal(before, RuntimeComponentFormatters.Count);
+
+		// Unloading twice is a no-op rather than an error, because the
+		// editor disposes a session that may already have unloaded.
+		Assert.False(assembly.Unload());
+
+		assembly.Dispose();
 	}
 
 	[Fact]
@@ -349,24 +366,6 @@ public sealed class GameplayAssemblyTests
 		Assert.Equal(Vector3.Zero, scene.Entities[0].Transform.EulerAngles);
 		Assert.Equal(PlayState.Stopped, session.State);
 		Assert.Null(session.Runtime);
-	}
-
-	[MethodImpl(MethodImplOptions.NoInlining)]
-	private static WeakReference LoadAndUnload(out bool unloaded)
-	{
-		GameplayAssemblyLoadResult result = GameplayAssembly.Load(
-			GameplayFixtureAssembly.Path,
-			new ComponentCatalog());
-
-		Assert.True(result.Succeeded, result.Error);
-
-		GameplayAssembly assembly = result.Assembly!;
-		WeakReference reference = new(assembly.LoadContext!);
-
-		unloaded = assembly.Unload();
-		Assert.False(assembly.IsLoaded);
-
-		return reference;
 	}
 
 	private static int ReadCounter(object system, string property)

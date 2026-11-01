@@ -120,6 +120,16 @@ public sealed class SampleGameModule : IGameplayModule
 				Range = component.Range
 			});
 
+		// Without this the runtime inspector can only say the component
+		// exists and how large it is: native storage has no field names.
+		registrar.DescribeComponent<PlayerControlState>(
+			"Player Control",
+			state =>
+			[
+				RuntimeFieldSnapshot.Number("Speed", state.Speed),
+				RuntimeFieldSnapshot.Number("Range", state.Range)
+			]);
+
 		registrar.AddSystem<PlayerControlSystem>();
 	}
 }

@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
 
 namespace Volt.Editor.Core.Gameplay;
@@ -73,10 +74,16 @@ public sealed class GameplayAssemblyLoadResult
 /// <para>
 /// Loading is explicit. Opening a folder, refreshing the asset browser,
 /// or adding a component never loads code; only a build or Play workflow
-/// does. <see cref="Unload"/> releases the context, but a session that
-/// keeps editor metadata for the types it registered necessarily keeps
-/// those <see cref="Type"/> objects alive, so unload is honest about
-/// reclaiming the context rather than promising hot reload.
+/// does.
+/// </para>
+/// <para>
+/// <see cref="Unload"/> deactivates the context and detaches everything the
+/// assembly registered with the rest of the process, so a later load is a
+/// clean load rather than a second copy of the same contribution. It does
+/// not promise that the managed memory is reclaimed: the ECS component
+/// registry records each component's CLR type for the lifetime of the
+/// process, and a game necessarily registers component types. That is why
+/// there is no hot reload here — a rebuild is a new load, not a swap.
 /// </para>
 /// </remarks>
 public sealed class GameplayAssembly : IDisposable
@@ -238,6 +245,16 @@ public sealed class GameplayAssembly : IDisposable
 		if (_context is null)
 		{
 			return false;
+		}
+
+		// A runtime description closes over the component's CLR type, so
+		// leaving it registered would keep this assembly's load context
+		// reachable. Component and binding metadata is inert and may stay:
+		// it is what lets an already-loaded scene keep saving.
+		foreach (IRuntimeComponentFormatter description in
+			Registration.Descriptions)
+		{
+			RuntimeComponentFormatters.Unregister(description.Type);
 		}
 
 		_context.Unload();

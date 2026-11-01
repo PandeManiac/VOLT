@@ -113,6 +113,25 @@ public sealed class GameplaySessionTests : IDisposable
 			$"The project's system should have moved the cube along +X, " +
 			$"but it went from {before.Value.X} to {after.Value.X}.");
 
+		// The ECS panel renders this snapshot, so the developer's own
+		// component must be described with live values rather than a size.
+		RuntimeWorldSnapshot snapshot = RuntimeWorldSnapshot.Capture(
+			runtime,
+			_session.PlayState,
+			cube.Id);
+
+		// The scaffolded project's component, named by the project's own
+		// description rather than by a size line.
+		RuntimeComponentSnapshot projectComponent = Assert.Single(
+			snapshot.SelectedEntity!.Components,
+			candidate => candidate.TypeName == "PlayerMotorState");
+
+		Assert.Equal("Player Motor", projectComponent.DisplayName);
+
+		Assert.Contains(
+			projectComponent.Fields,
+			field => field.Label == "Speed");
+
 		_session.Stop();
 
 		// Play Mode discards its world and never writes back.

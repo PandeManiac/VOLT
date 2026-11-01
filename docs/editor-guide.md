@@ -527,6 +527,15 @@ project's systems run once per fixed step in registration order, after
 the engine's built-in behaviours. A system that throws is reported once
 and skipped for the rest of that session instead of stopping the world.
 
+**Inspect.** A game's component is bytes in native storage, so the ECS
+panel cannot name its fields by itself. `DescribeComponent<T>` in the
+module supplies those names and reads the values the world actually
+stores, so Play Mode reports live gameplay state such as a player's speed
+and remaining range instead of a size. Without a description the panel
+still lists the component, its type, and how large it is, and says that
+no formatter exists; a description that throws becomes a note on that
+component while the rest of the entity stays readable.
+
 Supported authored property types are the ones the Inspector can draw:
 `bool`, `int`, `float`, `string`, enums, `Vector3`, and `Vector4`. An
 unsupported property type is reported when the assembly loads instead of

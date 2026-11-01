@@ -112,6 +112,10 @@ public sealed class FixtureGameplayModule : IGameplayModule
 		registrar.BindComponent<FixtureSpinComponent, FixtureSpinState>(
 			component => new FixtureSpinState { Radians = component.Speed });
 
+		registrar.DescribeComponent<FixtureSpinState>(
+			"Fixture Spin State",
+			state => [RuntimeFieldSnapshot.Number("Radians", state.Radians)]);
+
 		registrar.AddSystem<FixtureSpinSystem>();
 	}
 }
