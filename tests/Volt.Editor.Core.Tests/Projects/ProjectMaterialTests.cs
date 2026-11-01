@@ -268,6 +268,25 @@ public sealed class ProjectMaterialTests : IDisposable
 	}
 
 	[Fact]
+	public void TextureReferencesNameTheMaterialsThatUseAnImage()
+	{
+		EditorProject project = EditorProject.Create(_root, "Rename");
+		WriteTextureFile(project, "Assets/Textures/wood.png");
+		WriteTextureFile(project, "Assets/Textures/stone.png");
+
+		string wood = project.CreateMaterialFromTexture(
+			"Assets/Textures/wood.png")!;
+		project.CreateMaterialFromTexture("Assets/Textures/stone.png");
+
+		Assert.Equal(
+			new[] { wood },
+			project.FindTextureReferences("Assets/Textures/wood.png"));
+
+		Assert.Empty(project.FindTextureReferences(
+			"Assets/Textures/missing.png"));
+	}
+
+	[Fact]
 	public void RenamingAFolderRepointsTexturesInsideIt()
 	{
 		EditorProject project = EditorProject.Create(_root, "Rename");

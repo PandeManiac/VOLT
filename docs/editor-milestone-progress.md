@@ -1707,7 +1707,18 @@ Two further core tests rename a folder containing one texture and assert
 the material follows while a texture outside the folder does not, and
 rename a parent folder to assert a nested texture path is repointed.
 
+### Deleting an image names what used it
+
+A renamed image can be repointed; a deleted one cannot. Instead of
+silently clearing the reference — which would turn a broken link into a
+material that quietly lost its texture — the editor reports the materials
+that still name the image, by name, in the Console, followed by a count.
+
+`EditorProject.FindTextureReferences` does the lookup and is covered on
+its own: it returns the materials that name one image, ignores materials
+that use others, and returns nothing for a path no material names.
+
 ### Not verified here
 
-- No display server: the rename dialogs were not exercised, only the
-  project operations they call.
+- No display server: the rename and delete dialogs were not exercised,
+  only the project operations they call.

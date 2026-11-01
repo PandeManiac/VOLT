@@ -681,6 +681,21 @@ public sealed class EditorSession : IDisposable
 			return 0;
 		}
 
+		// A deleted image cannot be repointed the way a renamed one can, so
+		// the materials that still name it are collected while it is still
+		// there and reported afterwards by name. Clearing them silently
+		// would turn a broken reference into a material that quietly lost
+		// its texture.
+		List<(string Image, string Material)> stale = [];
+
+		foreach (string id in ids)
+		{
+			foreach (string material in project.FindTextureReferences(id))
+			{
+				stale.Add((id, material));
+			}
+		}
+
 		bool wasDirty = IsSceneDirty;
 
 		project.DeleteAssets(ids);
@@ -700,6 +715,22 @@ public sealed class EditorSession : IDisposable
 		}
 
 		ProjectChanged?.Invoke(this);
+
+		foreach ((string image, string material) in stale)
+		{
+			Log(
+				$"'{material}' still names the deleted image '{image}'.",
+				EditorLogLevel.Warning);
+		}
+
+		if (stale.Count > 0)
+		{
+			Log(
+				$"{stale.Count} material reference(s) now name a deleted " +
+				"image.",
+				EditorLogLevel.Warning);
+		}
+
 		return ids.Count;
 	}
 

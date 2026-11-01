@@ -100,6 +100,29 @@ public sealed class AssetActionTests : IDisposable
 	}
 
 	[Fact]
+	public void DeletingAnImageNamesTheMaterialsThatUsedIt()
+	{
+		EditorProject project = OpenProject();
+		Write(project, "Assets/Textures/rock.png", "image bytes");
+		project.AssetCatalog.Refresh();
+
+		string material = _session.CreateMaterialFromTexture(
+			"Assets/Textures/rock.png")!;
+
+		Assert.Equal(
+			1,
+			_session.DeleteAssets(["Assets/Textures/rock.png"]));
+
+		Assert.Contains(
+			_session.LogEntries,
+			entry => entry.Level == EditorLogLevel.Warning &&
+				entry.Message.Contains(material, StringComparison.Ordinal) &&
+				entry.Message.Contains(
+					"still names the deleted image",
+					StringComparison.Ordinal));
+	}
+
+	[Fact]
 	public void SomethingThatIsNotATextureCannotBecomeAMaterial()
 	{
 		EditorProject project = OpenProject();

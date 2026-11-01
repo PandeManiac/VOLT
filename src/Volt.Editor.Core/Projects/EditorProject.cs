@@ -1068,6 +1068,48 @@ public sealed class EditorProject
 	/// </summary>
 	/// <param name="oldPrefix">The folder's previous identity.</param>
 	/// <param name="newPrefix">The folder's new identity.</param>
+	/// <summary>
+	/// Finds the materials that name one image.
+	/// </summary>
+	/// <param name="textureId">The project-relative image.</param>
+	/// <returns>The material identifiers, in catalog order.</returns>
+	/// <remarks>
+	/// A deleted image cannot be repointed the way a renamed one can, so
+	/// the editor reports these materials instead of quietly leaving them
+	/// broken or silently making them flat. The caller decides what to do
+	/// with the list.
+	/// </remarks>
+	public IReadOnlyList<string> FindTextureReferences(string textureId)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(textureId);
+
+		AssetCatalog.Refresh();
+
+		List<string> materials = [];
+
+		foreach (ProjectAsset asset in AssetCatalog.Assets)
+		{
+			if (asset.Kind != ProjectAssetKind.Material)
+			{
+				continue;
+			}
+
+			if (TryLoadMaterial(
+				asset.Id,
+				out MaterialAsset material,
+				out _) &&
+				string.Equals(
+					material.Texture,
+					textureId,
+					StringComparison.OrdinalIgnoreCase))
+			{
+				materials.Add(asset.Id);
+			}
+		}
+
+		return materials;
+	}
+
 	private void RewriteTextureReferencesInFolder(
 		string oldPrefix,
 		string newPrefix)
