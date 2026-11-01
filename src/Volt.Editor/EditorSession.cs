@@ -1,4 +1,5 @@
 using System.Numerics;
+using Volt.Editor.Core.Assets;
 using Volt.Editor.Core.Editing;
 using Volt.Editor.Core.Gameplay;
 using Volt.Editor.Core.Projects;
@@ -798,6 +799,121 @@ public sealed class EditorSession : IDisposable
 		SetStatus($"Created {command.Entity.Name}");
 
 		return command.Entity;
+	}
+
+	/// <summary>
+	/// Places a project mesh in the open scene as one undo step.
+	/// </summary>
+	/// <remarks>
+	/// The new object carries the mesh and the default material, so
+	/// importing a model and putting it in the scene does not also require
+	/// adding a renderer and choosing the same file twice. A mesh that
+	/// cannot be read is reported instead of placing an invisible object.
+	/// </remarks>
+	/// <param name="meshId">The project-relative mesh asset.</param>
+	/// <returns>The created object, or null when nothing was placed.</returns>
+	public SceneEntity? PlaceMeshAsset(string meshId)
+	{
+		ThrowIfDisposed();
+
+		SceneDocument scene = RequireScene();
+		EditorProject project = RequireProject();
+		ProjectAsset? asset = project.AssetCatalog.Find(meshId);
+
+		if (asset is null || asset.Kind != ProjectAssetKind.Mesh)
+		{
+			SetStatus("That asset is not a mesh");
+			return null;
+		}
+
+		if (!project.TryLoadMesh(asset.Id, out _, out string? diagnostic))
+		{
+			Log(
+				diagnostic ?? $"'{asset.FileName}' could not be loaded.",
+				EditorLogLevel.Warning);
+			SetStatus($"Could not place {asset.FileName}");
+			return null;
+		}
+
+		AddEntityCommand command = new(
+			scene,
+			Path.GetFileNameWithoutExtension(asset.FileName));
+
+		command.Entity.AddComponent(new MeshRendererData
+		{
+			Mesh = asset.Id,
+			Material = MaterialLoader.DefaultId
+		});
+
+		Undo.Execute(command);
+		Select(command.Entity.Id);
+		SetStatus($"Placed {asset.FileName}");
+
+		return command.Entity;
+	}
+
+	/// <summary>
+	/// Assigns a project material to every selected object that renders a
+	/// mesh.
+	/// </summary>
+	/// <remarks>
+	/// Assigning to a selection is the action a material is usually
+	/// chosen for; doing it one object at a time in the Inspector is the
+	/// slow path. Objects without a mesh renderer are left alone rather
+	/// than gaining one.
+	/// </remarks>
+	/// <param name="materialId">The project-relative material asset.</param>
+	/// <returns>The number of objects the material was applied to.</returns>
+	public int AssignMaterialToSelection(string materialId)
+	{
+		ThrowIfDisposed();
+
+		SceneDocument scene = RequireScene();
+		EditorProject project = RequireProject();
+
+		if (!project.TryLoadMaterial(
+			materialId,
+			out MaterialAsset material,
+			out string? diagnostic))
+		{
+			Log(
+				diagnostic ?? $"'{materialId}' could not be loaded.",
+				EditorLogLevel.Warning);
+			SetStatus($"Could not apply {Path.GetFileName(materialId)}");
+			return 0;
+		}
+
+		EditorPropertyDescriptor property = ComponentCatalog.Default
+			.Get(MeshRendererData.ComponentTypeId)
+			.Properties
+			.First(candidate => candidate.Name == "Material");
+
+		int assigned = 0;
+
+		foreach (SceneEntity entity in
+			SceneSelection.Roots(scene, _selection))
+		{
+			if (entity.GetComponent<MeshRendererData>() is not
+				MeshRendererData renderer)
+			{
+				continue;
+			}
+
+			SetComponentProperty(
+				entity.Id,
+				renderer,
+				property,
+				material.Id);
+
+			assigned++;
+		}
+
+		SetStatus(assigned == 0
+			? "No selected object renders a mesh"
+			: $"Applied {Path.GetFileName(material.Id)} to " +
+				$"{assigned} object{(assigned == 1 ? string.Empty : "s")}");
+
+		return assigned;
 	}
 
 	public bool DeleteActiveEntity()

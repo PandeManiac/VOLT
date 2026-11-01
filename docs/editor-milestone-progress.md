@@ -1138,3 +1138,39 @@ none.
 - Texture import, starting with a PNG decoder and a UV path.
 - Listing project materials in the material field's picker, filtered to
   that asset kind.
+
+## Asset actions in the Project Browser (November 2026)
+
+Importing a mesh and colouring it were possible, but only by hand: place
+an object, add a Mesh Renderer, type the mesh path, then type the
+material path. The browser could see the assets and do nothing with
+them, which is the part of an asset pipeline a developer feels every
+minute.
+
+- **Place in Scene** on a mesh asset creates one object at the origin,
+  named after the file, carrying that mesh and the default material, and
+  selects it. The entity and its renderer are a single undo step, and a
+  mesh that cannot be read is reported instead of placing an invisible
+  object.
+- **Assign to Selected** on a material asset applies it to every selected
+  object that renders a mesh, leaving objects without a renderer alone.
+  A missing or broken material is logged rather than applied.
+- Both actions go through `EditorSession`, so they are available to the
+  menus and testable without the window; the browser only enables them
+  when the asset kind and the scene state make them meaningful.
+- Verified: release build with 0 warnings and 0 errors;
+  `Volt.Editor.Tests` 324 passed, including placing a mesh as one undo
+  step, refusing a broken mesh without changing the scene, refusing a
+  scene as a mesh, applying a material to exactly the selected renderers,
+  and reporting a missing material.
+
+### Not verified here
+
+- No display server: the menu items are exercised through the session
+  calls they invoke, not by opening the window and clicking them.
+
+### Next
+
+- Texture import, starting with a PNG decoder and a UV path.
+- Filtering the mesh and material fields' pickers to their own asset
+  kinds.

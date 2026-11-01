@@ -1566,6 +1566,26 @@ public sealed class ProjectPanel : Panel
 				asset.Kind is ProjectAssetKind.Scene or ProjectAssetKind.Script
 		};
 
+		MenuItem place = new(
+			"Place in Scene",
+			() => RunAssetAction(() => _session.PlaceMeshAsset(asset.Id)))
+		{
+			IsEnabled = !multiple &&
+				asset.Kind == ProjectAssetKind.Mesh &&
+				_session.Scene is not null
+		};
+
+		MenuItem assign = new(
+			"Assign to Selected",
+			() => RunAssetAction(
+				() => _session.AssignMaterialToSelection(asset.Id)))
+		{
+			IsEnabled = !multiple &&
+				asset.Kind == ProjectAssetKind.Material &&
+				_session.Scene is not null &&
+				_session.Selection.Count > 0
+		};
+
 		MenuItem rename = new("Rename…", () => ShowRenameAssetDialog(asset))
 		{
 			IsEnabled = !multiple
@@ -1585,6 +1605,8 @@ public sealed class ProjectPanel : Panel
 		MenuPopup menu = new(
 		[
 			open,
+			place,
+			assign,
 			rename,
 			duplicate,
 			MenuItem.Separator,
@@ -1615,6 +1637,20 @@ public sealed class ProjectPanel : Panel
 			_session.SetStatus(assets.Count == 1
 				? $"Duplicated {assets[0].FileName}"
 				: $"Duplicated {assets.Count} assets");
+		}
+
+		catch (Exception exception)
+		{
+			_session.Log(exception.Message, EditorLogLevel.Error);
+			_session.SetStatus(exception.Message);
+		}
+	}
+
+	private void RunAssetAction(Action action)
+	{
+		try
+		{
+			action();
 		}
 
 		catch (Exception exception)
