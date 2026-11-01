@@ -1983,7 +1983,8 @@ public sealed class EditorShell : Panel
 				$"{issue.Location}: {issue.Message}",
 				issue.Severity == ProjectIssueSeverity.Error
 					? EditorLogLevel.Error
-					: EditorLogLevel.Warning);
+					: EditorLogLevel.Warning,
+				EditorLogSource.Validation);
 		}
 
 		_session.SetStatus(report.IsValid

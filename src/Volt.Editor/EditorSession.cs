@@ -1658,7 +1658,8 @@ public sealed class EditorSession : IDisposable
 				$"{issue.Location}: {issue.Message}",
 				issue.Severity == ProjectIssueSeverity.Error
 					? EditorLogLevel.Error
-					: EditorLogLevel.Warning);
+					: EditorLogLevel.Warning,
+				EditorLogSource.Validation);
 		}
 
 		if (report.IsValid)
@@ -1741,11 +1742,12 @@ public sealed class EditorSession : IDisposable
 
 	public void Log(
 		string message,
-		EditorLogLevel level = EditorLogLevel.Info)
+		EditorLogLevel level = EditorLogLevel.Info,
+		EditorLogSource source = EditorLogSource.Editor)
 	{
 		ArgumentNullException.ThrowIfNull(message);
 
-		_log.Add(new EditorLogEntry(DateTime.Now, level, message));
+		_log.Add(new EditorLogEntry(DateTime.Now, level, message, source));
 
 		if (_log.Count > MaximumLogEntries)
 		{
@@ -1919,7 +1921,8 @@ public sealed class EditorSession : IDisposable
 				$"Game: {entry.Message}",
 				entry.Level == RuntimeLogLevel.Warning
 					? EditorLogLevel.Warning
-					: EditorLogLevel.Info);
+					: EditorLogLevel.Info,
+				EditorLogSource.Game);
 		}
 
 		int dropped = runtime.Log.DroppedCount;
@@ -1931,7 +1934,8 @@ public sealed class EditorSession : IDisposable
 			Log(
 				$"Game logged {dropped} more messages than Play Mode " +
 					"keeps; the rest were dropped.",
-				EditorLogLevel.Warning);
+				EditorLogLevel.Warning,
+				EditorLogSource.Game);
 		}
 	}
 
@@ -1987,7 +1991,8 @@ public sealed class EditorSession : IDisposable
 				$"{issue.Location}: {issue.Message}",
 				issue.Severity == ProjectIssueSeverity.Error
 					? EditorLogLevel.Error
-					: EditorLogLevel.Warning);
+					: EditorLogLevel.Warning,
+				EditorLogSource.Validation);
 		}
 
 		if (report.Issues.Count == 0)

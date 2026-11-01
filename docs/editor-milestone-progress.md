@@ -1321,3 +1321,40 @@ discovering that a mesh file had been moved.
 - Texture import, starting with a PNG decoder and a UV path.
 - Filtering the Console by source so validation and game messages can be
   read apart.
+
+## Console sources (November 2026)
+
+The Console filtered by severity only. Validation warnings, messages from
+a running game, and the editor's own actions all arrived at the same
+levels, so seeing a game's output meant scrolling past everything else.
+
+- `EditorLogEntry` carries an `EditorLogSource`: editor, validation, or
+  game. The source is set where the message is written rather than guessed
+  from its text later, so a game that prints something starting with
+  "Game:" cannot be confused with the editor's own prefix.
+- `EditorSession.Log` gained an optional source, defaulting to editor, so
+  existing call sites are unchanged. Runtime log draining tags its entries
+  as game (including the dropped-message notice), and both validation
+  paths - opening a project and refusing to play - tag theirs as
+  validation. The Assets menu's Validate Project action does the same.
+- The Console header gained a source dropdown next to the severity
+  toggles: All sources, Editor, Validation, or Game. The two filters are
+  independent, and the empty state now says a severity or source filter
+  may be hiding messages.
+- Verified: release build with 0 warnings and 0 errors;
+  `Volt.Editor.Tests` 342 passed, including game messages tagged as game,
+  a refused Play tagging its reference error as validation, editor
+  messages defaulting to editor, and reopening a project with an unbuilt
+  assembly producing a validation warning and no validation error.
+
+### Not verified here
+
+- No display server: the dropdown's filtering is exercised through the
+  session entries it reads, not by opening the panel and choosing an item.
+- The golden baselines were not regenerated; the Console tab is not the
+  visible tab in any captured workspace.
+
+### Next
+
+- Texture import, starting with a PNG decoder and a UV path.
+- Remembering the chosen Console filters between sessions.

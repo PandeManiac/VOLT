@@ -12,6 +12,7 @@ namespace Volt.Editor.Tests;
 /// session calls the Inspector uses, and Play Mode runs the project's own
 /// systems against real ECS state.
 /// </summary>
+[Collection(GameplayProjectCollection.Name)]
 public sealed class GameplaySessionTests : IDisposable
 {
 	private readonly string _root = Path.Combine(

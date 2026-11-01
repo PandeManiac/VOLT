@@ -30,10 +30,12 @@ public sealed class ConsolePanel : Panel
 	private readonly ToolButton _warnings;
 	private readonly ToolButton _errors;
 	private readonly IconButton _clear;
+	private readonly Dropdown _source;
 
 	private bool _showInfo = true;
 	private bool _showWarnings = true;
 	private bool _showErrors = true;
+	private EditorLogSource? _sourceFilter;
 	private bool _disposed;
 
 	public ConsolePanel(EditorSession session)
@@ -77,12 +79,37 @@ public sealed class ConsolePanel : Panel
 			Width = UiLength.Points(26f),
 			Height = UiLength.Points(24f)
 		};
-
 		_clear.Clicked += _ => _session.ClearLog();
+
+		// Severity and source answer different questions: how loud a
+		// message is, and who said it. Both filters are independent so
+		// warnings from validation and from a running game can be read
+		// apart.
+		_source = new Dropdown
+		{
+			MinWidth = 104f,
+			MinHeight = 24f
+		};
+
+		_source.SetItems(["All sources", "Editor", "Validation", "Game"], 0);
+
+		_source.SelectionChanged += _ =>
+		{
+			_sourceFilter = _source.SelectedIndex switch
+			{
+				1 => EditorLogSource.Editor,
+				2 => EditorLogSource.Validation,
+				3 => EditorLogSource.Game,
+				_ => null
+			};
+
+			Rebuild();
+		};
 
 		header.Add(_info);
 		header.Add(_warnings);
 		header.Add(_errors);
+		header.Add(_source);
 		header.Add(new Spacer());
 		header.Add(_clear);
 
@@ -196,7 +223,8 @@ public sealed class ConsolePanel : Panel
 		{
 			EditorLogEntry entry = entries[index];
 
-			if (!IsSeverityVisible(entry.Level))
+			if (!IsSeverityVisible(entry.Level) ||
+				!IsSourceVisible(entry.Source))
 			{
 				continue;
 			}
@@ -216,11 +244,17 @@ public sealed class ConsolePanel : Panel
 
 			_empty.Description = entries.Count == 0
 				? "Editor actions, warnings, and engine diagnostics appear here."
-				: "Enable a severity filter above to show its messages.";
+				: "Enable a severity or source filter above to show its messages.";
 		}
 
 		_scroll.InvalidateMeasure();
 		_scroll.ScrollToEnd();
+	}
+
+	private bool IsSourceVisible(EditorLogSource source)
+	{
+		return _sourceFilter is not EditorLogSource filter ||
+			source == filter;
 	}
 
 	private bool IsSeverityVisible(EditorLogLevel level)
