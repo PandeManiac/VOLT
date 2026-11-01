@@ -1,4 +1,5 @@
 using System.Numerics;
+using Volt.Editor.Core.Assets;
 using Volt.Editor.Viewport;
 using Volt.Graphics.Vulkan.Rendering;
 using Volt.Ui;
@@ -239,7 +240,8 @@ internal static class SoftwareSceneRasterizer
 				surfaceHeight,
 				lit: true,
 				lightDirection,
-				lightDiffuse);
+				lightDiffuse,
+				texture: null);
 		}
 
 		foreach (ViewportMeshInstance instance in job.Instances)
@@ -264,7 +266,8 @@ internal static class SoftwareSceneRasterizer
 				surfaceHeight,
 				lit: true,
 				lightDirection,
-				lightDiffuse);
+				lightDiffuse,
+				instance.Texture);
 		}
 
 		return Downsample(
@@ -286,7 +289,8 @@ internal static class SoftwareSceneRasterizer
 		int height,
 		bool lit,
 		Vector3 lightDirection,
-		Vector3 lightDiffuse)
+		Vector3 lightDiffuse,
+		ViewportTexture? texture)
 	{
 		Vector4[] clip = new Vector4[vertices.Length];
 		Vector3[] positions = new Vector3[vertices.Length];
@@ -344,6 +348,28 @@ internal static class SoftwareSceneRasterizer
 			byte red = ToByte(albedo.X * lighting.X);
 			byte green = ToByte(albedo.Y * lighting.Y);
 			byte blue = ToByte(albedo.Z * lighting.Z);
+
+			if (texture is ViewportTexture surface &&
+				surface.Coordinates.Length == vertices.Length)
+			{
+				ClipAndDrawTextured(
+					clip[index],
+					clip[index + 1],
+					clip[index + 2],
+					surface.Coordinates[index],
+					surface.Coordinates[index + 1],
+					surface.Coordinates[index + 2],
+					red,
+					green,
+					blue,
+					surface.Image,
+					color,
+					depth,
+					width,
+					height);
+
+				continue;
+			}
 
 			ClipAndDraw(
 				clip[index],
@@ -457,6 +483,236 @@ internal static class SoftwareSceneRasterizer
 				depth,
 				width,
 				height);
+		}
+	}
+
+	/// <summary>
+	/// Clips one textured triangle and rasterizes what remains.
+	/// </summary>
+	/// <remarks>
+	/// The texture coordinates are carried through clipping alongside the
+	/// clip-space position, so a clipped edge samples the same part of
+	/// the image the original triangle would have. Filling uses
+	/// barycentric weights, which interpolate the coordinate across the
+	/// whole triangle; the mapping is affine in screen space, which is
+	/// what a review renderer needs and is close enough at the field of
+	/// view a viewport uses.
+	/// </remarks>
+	private static void ClipAndDrawTextured(
+		Vector4 first,
+		Vector4 second,
+		Vector4 third,
+		Vector2 firstUv,
+		Vector2 secondUv,
+		Vector2 thirdUv,
+		byte red,
+		byte green,
+		byte blue,
+		PngImage image,
+		byte[] color,
+		float[] depth,
+		int width,
+		int height)
+	{
+		Span<Vector4> source = stackalloc Vector4[12];
+		Span<Vector4> target = stackalloc Vector4[12];
+		Span<Vector2> sourceUv = stackalloc Vector2[12];
+		Span<Vector2> targetUv = stackalloc Vector2[12];
+
+		source[0] = first;
+		source[1] = second;
+		source[2] = third;
+		sourceUv[0] = firstUv;
+		sourceUv[1] = secondUv;
+		sourceUv[2] = thirdUv;
+
+		int count = 3;
+
+		for (int plane = 0; plane < 6; plane++)
+		{
+			int output = 0;
+
+			for (int index = 0; index < count; index++)
+			{
+				int next = (index + 1) % count;
+				Vector4 current = source[index];
+				Vector4 following = source[next];
+
+				float currentDistance = Distance(current, plane);
+				float nextDistance = Distance(following, plane);
+
+				bool currentInside = currentDistance >= 0f;
+				bool nextInside = nextDistance >= 0f;
+
+				if (currentInside)
+				{
+					target[output] = current;
+					targetUv[output] = sourceUv[index];
+					output++;
+				}
+
+				if (currentInside != nextInside)
+				{
+					float amount = currentDistance /
+						(currentDistance - nextDistance);
+
+					target[output] = current +
+						((following - current) * amount);
+					targetUv[output] = sourceUv[index] +
+						((sourceUv[next] - sourceUv[index]) * amount);
+					output++;
+				}
+			}
+
+			if (output < 3)
+			{
+				return;
+			}
+
+			target[..output].CopyTo(source);
+			targetUv[..output].CopyTo(sourceUv);
+			count = output;
+		}
+
+		Span<Vector3> screen = stackalloc Vector3[12];
+
+		for (int index = 0; index < count; index++)
+		{
+			Vector4 point = source[index];
+
+			if (point.W <= 1e-6f)
+			{
+				return;
+			}
+
+			float inverse = 1f / point.W;
+
+			screen[index] = new Vector3(
+				((point.X * inverse) * 0.5f + 0.5f) * width,
+				((point.Y * inverse) * 0.5f + 0.5f) * height,
+				point.Z * inverse);
+		}
+
+		for (int index = 1; index + 1 < count; index++)
+		{
+			RasterizeTextured(
+				screen[0],
+				screen[index],
+				screen[index + 1],
+				sourceUv[0],
+				sourceUv[index],
+				sourceUv[index + 1],
+				red,
+				green,
+				blue,
+				image,
+				color,
+				depth,
+				width,
+				height);
+		}
+	}
+
+	private static void RasterizeTextured(
+		Vector3 first,
+		Vector3 second,
+		Vector3 third,
+		Vector2 firstUv,
+		Vector2 secondUv,
+		Vector2 thirdUv,
+		byte red,
+		byte green,
+		byte blue,
+		PngImage image,
+		byte[] color,
+		float[] depth,
+		int width,
+		int height)
+	{
+		float area = ((second.X - first.X) * (third.Y - first.Y)) -
+			((second.Y - first.Y) * (third.X - first.X));
+
+		if (MathF.Abs(area) < 1e-6f)
+		{
+			return;
+		}
+
+		float inverseArea = 1f / area;
+
+		int firstColumn = Math.Max(
+			0,
+			(int)MathF.Floor(MathF.Min(first.X, MathF.Min(second.X, third.X))));
+		int lastColumn = Math.Min(
+			width - 1,
+			(int)MathF.Ceiling(MathF.Max(first.X, MathF.Max(second.X, third.X))));
+		int firstRow = Math.Max(
+			0,
+			(int)MathF.Floor(MathF.Min(first.Y, MathF.Min(second.Y, third.Y))));
+		int lastRow = Math.Min(
+			height - 1,
+			(int)MathF.Ceiling(MathF.Max(first.Y, MathF.Max(second.Y, third.Y))));
+
+		for (int y = firstRow; y <= lastRow; y++)
+		{
+			float sampleY = y + 0.5f;
+
+			for (int x = firstColumn; x <= lastColumn; x++)
+			{
+				float sampleX = x + 0.5f;
+
+				float weightFirst =
+					(((second.X - sampleX) * (third.Y - sampleY)) -
+					 ((second.Y - sampleY) * (third.X - sampleX))) *
+					inverseArea;
+
+				float weightSecond =
+					(((third.X - sampleX) * (first.Y - sampleY)) -
+					 ((third.Y - sampleY) * (first.X - sampleX))) *
+					inverseArea;
+
+				float weightThird = 1f - weightFirst - weightSecond;
+
+				if (weightFirst < 0f ||
+					weightSecond < 0f ||
+					weightThird < 0f)
+				{
+					continue;
+				}
+
+				float z =
+					(first.Z * weightFirst) +
+					(second.Z * weightSecond) +
+					(third.Z * weightThird);
+
+				if (z < 0f || z > 1f)
+				{
+					continue;
+				}
+
+				int index = (y * width) + x;
+
+				if (z >= depth[index])
+				{
+					continue;
+				}
+
+				depth[index] = z;
+
+				// OBJ texture coordinates put the origin at the bottom of
+				// the image, while the decoder keeps PNG's top-down rows.
+				Vector2 uv =
+					(firstUv * weightFirst) +
+					(secondUv * weightSecond) +
+					(thirdUv * weightThird);
+
+				Vector4 texel = image.Sample(uv.X, 1f - uv.Y);
+
+				int offset = index * 3;
+
+				color[offset] = ToByte(texel.X * (red / 255f));
+				color[offset + 1] = ToByte(texel.Y * (green / 255f));
+				color[offset + 2] = ToByte(texel.Z * (blue / 255f));
+			}
 		}
 	}
 

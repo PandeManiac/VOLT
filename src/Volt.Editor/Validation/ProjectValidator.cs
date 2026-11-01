@@ -1,6 +1,7 @@
 using System.Text;
 using Volt.Editor.Core.Projects;
 using Volt.Editor.Core.Scenes;
+using Volt.Editor.Core.Assets;
 using Volt.Editor.Rendering;
 
 namespace Volt.Editor.Validation;
@@ -301,6 +302,7 @@ public static class ProjectValidator
 				renderer.Mesh,
 				renderer.Material,
 				out _,
+				out _,
 				out _))
 			{
 				report.Add(
@@ -322,13 +324,33 @@ public static class ProjectValidator
 
 			if (!project.TryLoadMaterial(
 				renderer.Material,
-				out _,
+				out MaterialAsset material,
 				out string? diagnostic))
 			{
 				report.Add(
 					ProjectIssueSeverity.Warning,
 					location,
 					$"The material could not be loaded: {diagnostic}");
+				continue;
+			}
+
+			if (material.Texture is not string texture)
+			{
+				continue;
+			}
+
+			report.Checked();
+
+			if (!project.TryLoadTexture(
+				texture,
+				out _,
+				out string? textureDiagnostic))
+			{
+				report.Add(
+					ProjectIssueSeverity.Warning,
+					location,
+					$"The material texture could not be loaded: " +
+					textureDiagnostic);
 			}
 		}
 	}

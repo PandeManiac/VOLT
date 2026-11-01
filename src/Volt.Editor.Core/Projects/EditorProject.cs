@@ -38,6 +38,9 @@ public sealed class EditorProject
 	private readonly Dictionary<string, MaterialCacheEntry> _materials =
 		new(StringComparer.OrdinalIgnoreCase);
 
+	private readonly Dictionary<string, TextureCacheEntry> _textures =
+		new(StringComparer.OrdinalIgnoreCase);
+
 	private readonly Lock _meshGate = new();
 
 	private EditorProject(
@@ -189,6 +192,99 @@ public sealed class EditorProject
 	}
 
 	/// <summary>
+	/// Loads an image a material references.
+	/// </summary>
+	/// <param name="textureId">The project-relative path.</param>
+	/// <param name="image">The decoded image when this succeeds.</param>
+	/// <param name="diagnostic">
+	/// Why the image could not be loaded, when it could not be.
+	/// </param>
+	/// <returns>Whether the image is available to sample.</returns>
+	/// <remarks>
+	/// Decoded pixels are cached against the file's size and write time,
+	/// so painting a viewport samples the same image instead of decoding
+	/// it every frame, while an edited file is picked up on the next
+	/// lookup.
+	/// </remarks>
+	public bool TryLoadTexture(
+		string textureId,
+		out PngImage image,
+		out string? diagnostic)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(textureId);
+
+		image = null!;
+		diagnostic = null;
+
+		ProjectAsset? asset = AssetCatalog.Find(textureId);
+
+		if (asset is null)
+		{
+			AssetCatalog.Refresh();
+			asset = AssetCatalog.Find(textureId);
+		}
+
+		if (asset is null)
+		{
+			diagnostic = $"'{textureId}' is not part of this project.";
+			return false;
+		}
+
+		if (!asset.FileName.EndsWith(
+			".png",
+				StringComparison.OrdinalIgnoreCase))
+		{
+			diagnostic =
+				$"'{asset.FileName}' is not an image format this build can " +
+				"import yet.";
+			return false;
+		}
+
+		lock (_meshGate)
+		{
+			if (_textures.TryGetValue(
+					asset.Id,
+					out TextureCacheEntry cached) &&
+				cached.Matches(asset))
+			{
+				image = cached.Image!;
+				diagnostic = cached.Diagnostic;
+				return cached.Image is not null;
+			}
+
+			try
+			{
+				image = PngDecoder.DecodeFile(asset.FullPath);
+
+				_textures[asset.Id] = new TextureCacheEntry(
+					asset.Length,
+					asset.LastWriteTimeUtc,
+					Image: image,
+					Diagnostic: null);
+
+				return true;
+			}
+
+			catch (Exception exception)
+				when (exception is IOException or
+					UnauthorizedAccessException or
+					InvalidDataException)
+			{
+				diagnostic = $"'{asset.FileName}' could not be read: " +
+					exception.Message;
+
+				_textures[asset.Id] = new TextureCacheEntry(
+					asset.Length,
+					asset.LastWriteTimeUtc,
+					Image: null,
+					Diagnostic: diagnostic);
+
+				return false;
+			}
+		}
+	}
+
+	/// <summary>
 	/// Loads a material asset a scene references.
 	/// </summary>
 	/// <param name="materialId">The project-relative asset identifier.</param>
@@ -314,6 +410,19 @@ public sealed class EditorProject
 		long Length,
 		DateTime LastWriteTimeUtc,
 		MaterialAsset? Material,
+		string? Diagnostic)
+	{
+		public bool Matches(ProjectAsset asset)
+		{
+			return Length == asset.Length &&
+				LastWriteTimeUtc == asset.LastWriteTimeUtc;
+		}
+	}
+
+	private readonly record struct TextureCacheEntry(
+		long Length,
+		DateTime LastWriteTimeUtc,
+		PngImage? Image,
 		string? Diagnostic)
 	{
 		public bool Matches(ProjectAsset asset)

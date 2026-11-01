@@ -73,6 +73,51 @@ public sealed class MaterialLoaderTests
 	}
 
 	[Fact]
+	public void ATexturePathIsKept()
+	{
+		MaterialAsset material = MaterialLoader.Parse(
+			"m.material",
+			new StringReader(
+				"""{ "albedo": "#FFFFFF", "texture": "Assets/Textures/wood.png" }"""));
+
+		Assert.Equal("Assets/Textures/wood.png", material.Texture);
+	}
+
+	[Fact]
+	public void AMaterialWithoutATextureReportsNone()
+	{
+		MaterialAsset material = MaterialLoader.Parse(
+			"m.material",
+			new StringReader("""{ "albedo": "#FFFFFF" }"""));
+
+		Assert.Null(material.Texture);
+	}
+
+	[Fact]
+	public void AnEmptyTexturePathIsReported()
+	{
+		InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+			MaterialLoader.Parse(
+				"m.material",
+				new StringReader(
+					"""{ "albedo": "#FFFFFF", "texture": " " }""")));
+
+		Assert.Contains("texture as a non-empty path", error.Message);
+	}
+
+	[Fact]
+	public void ANonStringTextureIsReported()
+	{
+		InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+			MaterialLoader.Parse(
+				"m.material",
+				new StringReader(
+					"""{ "albedo": "#FFFFFF", "texture": 3 }""")));
+
+		Assert.Contains("texture as a non-empty path", error.Message);
+	}
+
+	[Fact]
 	public void TheDefaultFileReadsBackAsTheDefaultColour()
 	{
 		MaterialAsset material = MaterialLoader.Parse(

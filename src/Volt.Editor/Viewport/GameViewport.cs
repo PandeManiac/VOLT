@@ -285,13 +285,14 @@ internal sealed class GameViewport : Widget, IFrameTick
 				continue;
 			}
 
-			(string MeshId, VulkanSceneVertex[]? Vertices) mesh =
-				ResolveMesh(scene, info.AuthoredId);
+			(string MeshId, VulkanSceneVertex[]? Vertices, ViewportTexture? Texture)
+				mesh = ResolveMesh(scene, info.AuthoredId);
 
 			_request.Instances.Add(new ViewportMeshInstance(
 				mesh.MeshId,
 				CreateWorld(runtime, info),
-				mesh.Vertices));
+				mesh.Vertices,
+				mesh.Texture));
 		}
 
 		_renderer.PublishRequest(_request);
@@ -307,13 +308,16 @@ internal sealed class GameViewport : Widget, IFrameTick
 	/// build cannot draw falls back to the cube, which keeps a running
 	/// game visible instead of silently empty.
 	/// </remarks>
-	private (string MeshId, VulkanSceneVertex[]? Vertices) ResolveMesh(
+	private (
+		string MeshId,
+		VulkanSceneVertex[]? Vertices,
+		ViewportTexture? Texture) ResolveMesh(
 		SceneDocument? scene,
 		Guid authoredId)
 	{
 		if (scene?.Find(authoredId) is not SceneEntity entity)
 		{
-			return (EditorMeshLibrary.Cube, null);
+			return (EditorMeshLibrary.Cube, null, null);
 		}
 
 		MeshRendererData? renderer =
@@ -321,7 +325,7 @@ internal sealed class GameViewport : Widget, IFrameTick
 
 		if (renderer is null)
 		{
-			return (EditorMeshLibrary.Cube, null);
+			return (EditorMeshLibrary.Cube, null, null);
 		}
 
 		return ProjectMeshResolver.TryResolve(
@@ -329,9 +333,10 @@ internal sealed class GameViewport : Widget, IFrameTick
 			renderer.Mesh,
 			renderer.Material,
 			out EditorMeshInfo mesh,
-			out VulkanSceneVertex[]? vertices)
-				? (mesh.Id, vertices)
-				: (EditorMeshLibrary.Cube, null);
+			out VulkanSceneVertex[]? vertices,
+			out ViewportTexture? texture)
+				? (mesh.Id, vertices, texture)
+				: (EditorMeshLibrary.Cube, null, null);
 	}
 
 	private static Matrix4x4 CreateWorld(

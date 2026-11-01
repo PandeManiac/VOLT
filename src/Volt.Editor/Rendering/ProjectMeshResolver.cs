@@ -41,6 +41,13 @@ internal static class ProjectMeshResolver
 		ImportedMesh,
 		ConcurrentDictionary<int, VulkanSceneVertex[]>> s_tinted = new();
 
+	private static readonly ConditionalWeakTable<ImportedMesh, Vector2[]>
+		s_uvs = new();
+
+	private static readonly ConditionalWeakTable<
+		ImportedMesh,
+		ConcurrentDictionary<int, VulkanSceneVertex[]>> s_flat = new();
+
 	private static readonly Dictionary<(string Id, int Rgb), VulkanSceneVertex[]>
 		s_builtinTints = [];
 
@@ -70,7 +77,47 @@ internal static class ProjectMeshResolver
 			meshId,
 			materialId: null,
 			out info,
-			out vertices);
+			out vertices,
+			out _);
+	}
+
+	/// <summary>
+	/// Resolves a mesh and material reference without the texture.
+	/// </summary>
+	/// <remarks>
+	/// Picking and bounds only need the geometry descriptor, so they do
+	/// not have to decode an image or build a mapping they will not use.
+	/// </remarks>
+	public static bool TryResolve(
+		EditorProject? project,
+		string? meshId,
+		string? materialId,
+		out EditorMeshInfo info,
+		out VulkanSceneVertex[]? vertices)
+	{
+		return TryResolve(
+			project,
+			meshId,
+			materialId,
+			out info,
+			out vertices,
+			out _);
+	}
+
+	public static bool TryResolve(
+		EditorProject? project,
+		string? meshId,
+		out EditorMeshInfo info,
+		out VulkanSceneVertex[]? vertices,
+		out ViewportTexture? texture)
+	{
+		return TryResolve(
+			project,
+			meshId,
+			materialId: null,
+			out info,
+			out vertices,
+			out texture);
 	}
 
 	/// <summary>
@@ -98,17 +145,20 @@ internal static class ProjectMeshResolver
 		string? meshId,
 		string? materialId,
 		out EditorMeshInfo info,
-		out VulkanSceneVertex[]? vertices)
+		out VulkanSceneVertex[]? vertices,
+		out ViewportTexture? texture)
 	{
 		info = default;
 		vertices = null;
+		texture = null;
 
 		if (string.IsNullOrWhiteSpace(meshId))
 		{
 			return false;
 		}
 
-		Vector3? tint = ResolveAlbedo(project, materialId);
+		MaterialAsset? material = ResolveMaterial(project, materialId);
+		Vector3? tint = material?.Albedo;
 
 		if (EditorMeshLibrary.Resolve(meshId) is EditorMeshInfo builtin)
 		{
@@ -134,6 +184,26 @@ internal static class ProjectMeshResolver
 			mesh.Center,
 			mesh.HalfExtent);
 
+		texture = ResolveTexture(project, material, mesh);
+
+		if (texture is not null)
+		{
+			// A sampled surface is lit by the rasterizer itself, so its
+			// vertex colour carries the material albedo alone. Baking the
+			// face shade into the colour as well would darken the image
+			// twice and make a texture look dimmer than the same material
+			// without one.
+			Vector3 surface = material?.Albedo ?? Vector3.One;
+
+			vertices = s_flat
+				.GetValue(
+					mesh,
+					_ => new ConcurrentDictionary<int, VulkanSceneVertex[]>())
+				.GetOrAdd(RgbKey(surface), _ => Flat(mesh, surface));
+
+			return true;
+		}
+
 		VulkanSceneVertex[] source = s_vertices.GetValue(mesh, CreateVertices);
 
 		vertices = tint is Vector3 meshTint
@@ -145,7 +215,7 @@ internal static class ProjectMeshResolver
 		return true;
 	}
 
-	private static Vector3? ResolveAlbedo(
+	private static MaterialAsset? ResolveMaterial(
 		EditorProject? project,
 		string? materialId)
 	{
@@ -163,8 +233,35 @@ internal static class ProjectMeshResolver
 				materialId,
 				out MaterialAsset material,
 				out _)
-				? material.Albedo
+				? material
 				: null;
+	}
+
+	/// <summary>
+	/// Pairs a material's image with an imported mesh's corner mapping.
+	/// </summary>
+	/// <remarks>
+	/// A texture without coordinates, or coordinates without an image,
+	/// draw exactly as before in the material colour. The mapping is
+	/// cached per mesh because a re-parsed mesh is a new instance, while
+	/// the same mesh resolved for many entities shares one array.
+	/// </remarks>
+	private static ViewportTexture? ResolveTexture(
+		EditorProject? project,
+		MaterialAsset? material,
+		ImportedMesh mesh)
+	{
+		if (project is null ||
+			material?.Texture is not string path ||
+			!mesh.HasTextureCoordinates ||
+			!project.TryLoadTexture(path, out PngImage image, out _))
+		{
+			return null;
+		}
+
+		return new ViewportTexture(
+			image,
+			s_uvs.GetValue(mesh, static source => [.. source.Uvs]));
 	}
 
 	private static VulkanSceneVertex[] TintedBuiltin(
@@ -188,6 +285,23 @@ internal static class ProjectMeshResolver
 
 			return tinted;
 		}
+	}
+
+	private static VulkanSceneVertex[] Flat(
+		ImportedMesh mesh,
+		Vector3 albedo)
+	{
+		VulkanSceneVertex[] vertices =
+			new VulkanSceneVertex[mesh.Indices.Count];
+
+		for (int index = 0; index < vertices.Length; index++)
+		{
+			vertices[index] = new VulkanSceneVertex(
+				mesh.Positions[mesh.Indices[index]],
+				albedo);
+		}
+
+		return vertices;
 	}
 
 	private static VulkanSceneVertex[] Tint(

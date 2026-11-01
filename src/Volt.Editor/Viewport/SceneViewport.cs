@@ -857,6 +857,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 					renderer.Mesh,
 					renderer.Material,
 					out EditorMeshInfo resolvedMesh,
+					out _,
 					out _)
 					? resolvedMesh
 					: null;
@@ -943,13 +944,18 @@ internal sealed class SceneViewport : Widget, IFrameTick
 				renderer.Mesh,
 				renderer.Material,
 				out EditorMeshInfo mesh,
-				out VulkanSceneVertex[]? vertices))
+				out VulkanSceneVertex[]? vertices,
+				out ViewportTexture? texture))
 			{
 				continue;
 			}
 
 			_request.Instances.Add(
-				new ViewportMeshInstance(mesh.Id, target.World, vertices));
+				new ViewportMeshInstance(
+					mesh.Id,
+					target.World,
+					vertices,
+					texture));
 		}
 
 		_renderer.PublishRequest(_request);
@@ -1855,6 +1861,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 					_session.Project,
 					renderer.Mesh,
 					renderer.Material,
+					out _,
 					out _,
 					out _);
 

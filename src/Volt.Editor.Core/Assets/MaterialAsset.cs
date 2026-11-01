@@ -13,7 +13,16 @@ namespace Volt.Editor.Core.Assets;
 /// pipeline shades by face, so a material tints that shading rather
 /// than replacing it.
 /// </param>
-public sealed record MaterialAsset(string Id, Vector3 Albedo);
+/// <param name="Texture">
+/// The project-relative path of an image applied to the surface, or
+/// <see langword="null"/> for a flat colour. The image is sampled by
+/// the corners' texture coordinates and multiplied by the albedo, so a
+/// material colour still tints a texture.
+/// </param>
+public sealed record MaterialAsset(
+	string Id,
+	Vector3 Albedo,
+	string? Texture = null);
 
 /// <summary>
 /// Reads the project's material files.
@@ -27,9 +36,10 @@ public sealed record MaterialAsset(string Id, Vector3 Albedo);
 /// effect this build does not implement.
 /// </para>
 /// <para>
-/// <c>albedo</c> accepts <c>"#RRGGBB"</c> or three 0..1 numbers. The
-/// built-in default is the colour every imported mesh already uses, so
-/// assigning it changes nothing.
+/// <c>albedo</c> accepts <c>"#RRGGBB"</c> or three 0..1 numbers, and
+/// <c>texture</c> optionally names a PNG in the project. The built-in
+/// default is the colour every imported mesh already uses, so assigning
+/// it changes nothing.
 /// </para>
 /// </remarks>
 public static class MaterialLoader
@@ -125,9 +135,26 @@ public static class MaterialLoader
 					$"'{id}' must set albedo as \"#RRGGBB\" or three numbers.")
 			};
 
+			string? texture = null;
+
+			if (document.RootElement.TryGetProperty(
+					"texture",
+					out JsonElement value))
+			{
+				if (value.ValueKind != JsonValueKind.String ||
+					string.IsNullOrWhiteSpace(value.GetString()))
+				{
+					throw new InvalidDataException(
+						$"'{id}' must set texture as a non-empty path.");
+				}
+
+				texture = value.GetString()!.Trim();
+			}
+
 			return new MaterialAsset(
 				id,
-				Vector3.Clamp(color, Vector3.Zero, Vector3.One));
+				Vector3.Clamp(color, Vector3.Zero, Vector3.One),
+				texture);
 		}
 	}
 

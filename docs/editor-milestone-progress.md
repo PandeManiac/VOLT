@@ -1519,3 +1519,55 @@ different coordinate on each side of a seam, and a per-position array
 
 - A material `texture` reference, validation of the image, and CPU
   sampling in the software viewport.
+
+## Textured materials in the CPU renderer (November 2026)
+
+The pipeline is now closed on the CPU path: a material names a PNG, the
+imported mesh carries corner coordinates, and the software viewport
+samples the image as it fills each triangle.
+
+- `MaterialAsset` gained an optional `texture` path. It is read as a
+  non-empty string and nothing else: an empty string or a number is
+  reported instead of silently ignored.
+- `EditorProject.TryLoadTexture` decodes the PNG and caches the pixels
+  against the file's size and write time, exactly like imported meshes,
+  so painting a viewport does not decode the image every frame.
+- `ProjectMeshResolver` pairs the image with the mesh's per-corner
+  coordinates and hands both to the viewport as one value, so a draw
+  cannot sample one mesh's image with another mesh's mapping. The
+  material colour still multiplies the texture.
+- Textured triangles take a separate path through clipping and fill:
+  coordinates are interpolated through the same six clip planes, then
+  barycentric weights interpolate them across the triangle. The mapped
+  triangles never touch the existing scanline path, so every existing
+  golden image is unchanged.
+- OBJ texture coordinates are bottom-up, so the sampler flips V once at
+  the sampling site and the decoded image stays a faithful copy.
+- Validation now reports a material whose texture cannot be loaded as a
+  warning, next to the existing material warning.
+- A texture without coordinates (a built-in primitive, or an OBJ with no
+  `vt`), a material without a texture, and a missing image all draw
+  exactly as before in the material colour instead of disappearing.
+
+### Verified
+
+Release build with 0 warnings and 0 errors. The material tests cover a
+kept texture path, an absent one, an empty path, and a non-string value.
+`TexturedMaterialTests` check that the resolver pairs a 2x2 red image
+with the quad's six corner coordinates, that the rendered centre pixel
+is red-dominant, and that a material without an image or with a missing
+image resolves untextured but still drawable.
+
+### Not verified here
+
+- Only the software renderer samples textures. The Vulkan scene pipeline
+  has one albedo colour per vertex and no sampler or descriptor set, so
+  the windowed viewport still draws textured meshes flat. That is the
+  next GPU-side slice and it needs a machine with a Vulkan device.
+- Sampling is nearest-neighbour with edge clamping and no mipmaps, which
+  is right for a review image and not a general texture pipeline.
+
+### Next
+
+- A GPU sampler for the scene pipeline, behind the same material value.
+- A material preview in the Inspector.

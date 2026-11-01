@@ -1,4 +1,5 @@
 using System.Numerics;
+using Volt.Editor.Core.Assets;
 using Volt.Graphics.Vulkan.Rendering;
 
 namespace Volt.Editor.Rendering;
@@ -32,7 +33,25 @@ internal enum ViewportKind
 internal readonly record struct ViewportMeshInstance(
 	string MeshId,
 	Matrix4x4 World,
-	VulkanSceneVertex[]? Vertices = null);
+	VulkanSceneVertex[]? Vertices = null,
+	ViewportTexture? Texture = null);
+
+/// <summary>
+/// An image applied to one mesh instance's surface.
+/// </summary>
+/// <param name="Image">The decoded pixels to sample.</param>
+/// <param name="Coordinates">
+/// One texture coordinate per vertex of the instance's vertex array, so
+/// the rasterizer can index both by the same offset.
+/// </param>
+/// <remarks>
+/// The image and its coordinates travel together: a material can change
+/// between frames, and pairing them here means a draw can never sample
+/// one mesh's image with another mesh's mapping.
+/// </remarks>
+internal readonly record struct ViewportTexture(
+	PngImage Image,
+	Vector2[] Coordinates);
 
 /// <summary>
 /// A directional light resolved from authored scene data.
