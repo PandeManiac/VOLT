@@ -1723,6 +1723,20 @@ from a test or a script reports the same way as the browser's multi-delete.
 The singular path is covered by two tests: one asserts the warning names
 the material, the other asserts an unused image produces no warning at all.
 
+### An invisible texture is reported
+
+A material can name an image and still show nothing, because the mesh it
+is assigned to has no texture coordinates. That is true of every built-in
+primitive, and of any imported OBJ exported without UVs, so the most
+likely first experience of texturing - a textured cube - produces a flat
+surface with no explanation.
+
+Validation now warns about it: *"The material uses an image but the mesh
+has no texture coordinates, so the image will not appear."* It is a
+warning rather than an error because the project still opens and draws;
+what is wrong is that it draws something other than the developer
+expects.
+
 ### Not verified here
 
 - No display server: the rename and delete dialogs were not exercised,

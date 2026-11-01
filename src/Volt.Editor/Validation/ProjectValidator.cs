@@ -352,6 +352,29 @@ public static class ProjectValidator
 					$"The material texture could not be loaded: " +
 					textureDiagnostic);
 			}
+
+			report.Checked();
+
+			// A built-in primitive carries no texture coordinates, and an
+			// imported mesh may lack them too. Either way the image cannot
+			// appear, which is confusing when the material clearly names
+			// one - so it is reported rather than discovered by squinting.
+			bool coordinates =
+				EditorMeshLibrary.Resolve(renderer.Mesh) is null &&
+				project.TryLoadMesh(
+					renderer.Mesh,
+					out ImportedMesh mesh,
+					out _) &&
+				mesh.HasTextureCoordinates;
+
+			if (!coordinates)
+			{
+				report.Add(
+					ProjectIssueSeverity.Warning,
+					location,
+					"The material uses an image but the mesh has no texture " +
+					"coordinates, so the image will not appear.");
+			}
 		}
 	}
 

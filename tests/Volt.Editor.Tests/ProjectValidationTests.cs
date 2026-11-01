@@ -125,6 +125,90 @@ public sealed class ProjectValidationTests : IDisposable
 	}
 
 	[Fact]
+	public void ATextureOnAMeshWithoutCoordinatesIsAWarning()
+	{
+		using EditorSession session = CreateProject();
+		EditorProject project = session.Project!;
+
+		Write(
+			project,
+			"Assets/Materials/Textured.material",
+			"""
+			{ "albedo": "#FFFFFF", "texture": "Assets/Textures/wood.png" }
+			""");
+		Write(project, "Assets/Textures/wood.png", "not a decodable image");
+		project.AssetCatalog.Refresh();
+
+		SceneEntity cube = session.Scene!.Entities.First(
+			entity => entity.Name == "Cube");
+
+		cube.GetComponent<MeshRendererData>()!.Material =
+			"Assets/Materials/Textured.material";
+
+		session.SaveScene();
+
+		ProjectValidationReport report =
+			ProjectValidator.Validate(project.RootPath);
+
+		Assert.Contains(
+			report.Issues,
+			issue => issue.Severity == ProjectIssueSeverity.Warning &&
+				issue.Message.Contains(
+					"no texture coordinates",
+					StringComparison.Ordinal));
+	}
+
+	[Fact]
+	public void ATextureOnAMeshWithCoordinatesIsNotWarnedAbout()
+	{
+		using EditorSession session = CreateProject();
+		EditorProject project = session.Project!;
+
+		Write(
+			project,
+			"Assets/Meshes/quad.obj",
+			"""
+			v -1 -1 0
+			v 1 -1 0
+			v 1 1 0
+			v -1 1 0
+			vt 0 0
+			vt 1 0
+			vt 1 1
+			vt 0 1
+			f 1/1 2/2 3/3 4/4
+			""");
+		Write(
+			project,
+			"Assets/Materials/Textured.material",
+			"""
+			{ "albedo": "#FFFFFF", "texture": "Assets/Textures/wood.png" }
+			""");
+		Write(project, "Assets/Textures/wood.png", "not a decodable image");
+		project.AssetCatalog.Refresh();
+
+		SceneEntity cube = session.Scene!.Entities.First(
+			entity => entity.Name == "Cube");
+
+		MeshRendererData renderer =
+			cube.GetComponent<MeshRendererData>()!;
+
+		renderer.Mesh = "Assets/Meshes/quad.obj";
+		renderer.Material = "Assets/Materials/Textured.material";
+
+		session.SaveScene();
+
+		ProjectValidationReport report =
+			ProjectValidator.Validate(project.RootPath);
+
+		Assert.DoesNotContain(
+			report.Issues,
+			issue => issue.Message.Contains(
+				"no texture coordinates",
+				StringComparison.Ordinal));
+	}
+
+	[Fact]
 	public void AMissingMaterialTextureIsAWarning()
 	{
 		using EditorSession session = CreateProject();
