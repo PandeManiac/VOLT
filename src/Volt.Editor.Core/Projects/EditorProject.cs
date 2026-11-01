@@ -980,6 +980,11 @@ public sealed class EditorProject
 		(string stem, string extension) = SplitAssetName(
 			Path.GetFileName(source));
 
+		bool texture = string.Equals(
+			extension,
+			".png",
+			StringComparison.OrdinalIgnoreCase);
+
 		if (string.Equals(trimmed, stem, StringComparison.Ordinal))
 		{
 			return ProjectAssetCatalog.NormalizeId(relativePath);
@@ -1023,9 +1028,93 @@ public sealed class EditorProject
 		}
 
 		ReplaceReferencesInScenes(id, renamedId);
+
+		if (texture)
+		{
+			RewriteTextureReferences(id, renamedId);
+		}
+
 		AssetCatalog.Refresh();
 
 		return renamedId;
+	}
+
+	/// <summary>
+	/// Repoints materials that name a renamed image.
+	/// </summary>
+	/// <param name="oldId">The image's previous identity.</param>
+	/// <param name="newId">The image's new identity.</param>
+	/// <remarks>
+	/// Scenes store mesh and material references that
+	/// <see cref="SceneDocument.ReplaceAssetReference"/> rewrites, but a
+	/// material stores its image as a plain path inside its own file. A
+	/// rename that did not update those files would leave every textured
+	/// material broken with no indication of why.
+	///
+	/// The file is patched in place rather than re-serialized: a material
+	/// may carry fields this build does not read, and rewriting it from
+	/// the values it understands would silently drop them.
+	/// </remarks>
+	private void RewriteTextureReferences(string oldId, string newId)
+	{
+		AssetCatalog.Refresh();
+
+		string quotedOld = $"\"{oldId}\"";
+
+		foreach (ProjectAsset asset in AssetCatalog.Assets)
+		{
+			if (asset.Kind != ProjectAssetKind.Material)
+			{
+				continue;
+			}
+
+			try
+			{
+				if (!TryLoadMaterial(
+					asset.Id,
+					out MaterialAsset material,
+					out _) ||
+					!string.Equals(
+						material.Texture,
+						oldId,
+						StringComparison.OrdinalIgnoreCase))
+				{
+					continue;
+				}
+
+				string text = File.ReadAllText(asset.FullPath);
+				int index = text.IndexOf(
+					quotedOld,
+					StringComparison.OrdinalIgnoreCase);
+
+				if (index < 0)
+				{
+					continue;
+				}
+
+				File.WriteAllText(
+					asset.FullPath,
+					text[..index] +
+						$"\"{newId}\"" +
+						text[(index + quotedOld.Length)..]);
+
+				// The length and write time may not change enough to
+				// invalidate the cache, so the entry is dropped outright.
+				lock (_meshGate)
+				{
+					_materials.Remove(asset.Id);
+				}
+			}
+
+			catch (Exception exception)
+				when (exception is IOException or
+					UnauthorizedAccessException or
+					InvalidDataException)
+			{
+				// A material that cannot be read or written is left as it
+				// was; validation will report the reference it still holds.
+			}
+		}
 	}
 
 	/// <summary>

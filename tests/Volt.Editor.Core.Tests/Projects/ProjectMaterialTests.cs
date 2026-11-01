@@ -159,4 +159,129 @@ public sealed class ProjectMaterialTests : IDisposable
 
 		Assert.Null(project.CreateMaterialFromTexture(material));
 	}
+
+	[Fact]
+	public void RenamingATextureRepointsMaterialsThatUseIt()
+	{
+		EditorProject project = EditorProject.Create(_root, "Rename");
+		WriteTextureFile(project, "Assets/Textures/wood.png");
+
+		string materialId = project.CreateMaterialFromTexture(
+			"Assets/Textures/wood.png")!;
+
+		Assert.Equal(
+			"Assets/Textures/oak.png",
+			project.RenameAsset("Assets/Textures/wood.png", "oak"));
+
+		Assert.True(project.TryLoadMaterial(
+			materialId,
+			out MaterialAsset material,
+			out string? diagnostic));
+
+		Assert.Null(diagnostic);
+		Assert.Equal("Assets/Textures/oak.png", material.Texture);
+
+		// The rename rewrites the path, not the rest of the material.
+		Assert.Equal(1f, material.Albedo.X, 4);
+		Assert.Equal(1f, material.Albedo.Y, 4);
+		Assert.Equal(1f, material.Albedo.Z, 4);
+	}
+
+	[Fact]
+	public void AHandEditedFieldSurvivesTheRenameRewrite()
+	{
+		EditorProject project = EditorProject.Create(_root, "Rename");
+		WriteTextureFile(project, "Assets/Textures/wood.png");
+
+		string materialId = project.CreateMaterialFromTexture(
+			"Assets/Textures/wood.png")!;
+
+		// A field this build does not understand must survive: the file
+		// is patched, never re-serialized from known values.
+		string path = project.ResolvePath(materialId);
+		File.WriteAllText(
+			path,
+			"""
+			{
+			  "albedo": "#FFFFFF",
+			  "texture": "Assets/Textures/wood.png",
+			  "note": "hand edited"
+			}
+			""");
+
+		File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(2));
+		project.AssetCatalog.Refresh();
+
+		project.RenameAsset("Assets/Textures/wood.png", "oak");
+
+		string rewritten = File.ReadAllText(path);
+
+		Assert.Contains("hand edited", rewritten);
+		Assert.Contains("Assets/Textures/oak.png", rewritten);
+		Assert.DoesNotContain("Assets/Textures/wood.png", rewritten);
+	}
+
+	[Fact]
+	public void MaterialsUsingOtherImagesAreLeftAlone()
+	{
+		EditorProject project = EditorProject.Create(_root, "Rename");
+		WriteTextureFile(project, "Assets/Textures/wood.png");
+		WriteTextureFile(project, "Assets/Textures/stone.png");
+
+		string stone = project.CreateMaterialFromTexture(
+			"Assets/Textures/stone.png")!;
+
+		project.RenameAsset("Assets/Textures/wood.png", "oak");
+
+		Assert.True(project.TryLoadMaterial(
+			stone,
+			out MaterialAsset material,
+			out _));
+
+		Assert.Equal("Assets/Textures/stone.png", material.Texture);
+	}
+
+	[Fact]
+	public void RenamingAMeshDoesNotRewriteMaterials()
+	{
+		EditorProject project = EditorProject.Create(_root, "Rename");
+		WriteTextureFile(project, "Assets/Textures/wood.png");
+
+		string materialId = project.CreateMaterialFromTexture(
+			"Assets/Textures/wood.png")!;
+
+		string meshPath = Path.Combine(project.AssetsPath, "Meshes", "quad.obj");
+		Directory.CreateDirectory(Path.GetDirectoryName(meshPath)!);
+		File.WriteAllText(
+			meshPath,
+			"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+
+		project.AssetCatalog.Refresh();
+		project.RenameAsset("Assets/Meshes/quad.obj", "plane");
+
+		Assert.True(project.TryLoadMaterial(
+			materialId,
+			out MaterialAsset material,
+			out _));
+
+		Assert.Equal("Assets/Textures/wood.png", material.Texture);
+	}
+
+	private static void WriteTextureFile(
+		EditorProject project,
+		string relativePath)
+	{
+		string path = Path.Combine(
+			project.RootPath,
+			relativePath.Replace('/', Path.DirectorySeparatorChar));
+
+		Directory.CreateDirectory(
+			Path.GetDirectoryName(path) ?? project.RootPath);
+
+		File.WriteAllBytes(
+			path,
+			[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+		project.AssetCatalog.Refresh();
+	}
 }

@@ -1660,3 +1660,39 @@ selection.
 
 - A texture thumbnail in the preview, once the UI can draw decoded
   pixels.
+
+## Renaming an image keeps textured materials working (November 2026)
+
+Scenes store mesh and material references, and the editor already rewrote
+them when an asset was renamed. Materials were the gap: a material stores
+its image as a plain path inside its own file, so renaming a PNG left
+every textured material pointing at a file that no longer existed - with
+no indication of why the texture disappeared.
+
+- Renaming a `.png` now repoints every material whose `texture` names
+  it, in the same operation that moves the file.
+- The file is patched in place rather than re-serialized from the values
+  this build understands, so a field added by hand or by a later version
+  survives the rewrite. There is a test for exactly that.
+- The material cache entry is dropped outright after the patch. A
+  rewritten file can keep the same length and even the same write time
+  on a coarse filesystem, so relying on the cache key would have shown
+  the old path.
+- A material that uses a different image is untouched, and renaming a
+  mesh does not rewrite materials at all.
+
+### Verified
+
+Release build with 0 warnings and 0 errors. The new core tests rename a
+texture and read the updated path back through the material cache, assert
+the albedo is preserved, assert a hand-added `note` field survives the
+patch, assert an unrelated material keeps its own image, and assert
+renaming a mesh leaves materials alone.
+
+### Not verified here
+
+- Renaming a folder that contains images does not yet repoint material
+  `texture` paths; scene references already follow folder renames, so
+  this is the remaining half of the same rule.
+- No display server: the rename dialog itself was not exercised, only
+  the project operation it calls.
