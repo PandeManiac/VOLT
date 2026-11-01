@@ -1443,3 +1443,40 @@ exists, then build a separate runtime world through `PlaySession`.
 
 - Texture import, starting with a PNG decoder and a UV path.
 - A windowed player that reuses this runner with the scene renderer.
+
+## PNG decoding (November 2026)
+
+The engine could not read any image format, so every surface was a flat
+material colour. `PngDecoder` is the first layer of texture support: it
+turns a PNG file into 8-bit RGBA pixels, which is the hard, error-prone
+part of importing a texture.
+
+- Supported: 8-bit greyscale, greyscale with alpha, RGB and RGBA, no
+  interlacing. Palette, 16-bit and interlaced files are rejected with a
+  message that says why, rather than decoded approximately.
+- All five PNG scanline filters are implemented, including Paeth. The
+  test fixture encodes the same pixels with each filter, so the decoder
+  has to reconstruct exactly what was written.
+- The compressed data is ordinary zlib, so decoding uses the runtime's
+  `ZLibStream` and adds no package dependency.
+- Chunk CRCs are deliberately not verified: a corrupt file is caught by
+  the zlib stream or by a short scanline, and checking every CRC costs
+  more than the failure it detects.
+- `PngImage.Sample` clamps coordinates to the edge and uses nearest
+  sampling, which is what a material preview needs at any zoom.
+- Verified: release build with 0 warnings and 0 errors; 13 decoder tests
+  pass inside `Volt.Editor.Core.Tests` (130 total).
+
+### Not verified here
+
+- Nothing renders a decoded image yet: the scene vertex format has no
+  texture coordinate, so sampling and the material binding are the next
+  slice. Importing a texture does not change any picture today.
+- No GPU work was attempted, so the Vulkan sampler and descriptor path
+  are untouched.
+
+### Next
+
+- OBJ texture coordinates, a material `texture` reference, and CPU
+  sampling in the software viewport.
+- A material preview that shows the decoded image in the Inspector.
