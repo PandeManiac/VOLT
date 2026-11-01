@@ -126,6 +126,7 @@ public sealed class InspectorPanel : Panel
 		_session.SceneChanged += OnSessionChanged;
 		_session.SelectionChanged += OnSessionChanged;
 		_session.ProjectChanged += OnSessionChanged;
+		_session.AssetSelectionChanged += OnSessionChanged;
 
 		Rebuild();
 	}
@@ -213,6 +214,7 @@ public sealed class InspectorPanel : Panel
 			_componentTypes.IsEnabled = false;
 			_addButton.IsEnabled = false;
 			_grid.SetGroups([]);
+			UpdateMaterialPreview();
 			_updating = false;
 			return;
 		}
@@ -231,6 +233,37 @@ public sealed class InspectorPanel : Panel
 		_grid.SetGroups(BuildGroups(entity));
 
 		_updating = false;
+	}
+
+	/// <summary>
+	/// Shows the selected material while no object is selected.
+	/// </summary>
+	/// <remarks>
+	/// A material is the one asset whose authored values are short
+	/// enough to read at a glance: its colour and whether its image
+	/// decodes are exactly what a developer checks after an import. Every
+	/// other asset keeps the ordinary empty state.
+	/// </remarks>
+	private void UpdateMaterialPreview()
+	{
+		MaterialPreview? preview = MaterialPreview.Describe(
+			_session.Project,
+			_session.SelectedAssetId);
+
+		if (preview is null)
+		{
+			_empty.Icon = UiIcon.Inspector;
+			_empty.Title = "Nothing selected";
+			_empty.Description =
+				"Select an object in the Hierarchy or Scene view to edit " +
+				"its components.";
+
+			return;
+		}
+
+		_empty.Icon = UiIcon.Inspector;
+		_empty.Title = preview.Name;
+		_empty.Description = $"{preview.AlbedoHex} · {preview.TextureLine}";
 	}
 
 	/// <summary>
@@ -722,6 +755,7 @@ public sealed class InspectorPanel : Panel
 	{
 		_session.SceneChanged -= OnSessionChanged;
 		_session.SelectionChanged -= OnSessionChanged;
+		_session.AssetSelectionChanged -= OnSessionChanged;
 		_session.ProjectChanged -= OnSessionChanged;
 	}
 }

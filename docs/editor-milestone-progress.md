@@ -1617,3 +1617,46 @@ session test covers the editor action itself.
 
 - Creating a texture-less material from the menu could reuse the same
   naming rules.
+
+## Material preview in the Inspector (November 2026)
+
+Selecting a material in the Project Browser now describes it in the
+Inspector instead of showing "Nothing selected": the name, the albedo as
+both a swatch value and its hex spelling, and one line about the image.
+
+- The hex is the spelling a developer would edit in the file, so a
+  mismatch between what the file says and what the preview shows is
+  visible rather than plausible.
+- A texture line reports the decoded size (`wood.png · 512 × 512`), says
+  the material is a flat colour when it has no image, and says why when
+  the image cannot be read. An unreadable material still describes
+  itself, because the preview is exactly where a broken file should
+  announce itself.
+- The selection reaches the panel through the session rather than
+  through a reference to the Browser, so any panel can react without
+  knowing where the selection came from. A multi-selection reports no
+  single asset instead of guessing which one to preview.
+- A selected object still wins: selecting an entity leaves the component
+  inspector unchanged, and the material preview only appears while
+  nothing is selected.
+
+### Verified
+
+Release build with 0 warnings and 0 errors. `MaterialPreviewTests` cover
+a textured material (name, `#FFFFFF`, `2 × 2` from a decoded image), a
+flat material reporting no texture, a missing image starting with
+`Missing:`, an unreadable material still describing itself, the null and
+non-material cases, and the session announcing one change per distinct
+selection.
+
+### Not verified here
+
+- No display server: the empty-state text is driven by `MaterialPreview`
+  and asserted directly, but the panel itself was not drawn.
+- The preview is text and a hex value; it does not yet render the image
+  itself as a thumbnail, which needs the UI's image path.
+
+### Next
+
+- A texture thumbnail in the preview, once the UI can draw decoded
+  pixels.

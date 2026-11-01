@@ -85,6 +85,43 @@ public sealed class EditorSession : IDisposable
 	/// </remarks>
 	public event Action<EditorSession>? SettingsChanged;
 
+	/// <summary>
+	/// Raised when the asset selected in the Project Browser changes.
+	/// </summary>
+	/// <remarks>
+	/// The Browser owns its multi-selection and keyboard state; this is
+	/// only the single asset panels may preview, so a multi-selection
+	/// reports nothing rather than guessing which one to show.
+	/// </remarks>
+	public event Action<EditorSession>? AssetSelectionChanged;
+
+	/// <summary>
+	/// Gets the asset the Project Browser has selected alone, or null.
+	/// </summary>
+	public string? SelectedAssetId { get; private set; }
+
+	/// <summary>
+	/// Records which single asset the Project Browser has selected.
+	/// </summary>
+	/// <param name="assetId">The project-relative asset, or null.</param>
+	public void SelectAsset(string? assetId)
+	{
+		string? normalized = string.IsNullOrWhiteSpace(assetId)
+			? null
+			: assetId;
+
+		if (string.Equals(
+			SelectedAssetId,
+			normalized,
+			StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
+
+		SelectedAssetId = normalized;
+		AssetSelectionChanged?.Invoke(this);
+	}
+
 	public EditorProject? Project { get; private set; }
 
 	public SceneDocument? Scene { get; private set; }

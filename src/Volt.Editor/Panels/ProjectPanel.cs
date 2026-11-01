@@ -2008,6 +2008,10 @@ public sealed class ProjectPanel : Panel
 		_selectedId = string.Empty;
 		_selectedIsFolder = false;
 		_selectionAnchorId = string.Empty;
+
+		// No single asset is selected, so panels that preview one have
+		// nothing to show.
+		_session.SelectAsset(null);
 	}
 
 	private void SetSingleAssetState(string id)
@@ -2029,6 +2033,10 @@ public sealed class ProjectPanel : Panel
 		_selectedId = ids[0];
 		_selectedIsFolder = false;
 		_selectionAnchorId = _selectedId;
+
+		// A multi-selection has no single asset to preview, and guessing
+		// which one a developer meant would show the wrong material.
+		_session.SelectAsset(ids.Count == 1 ? ids[0] : null);
 	}
 
 	private void SelectSingleAsset(string id, bool updateDetails)
