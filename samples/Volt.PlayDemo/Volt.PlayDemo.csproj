@@ -5,6 +5,15 @@
     <RootNamespace>Volt.PlayDemo</RootNamespace>
   </PropertyGroup>
 
+  <!-- SampleGame carries the project's own game code, which is built as a
+       separate assembly. Without this the host's default compile glob would
+       compile that code (and its generated files) into the host itself. -->
+  <ItemGroup>
+    <Compile Remove="SampleGame/**" />
+    <None Remove="SampleGame/Scripts/bin/**" />
+    <None Remove="SampleGame/Scripts/obj/**" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="../../src/Volt.Ui/Volt.Ui.csproj" />
     <ProjectReference Include="../../src/Volt.Ui.Vulkan/Volt.Ui.Vulkan.csproj" />

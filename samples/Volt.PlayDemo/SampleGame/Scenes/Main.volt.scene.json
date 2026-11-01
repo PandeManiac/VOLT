@@ -116,20 +116,12 @@
           }
         },
         {
-          "typeId": "volt.behaviour.move",
+          "typeId": "playdemo.playerControl",
           "data": {
-            "typeId": "volt.behaviour.move",
-            "displayName": "Move Behaviour",
-            "enabled": true,
-            "axis": {
-              "x": 1,
-              "y": 0,
-              "z": 0
-            },
+            "typeId": "playdemo.playerControl",
+            "displayName": "Player Control",
             "speed": 3,
-            "range": 0,
-            "automatic": false,
-            "phase": 0
+            "range": 5
           }
         }
       ]

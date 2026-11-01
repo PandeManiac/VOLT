@@ -2,5 +2,9 @@
   "version": 1,
   "id": "2e46a9f8-d281-4e77-9734-07ed0293244c",
   "name": "Play Demo",
-  "startupScene": "Scenes/Main.volt.scene.json"
+  "startupScene": "Scenes/Main.volt.scene.json",
+  "gameplay": {
+    "project": "Scripts/GameScripts.csproj",
+    "assembly": "Scripts/bin/Release/net10.0/GameScripts.dll"
+  }
 }

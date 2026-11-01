@@ -15,6 +15,7 @@
 - [Play Mode](#play-mode)
 - [Runtime ECS inspector](#runtime-ecs-inspector)
 - [Runtime ECS panel: manual checklist](#runtime-ecs-panel-manual-checklist)
+- [Project-owned game code](#project-owned-game-code)
 - [Running a game without the editor](#running-a-game-without-the-editor)
 - [Project structure and assemblies](#project-structure-and-assemblies)
 - [Current limitations](#current-limitations)
@@ -480,6 +481,62 @@ quaternion, while authored Euler angles live in the Inspector.
 Inspecting a paused world works the same way, which is the useful case
 for comparing a simulated pose with the authored transform.
 
+## Project-owned game code
+
+Gameplay logic lives in the project, not in the engine. A project the
+editor creates owns `Scripts/`, an ordinary SDK project:
+
+```text
+MyGame/
+  project.volt.json
+  Assets/
+  Scenes/Main.volt.scene.json
+  Scripts/
+    GameScripts.csproj
+    Game.cs
+```
+
+`Game.cs` is a working example rather than a placeholder: an authored
+component the inspector can add and edit, the unmanaged state a system
+iterates, a system that moves entities from game input, and the module
+that registers all three. Edit it in any C# editor;
+`Scripts/GameScripts.csproj` references the engine checkout it was
+created from, and `VoltRoot` or `VOLT_ROOT` overrides that reference on
+another machine.
+
+**Build.** **Assets → Build Game Code** compiles the project with the
+.NET SDK and writes every diagnostic to the Console with its file, line,
+and column. Building is always explicit: opening a project, refreshing
+the asset catalog, or selecting an object never compiles or runs project
+code. A failed build keeps the previously loaded assembly, so the last
+build that worked is still playable while the error is fixed.
+
+**Edit.** Loading a build registers the project's components in the same
+catalog the Inspector reads, so they appear in **Add Component** and
+their supported fields are editable like a built-in component's. The
+bound component is also what the runtime stores natively, so the same
+data is inspectable through the ECS panel. An unsaved scene is never
+reloaded to pick up new types; the Console says to reopen it, and the
+components then read as their real types instead of preserved unknown
+data.
+
+**Play.** Play Mode loads the project's already-built assembly and
+passes its bindings and systems into the session. A bound authored
+component becomes a real ECS component on the runtime entity, and the
+project's systems run once per fixed step in registration order, after
+the engine's built-in behaviours. A system that throws is reported once
+and skipped for the rest of that session instead of stopping the world.
+
+Supported authored property types are the ones the Inspector can draw:
+`bool`, `int`, `float`, `string`, enums, `Vector3`, and `Vector4`. An
+unsupported property type is reported when the assembly loads instead of
+failing while a panel paints. Systems run sequentially on the simulation
+thread; nothing declares access sets yet, so no thread-safety is claimed
+for them. A scene keeps its data when a build fails, when the assembly is
+missing, or when its component types are renamed, because components are
+identified by a stable type id and unknown data is preserved rather than
+dropped.
+
 ## Running a game without the editor
 
 Gameplay data is normal project data. `samples/Volt.PlayDemo` is an
@@ -513,6 +570,16 @@ The created project contains a player object with the built-in move
 behaviour (`Axis`, `Speed`, `Automatic`) and can be opened, edited, and
 saved in the editor before running it again.
 
+The shipped `SampleGame` also carries its own game code in
+`SampleGame/Scripts`: a `Player Control` component and the system that
+moves the player from input. The demo loads it before the scene, so the
+scene's component deserializes as its real type, and it runs outside the
+editor exactly as the editor runs it. Rebuild it with
+`dotnet build samples/Volt.PlayDemo/SampleGame/Scripts/GameScripts.csproj`
+(the solution build does this too). A run prints which assembly loaded,
+how many bindings and systems it declared, and any diagnostics it
+produced.
+
 The demo's viewport projects runtime ECS positions through a fixed
 camera into Volt.Ui draw commands. It demonstrates scene ownership,
 fixed-step simulation, input sampling, and independent execution; it is
@@ -539,9 +606,16 @@ not yet a mesh-rendering game framework.
   viewport's pixel size changes. The headless snapshot uses a separate
   CPU rasterizer for the same requests; it is a review approximation of
   the GPU image, not a pixel-exact copy of it.
-- Gameplay logic is currently composed from the built-in behaviours
-  (`Spin`, `Move`) and authored component data. Loading user-authored
-  C# assemblies into a separate runtime is not implemented.
+- Game code is rebuilt by an explicit command; there is no hot reload.
+  A rebuild registers the new types and keeps a scene's saved data, but
+  the editor does not reload a dirty scene for it, and it does not watch
+  the source files. `Volt.Editor` has no embedded code editor, so game
+  code is edited in an external C# editor. A project has one game
+  assembly; per-folder assemblies with their own references are not
+  implemented.
+- A project's game code is built by the .NET SDK, so that SDK must be
+  available. The editor reports a missing SDK rather than failing to
+  build silently.
 - The ECS panel edits only components the selected runtime entity
   already has. Runtime entity creation, adding or removing components,
   and rotation editing are not implemented. Query results can be paged,

@@ -6,6 +6,7 @@
   <Folder Name="/samples/">
     <Project Path="samples/Volt.GameplayDemo/Volt.GameplayDemo.csproj" />
     <Project Path="samples/Volt.PlayDemo/Volt.PlayDemo.csproj" />
+    <Project Path="samples/Volt.PlayDemo/SampleGame/Scripts/GameScripts.csproj" />
     <Project Path="samples/Volt.UiDemo/Volt.UiDemo.csproj" />
     <Project Path="samples/Volt.VulkanCubeDemo/Volt.VulkanCubeDemo.csproj" />
     <Project Path="samples/Volt.VulkanMeshDemo/Volt.VulkanMeshDemo.csproj" />

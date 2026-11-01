@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>GameScripts</AssemblyName>
+    <RootNamespace>SampleGame</RootNamespace>
+  </PropertyGroup>
+
+  <!-- This sample lives inside the engine checkout, so it references the
+       engine relatively rather than recording an absolute path. A project
+       created by the editor writes its own checkout into VoltRoot instead
+       and accepts VOLT_ROOT on another machine. -->
+  <ItemGroup>
+    <ProjectReference Include="$(MSBuildThisFileDirectory)../../../../src/Volt.Editor.Core/Volt.Editor.Core.csproj" />
+  </ItemGroup>
+
+</Project>

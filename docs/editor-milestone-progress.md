@@ -854,3 +854,84 @@ Same branch, on top of `07e13c5`.
 ### Next
 
 - Project-owned gameplay assemblies (Milestone E).
+
+## Project-owned gameplay (November 2026)
+
+Branch `feat/volt-game-authoring-next`, based on the verified head of
+`fix/benchmark-project-discovery` (`c87f155`), which carried the benchmark
+isolation, inspector and profiler refresh, and swapchain-recreation work.
+Nothing from that branch was redone; this work follows it.
+
+### What changed
+
+- **`Volt.Editor.Core.Gameplay`.** `IGameplayModule` declares what a game
+  assembly contributes, `IGameplaySystem` runs once per fixed step,
+  `GameplayComponentBinding` maps an authored component onto unmanaged ECS
+  storage, and `GameplayRegistrar` collects components, bindings, and
+  systems.
+- **Loading.** `GameplayAssembly.Load` loads a built assembly into its own
+  collectible context while resolving every host-provided assembly to the
+  host's copy, so `AuthoredComponent` and `World` keep one identity across
+  the boundary. Modules are discovered by reflection; a module that throws
+  is reported and skipped; a missing, corrupt, or module-less assembly is
+  an ordinary failed result that leaves the caller usable.
+- **Runtime.** `RuntimeScene` applies bindings while it builds entities and
+  runs systems in registration order after the built-in behaviours, with
+  per-system fault isolation: the first failure is reported and that
+  system is skipped for the rest of the session.
+- **Project workflow.** `GameplayProjectScaffold` writes `Scripts/` with a
+  buildable SDK project and a working starter module.
+  `GameplayProjectBuilder` compiles with the real SDK, parses located
+  diagnostics, and de-duplicates the per-target repeats. `project.volt.json`
+  records the optional `gameplay` section.
+- **Editor.** Assets → Build Game Code compiles and loads; Play Mode loads
+  the built assembly and passes its bindings and systems into the session;
+  diagnostics reach the Console. An unchanged scene is reloaded after a
+  load so project components become editable types. A dirty scene is never
+  reloaded for it.
+- **Catalog.** `RegisterOrUpdate` replaces an entry when a rebuild changes
+  the CLR type behind a stable id, keeps retired types resolvable so older
+  instances still serialize, serializes its own access, and returns a
+  snapshot from `All` because a load can change metadata while a panel
+  enumerates it.
+- **Sample.** `samples/Volt.PlayDemo/SampleGame` now owns game code
+  (`playdemo.playerControl` and the system that moves the player) that
+  `Volt.PlayDemo` loads the way the editor does, before it reads the scene.
+  `Volt.PlayDemo.csproj` excludes `SampleGame/**` so the host's compile
+  glob does not absorb the nested project's sources or generated files.
+
+### Verified here
+
+- Release build of the whole solution: 0 warnings, 0 errors.
+- `Volt.Editor.Core.Tests`: 83 passed. New cases cover assembly loading,
+  registration idempotency, a throwing module, a binding with no
+  component, a missing assembly, a corrupt assembly, an assembly with no
+  module, load-context collection after unload, component round-tripping
+  through a scene, two real SDK builds (success and genuine compiler
+  error), scaffold idempotency, manifest round-tripping, diagnostic
+  parsing, and the shipped sample running its own system.
+- `Volt.Editor.Tests`: 307 passed, including three editor workflow tests
+  that build a project, add its component through the same session call
+  the Inspector uses, play, and see the project's system move the entity
+  while the authored transform stays untouched.
+- Full solution run: 3351 passed, 33 skipped, 1 failed.
+  `Volt.Gameplay.Tests.Lifecycle.GameplayLifecycleAllocationTests.RecycleWithTags_AfterWarmup_AllocatesNothing`
+  failed only in the parallel solution run and passes in isolation; it is
+  an allocation-measurement assertion sensitive to other assemblies running
+  at the same time, and this work does not touch that code.
+
+### Not verified here
+
+- No GPU and no display server, so no window has shown project game code
+  running. The whole workflow is exercised headlessly.
+- Windows was not available. The build runs `dotnet build` as a child
+  process, which is platform-neutral, but has only been run on Linux.
+- Hot reload is not implemented and is not claimed: a rebuild loads a new
+  assembly and keeps existing scene data, but nothing watches source files.
+
+### Next
+
+- Show the project's scripts and built assembly in the Project Browser.
+- Format a project's bound component values in the ECS panel instead of a
+  size-only line, so runtime inspection reaches custom gameplay.
+- Asset import (PNG texture or glTF mesh) as the next vertical slice.

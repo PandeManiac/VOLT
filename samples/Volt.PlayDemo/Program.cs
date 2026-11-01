@@ -1,4 +1,5 @@
 using System.Numerics;
+using Volt.Editor.Core.Gameplay;
 using Volt.Editor.Core.Projects;
 using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
@@ -83,9 +84,17 @@ internal static class Program
 			? EditorProject.Open(projectPath)
 			: EditorProject.Create(projectPath, "Play Demo");
 
+		// Game code is loaded before the scene: a scene's project
+		// components only read back as their real types once the assembly
+		// that declares them is registered.
+		using GameplayAssembly? gameplay = LoadGameplay(project);
+
 		SceneDocument scene = project.LoadStartupScene();
 
-		using PlaySession play = new(scene);
+		using PlaySession play = new(
+			scene,
+			componentBindings: gameplay?.Registration.Bindings,
+			systems: gameplay?.Registration.Systems);
 
 		play.Start();
 
@@ -247,6 +256,53 @@ internal static class Program
 	}
 
 	/// <summary>
+	/// Loads the project's built game code, reporting why it could not.
+	/// </summary>
+	/// <remarks>
+	/// A project that was never built still runs: its scene's built-in
+	/// behaviours work without an assembly. The message names the project
+	/// to build, so a missing build step is not mistaken for missing logic.
+	/// </remarks>
+	private static GameplayAssembly? LoadGameplay(EditorProject project)
+	{
+		if (!project.TryResolveGameplayAssembly(out string assemblyPath))
+		{
+			if (project.GameplayProjectPath is not null)
+			{
+				Console.WriteLine(
+					"Game code: not built yet. Run 'dotnet build " +
+					$"{project.ResolveGameplayProjectPath()}'.");
+			}
+
+			return null;
+		}
+
+		GameplayAssemblyLoadResult result = GameplayAssembly.Load(
+			assemblyPath,
+			ComponentCatalog.Default);
+
+		foreach (string diagnostic in result.Diagnostics)
+		{
+			Console.WriteLine($"Game code: {diagnostic}");
+		}
+
+		if (!result.Succeeded)
+		{
+			Console.WriteLine($"Game code failed to load: {result.Error}");
+			return null;
+		}
+
+		GameplayAssembly assembly = result.Assembly!;
+
+		Console.WriteLine(
+			$"Game code: {assembly.AssemblyName} " +
+			$"({assembly.Registration.Bindings.Count} binding(s), " +
+			$"{assembly.Registration.Systems.Count} system(s))");
+
+		return assembly;
+	}
+
+	/// <summary>
 	/// Creates the sample project used by this demo, including a
 	/// player object driven by the built-in move behaviour.
 	/// </summary>
@@ -284,6 +340,13 @@ internal static class Program
 
 		Console.WriteLine(
 			$"Startup scene: {project.StartupScenePath}");
+
+		Console.WriteLine(
+			project.GameplayProjectPath is string gameProject
+				? $"Game code: {gameProject} " +
+					"(build it with 'dotnet build')"
+				: $"Game code was not scaffolded: " +
+					$"{project.GameplayScaffoldReason}");
 	}
 
 	private static string FindSampleProject()

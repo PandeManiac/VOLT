@@ -23,6 +23,10 @@
          discover the module, not the test project. -->
     <ProjectReference Include="../Volt.GameplayFixture/Volt.GameplayFixture.csproj"
                       ReferenceOutputAssembly="false" />
+    <!-- The shipped sample's game code, built so the standalone execution
+         test loads a real project assembly. -->
+    <ProjectReference Include="../../samples/Volt.PlayDemo/SampleGame/Scripts/GameScripts.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>
