@@ -18,6 +18,11 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Volt.Editor.Core/Volt.Editor.Core.csproj" />
+    <!-- Built so the gameplay loading tests can load a real assembly,
+         deliberately not referenced for compilation: the loader has to
+         discover the module, not the test project. -->
+    <ProjectReference Include="../Volt.GameplayFixture/Volt.GameplayFixture.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

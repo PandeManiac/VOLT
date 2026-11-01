@@ -1,6 +1,7 @@
 using System.Numerics;
 using Volt.Ecs;
 using Volt.Ecs.Components.Spatial;
+using Volt.Editor.Core.Gameplay;
 using Volt.Editor.Core.Scenes;
 using Volt.Rendering.Components;
 using Volt.Rendering.Extraction;
@@ -25,6 +26,8 @@ public sealed class RuntimeScene : IDisposable
 	private readonly Dictionary<Guid, RuntimeEntityInfo> _entities = [];
 	private readonly List<RuntimeEntityInfo> _ordered = [];
 	private readonly List<IRuntimeBehaviour> _behaviours = [];
+	private readonly List<IGameplaySystem> _systems = [];
+	private readonly HashSet<IGameplaySystem> _faultedSystems = [];
 	private readonly List<string> _diagnostics = [];
 	private readonly EcsRenderExtractor _extractor;
 	private bool _disposed;
@@ -33,7 +36,9 @@ public sealed class RuntimeScene : IDisposable
 		SceneDocument source,
 		RuntimeInputState? input = null,
 		IEnumerable<IRuntimeBehaviourFactory>? behaviourFactories = null,
-		Func<string, bool>? assetExists = null)
+		Func<string, bool>? assetExists = null,
+		IEnumerable<GameplayComponentBinding>? componentBindings = null,
+		IEnumerable<IGameplaySystem>? systems = null)
 	{
 		ArgumentNullException.ThrowIfNull(source);
 
@@ -44,6 +49,14 @@ public sealed class RuntimeScene : IDisposable
 
 		IRuntimeBehaviourFactory[] factories =
 			behaviourFactories?.ToArray() ?? [];
+
+		GameplayComponentBinding[] bindings =
+			componentBindings?.ToArray() ?? [];
+
+		if (systems is not null)
+		{
+			_systems.AddRange(systems);
+		}
 
 		Dictionary<Guid, SceneEntity> authored =
 			source.Entities.ToDictionary(entity => entity.Id);
@@ -87,9 +100,12 @@ public sealed class RuntimeScene : IDisposable
 				entity,
 				info,
 				factories);
+			AttachGameplayComponents(entity, info, bindings);
 		}
 
 		Camera = ResolveCamera(source, worldTransforms);
+
+		StartSystems();
 	}
 
 	public Guid SourceSceneId { get; }
@@ -131,6 +147,27 @@ public sealed class RuntimeScene : IDisposable
 			behaviour.Update(this, fixedDeltaSeconds);
 		}
 
+		// Game systems run after the built-in behaviours in registration
+		// order. They are sequential by contract: no access declaration
+		// exists yet, so claiming independence would be wrong.
+		foreach (IGameplaySystem system in _systems)
+		{
+			if (_faultedSystems.Contains(system))
+			{
+				continue;
+			}
+
+			try
+			{
+				system.Update(this, fixedDeltaSeconds);
+			}
+
+			catch (Exception exception)
+			{
+				Fault(system, "Update", exception);
+			}
+		}
+
 		ElapsedSeconds += fixedDeltaSeconds;
 		TickCount++;
 	}
@@ -148,6 +185,8 @@ public sealed class RuntimeScene : IDisposable
 		{
 			return;
 		}
+
+		StopSystems();
 
 		_disposed = true;
 		_behaviours.Clear();
@@ -301,6 +340,115 @@ public sealed class RuntimeScene : IDisposable
 		}
 
 		return null;
+	}
+
+	/// <summary>
+	/// Gets the game systems this world runs, in execution order.
+	/// </summary>
+	public IReadOnlyList<IGameplaySystem> Systems => _systems;
+
+	/// <summary>
+	/// Gets whether a system is still being ticked.
+	/// </summary>
+	/// <remarks>
+	/// A system that throws is reported once and then skipped for the
+	/// rest of the session, so one broken system cannot flood the
+	/// Console or hide the rest of the simulation.
+	/// </remarks>
+	public bool IsSystemActive(IGameplaySystem system)
+	{
+		ArgumentNullException.ThrowIfNull(system);
+
+		return _systems.Contains(system) &&
+			!_faultedSystems.Contains(system);
+	}
+
+	/// <summary>
+	/// Adds every ECS component a project's bindings declare for one
+	/// authored entity.
+	/// </summary>
+	/// <remarks>
+	/// A conversion that rejects or throws for one entity is reported as
+	/// a diagnostic; it does not abandon the rest of the world.
+	/// </remarks>
+	private void AttachGameplayComponents(
+		SceneEntity authored,
+		RuntimeEntityInfo info,
+		IReadOnlyList<GameplayComponentBinding> bindings)
+	{
+		if (bindings.Count == 0)
+		{
+			return;
+		}
+
+		foreach (AuthoredComponent component in authored.Components)
+		{
+			foreach (GameplayComponentBinding binding in bindings)
+			{
+				try
+				{
+					_ = binding.Attach(World, info.Entity, component);
+				}
+
+				catch (Exception exception)
+				{
+					_diagnostics.Add(
+						$"{authored.Name}: component " +
+						$"'{component.TypeId}' could not become " +
+						$"'{binding.ComponentTypeName}': " +
+						$"{exception.Message}");
+				}
+			}
+		}
+	}
+
+	private void StartSystems()
+	{
+		foreach (IGameplaySystem system in _systems)
+		{
+			try
+			{
+				system.OnStart(this);
+			}
+
+			catch (Exception exception)
+			{
+				Fault(system, "OnStart", exception);
+			}
+		}
+	}
+
+	private void StopSystems()
+	{
+		foreach (IGameplaySystem system in _systems)
+		{
+			try
+			{
+				system.OnStop(this);
+			}
+
+			catch (Exception exception)
+			{
+				_diagnostics.Add(
+					$"System '{system.GetType().Name}' failed in " +
+					$"OnStop: {exception.Message}");
+			}
+		}
+	}
+
+	private void Fault(
+		IGameplaySystem system,
+		string member,
+		Exception exception)
+	{
+		if (!_faultedSystems.Add(system))
+		{
+			return;
+		}
+
+		_diagnostics.Add(
+			$"System '{system.GetType().Name}' failed in {member} and is " +
+			$"skipped for the rest of this session: {exception.Message}");
 	}
 
 	private void ThrowIfDisposed()

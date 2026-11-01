@@ -160,11 +160,7 @@ public sealed class ComponentCatalog
 				$"Component type '{type.Name}' is already registered.");
 		}
 
-		EditorComponentAttribute attribute =
-			type.GetCustomAttribute<EditorComponentAttribute>()
-			?? throw new InvalidOperationException(
-				$"Component type '{type.Name}' has no " +
-				$"{nameof(EditorComponentAttribute)}.");
+		EditorComponentAttribute attribute = GetAttribute(type);
 
 		if (s_byTypeId.ContainsKey(attribute.ComponentTypeId))
 		{
@@ -173,13 +169,106 @@ public sealed class ComponentCatalog
 				"is already registered.");
 		}
 
+		return AddDescriptor(
+			type,
+			attribute,
+			factory is null ? null : () => factory());
+	}
+
+	/// <summary>
+	/// Registers a component type, or replaces the entry it already has.
+	/// </summary>
+	/// <remarks>
+	/// A project-owned gameplay assembly is loaded into its own
+	/// collectible context, so loading it again after a rebuild produces a
+	/// new CLR type for the same stable component identifier. Replacing the
+	/// stale entry keeps the inspector, the serializer, and the scene files
+	/// keyed by that identifier, which is what survives across a reload. A
+	/// component the catalog already has is left untouched.
+	/// </remarks>
+	public EditorComponentDescriptor RegisterOrUpdate<TComponent>(
+		Func<TComponent>? factory = null)
+		where TComponent : AuthoredComponent
+	{
+		Type type = typeof(TComponent);
+		EditorComponentAttribute attribute = GetAttribute(type);
+
+		if (s_byType.TryGetValue(
+				type,
+				out EditorComponentDescriptor? existing) &&
+			string.Equals(
+				existing.TypeId,
+				attribute.ComponentTypeId,
+				StringComparison.Ordinal))
+		{
+			return existing;
+		}
+
+		if (s_byTypeId.TryGetValue(
+			attribute.ComponentTypeId,
+			out EditorComponentDescriptor? stale))
+		{
+			RemoveDescriptor(stale);
+		}
+
+		if (s_byType.TryGetValue(type, out EditorComponentDescriptor? previous))
+		{
+			RemoveDescriptor(previous);
+		}
+
+		return AddDescriptor(
+			type,
+			attribute,
+			factory is null ? null : () => factory());
+	}
+
+	private static EditorComponentAttribute GetAttribute(Type type)
+	{
+		return type.GetCustomAttribute<EditorComponentAttribute>()
+			?? throw new InvalidOperationException(
+				$"Component type '{type.Name}' has no " +
+				$"{nameof(EditorComponentAttribute)}.");
+	}
+
+	private EditorComponentDescriptor AddDescriptor(
+		Type type,
+		EditorComponentAttribute attribute,
+		Func<AuthoredComponent>? factory)
+	{
 		Func<AuthoredComponent> componentFactory = factory is null
 			? () => (AuthoredComponent)(
 				Activator.CreateInstance(type) ??
 				throw new InvalidOperationException(
 					$"Component type '{type.Name}' could not be created."))
-			: () => factory();
+			: factory;
 
+		EditorComponentDescriptor descriptor = new(
+			type,
+			attribute,
+			componentFactory,
+			DescribeProperties(type));
+
+		s_byType.Add(type, descriptor);
+		s_byTypeId.Add(descriptor.TypeId, descriptor);
+		s_ordered.Add(descriptor);
+
+		return descriptor;
+	}
+
+	private void RemoveDescriptor(EditorComponentDescriptor descriptor)
+	{
+		s_ordered.Remove(descriptor);
+		s_byTypeId.Remove(descriptor.TypeId);
+
+		// The per-type entry is deliberately kept. A scene, an undo
+		// entry, or a clipboard item may still hold an instance of the
+		// retired CLR type, and serializing it looks the type up here.
+		// Dropping it would turn a rebuild during a session into a save
+		// failure for data that is still perfectly valid.
+	}
+
+	private static List<EditorPropertyDescriptor> DescribeProperties(Type type)
+	{
 		List<EditorPropertyDescriptor> properties = [];
 
 		foreach (PropertyInfo property in type.GetProperties(
@@ -207,17 +296,7 @@ public sealed class ComponentCatalog
 					editorAttribute?.ReadOnly ?? false));
 		}
 
-		EditorComponentDescriptor descriptor = new(
-			type,
-			attribute,
-			componentFactory,
-			properties);
-
-		s_byType.Add(type, descriptor);
-		s_byTypeId.Add(descriptor.TypeId, descriptor);
-		s_ordered.Add(descriptor);
-
-		return descriptor;
+		return properties;
 	}
 
 	public bool TryGet(string typeId, out EditorComponentDescriptor descriptor)

@@ -1,3 +1,4 @@
+using Volt.Editor.Core.Gameplay;
 using Volt.Editor.Core.Scenes;
 
 namespace Volt.Editor.Core.Runtime;
@@ -28,6 +29,8 @@ public sealed class PlaySession : IDisposable
 	private readonly SceneDocument _authoredScene;
 	private readonly IEnumerable<IRuntimeBehaviourFactory>? _factories;
 	private readonly Func<string, bool>? _assetExists;
+	private readonly IEnumerable<GameplayComponentBinding>? _componentBindings;
+	private readonly IEnumerable<IGameplaySystem>? _systems;
 	private readonly RuntimeInputState _input;
 
 	private RuntimeScene? _runtime;
@@ -38,7 +41,9 @@ public sealed class PlaySession : IDisposable
 		SceneDocument authoredScene,
 		RuntimeInputState? input = null,
 		IEnumerable<IRuntimeBehaviourFactory>? behaviourFactories = null,
-		Func<string, bool>? assetExists = null)
+		Func<string, bool>? assetExists = null,
+		IEnumerable<GameplayComponentBinding>? componentBindings = null,
+		IEnumerable<IGameplaySystem>? systems = null)
 	{
 		ArgumentNullException.ThrowIfNull(authoredScene);
 
@@ -46,6 +51,8 @@ public sealed class PlaySession : IDisposable
 		_input = input ?? new RuntimeInputState();
 		_factories = behaviourFactories;
 		_assetExists = assetExists;
+		_componentBindings = componentBindings;
+		_systems = systems;
 	}
 
 	public event Action<PlaySession>? StateChanged;
@@ -80,7 +87,9 @@ public sealed class PlaySession : IDisposable
 			snapshot,
 			_input,
 			_factories,
-			_assetExists);
+			_assetExists,
+			_componentBindings,
+			_systems);
 
 		_accumulator = 0.0;
 		TicksLastFrame = 0;
