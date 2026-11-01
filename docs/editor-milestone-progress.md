@@ -1394,3 +1394,52 @@ had to silence them every session.
 
 - Texture import, starting with a PNG decoder and a UV path.
 - Remembering the selected dock tab and scroll position the same way.
+
+## A project runs without the editor (November 2026)
+
+Until now a project could only be run by opening the editor and pressing
+Play, which meant a game could not be exercised on a build machine, on a
+server, or on a headless box - and the engine's end-to-end path could not
+be checked at all without a GPU. `Volt.Editor --run-project <folder>`
+closes that gap.
+
+- The command takes the same path Play Mode does: validate the project,
+  load the startup scene, use the built gameplay assembly when one
+exists, then build a separate runtime world through `PlaySession`.
+- It simulates a fixed number of ticks (`--frames`, default 180) instead
+  of rendering frames, so the result is reproducible: the same tick
+  count, entity count, messages and diagnostics every run.
+- It prints the scene and entity count, the game-code assembly, each
+  runtime diagnostic and each game-log message, then exits. Zero means
+  the scene ran to completion; one means the project could not open, had
+  broken references, or its game code did not load; two means the
+  command line itself was unusable.
+- A project with no built game code is not an error: the run reports it
+  as a warning and simulates the scene without project systems, which is
+  what pressing Play does with an unbuilt project.
+- Stopping Play disposes the runtime world, so the entity count, log and
+  diagnostics are captured while it is still alive. The first test run
+  caught this as an `ObjectDisposedException` on `World`.
+- Verified: release build with 0 warnings and 0 errors; `Volt.Editor.Tests`
+  353 passed twice; `Volt.Editor.Core.Tests` 117; full solution 3432
+  passed, 33 skipped. The four new tests cover a scaffolded project
+  running 30 ticks without game code, a deleted startup scene stopping
+  the run with problems and no ticks, a folder without a manifest, and
+  the guard that rejects a non-positive tick count. The CLI itself was
+  checked here: a folder without a manifest exits 1 with the manifest
+  error, and `--frames 0` exits 2.
+
+### Not verified here
+
+- The run uses the CPU only; the windowed renderer is not involved.
+- The assembly-loading branch is exercised by the existing gameplay
+  loader and Play Mode tests, not by a CLI run against a built project,
+  because building project code inside the test suite is slow. Run
+  `--run-project` on a real project after **Build Game Code** to cover it
+  on your machine.
+- No display server, so no windowed player was attempted.
+
+### Next
+
+- Texture import, starting with a PNG decoder and a UV path.
+- A windowed player that reuses this runner with the scene renderer.

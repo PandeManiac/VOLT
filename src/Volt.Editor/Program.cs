@@ -1,6 +1,7 @@
 using Volt.Ecs.Component;
 using Volt.Ecs.Components.Spatial;
 using Volt.Editor.Core.Projects;
+using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
 using Volt.Editor.Input;
 using Volt.Editor.Panels;
@@ -28,6 +29,7 @@ internal static class Program
 	private const string ValidationArgument = "--validation";
 	private const string ProjectArgument = "--project";
 	private const string ValidateProjectArgument = "--validate-project";
+	private const string RunProjectArgument = "--run-project";
 	private const string FramesArgument = "--frames";
 	private const string WidthArgument = "--width";
 	private const string HeightArgument = "--height";
@@ -59,6 +61,49 @@ internal static class Program
 			return RunProjectValidation(Path.GetFullPath(args[index + 1]));
 		}
 
+		// A project run is headless as well: it drives the real runtime
+		// without a window, so it can gate a build on a machine that has
+		// no display server or GPU.
+		for (int index = 0; index < args.Length; index++)
+		{
+			if (args[index] != RunProjectArgument)
+			{
+				continue;
+			}
+
+			if (index + 1 >= args.Length)
+		{
+				Console.Error.WriteLine(
+					"--run-project requires a folder.");
+				return 2;
+			}
+
+			int ticks = ProjectRunner.DefaultTicks;
+
+			for (int option = index + 2;
+				option < args.Length;
+				option++)
+			{
+				if (args[option] != FramesArgument)
+				{
+					continue;
+				}
+
+				if (option + 1 >= args.Length ||
+					!int.TryParse(args[option + 1], out ticks) ||
+					ticks <= 0)
+				{
+					Console.Error.WriteLine(
+						"--frames requires a positive count.");
+					return 2;
+				}
+			}
+
+			return RunProjectOnCommandLine(
+				Path.GetFullPath(args[index + 1]),
+				ticks);
+		}
+
 		if (!TryParseArguments(
 				args,
 				out bool validation,
@@ -75,7 +120,7 @@ internal static class Program
 			Console.Error.WriteLine(
 				"Usage: Volt.Editor [--validation] " +
 				"[--project <folder>] [--validate-project <folder>] " +
-				"[--frames <count>] " +
+				"[--run-project <folder>] [--frames <count>] " +
 				"[--width <pixels>] [--height <pixels>] " +
 				"[--ui-scale <factor>] [--snapshot <file>] " +
 				"[--snapshot-state <workspace|authoring|start|ecs|ecs-query>]");
@@ -114,6 +159,50 @@ internal static class Program
 	/// the project from opening and drawing, one when something does, and
 	/// two when the command itself is unusable.
 	/// </remarks>
+	private static int RunProjectOnCommandLine(
+		string rootPath,
+		int ticks)
+	{
+		ProjectRunResult result = ProjectRunner.Run(rootPath, ticks);
+
+		if (!result.Succeeded)
+		{
+			Console.Error.WriteLine(result.Error);
+
+			foreach (string problem in result.Problems)
+			{
+				Console.Error.WriteLine($"  {problem}");
+			}
+
+			return 1;
+		}
+
+		Console.WriteLine(
+			$"{result.SceneName}: {result.EntityCount} entities");
+		Console.WriteLine(
+			result.AssemblyName is null
+				? "game code: none"
+				: $"game code: {result.AssemblyName}");
+		Console.WriteLine($"{result.Ticks} ticks simulated");
+
+		foreach (string warning in result.Warnings)
+		{
+			Console.WriteLine($"warning: {warning}");
+		}
+
+		foreach (string diagnostic in result.Diagnostics)
+		{
+			Console.WriteLine($"runtime: {diagnostic}");
+		}
+
+		foreach (RuntimeLogEntry entry in result.Messages)
+		{
+			Console.WriteLine($"{entry.Level}: {entry.Message}");
+		}
+
+		return 0;
+	}
+
 	private static int RunProjectValidation(string rootPath)
 	{
 		ProjectValidationReport report = ProjectValidator.Validate(rootPath);
