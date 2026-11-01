@@ -993,3 +993,50 @@ Branch `feat/volt-game-authoring-next`, on top of `1241323`.
 
 - List the project's game code in the Project Browser.
 - Asset import (PNG texture or glTF mesh) as the next vertical slice.
+
+## Game code in the Project Browser (November 2026)
+
+The previous slice made project-owned systems run and report themselves,
+but the files they are written in could not be seen in the editor: the
+catalog only scanned `Assets` and `Scenes`, and activating anything but a
+scene answered "is not openable yet". A developer could therefore write a
+system, build it, watch it run, and still have no way to reach its source
+from the browser.
+
+- `ProjectAssetCatalog` also scans `Scripts`, which is where the game
+  project lives. `bin` and `obj` are skipped there: they hold what the
+  build produced, not what the user wrote, and listing them would bury
+  the source tree under generated files.
+- Activating a script hands its absolute path to the OS-registered
+  application (`EditorSession.OpenProjectFile`), so game code opens in the
+  editor the developer already configured instead of in a minimal text
+  box. The opener is an injectable delegate, so tests launch no process.
+- Failure is ordinary here: a machine with no `.cs` association logs a
+  warning and says so in the status line rather than throwing, and a path
+  that resolves outside the project is refused with an error. A file
+  written since the last catalog refresh is found by refreshing once.
+- The asset context menu offers "Open in Editor" for scripts, while
+  scenes keep "Open".
+- Verified: release build with 0 warnings and 0 errors;
+  `Volt.Editor.Core.Tests` 89 passed, including a new catalog test that
+  finds `Scripts/Runtime/PlayerMotor.cs` as a script and confirms no
+  `Scripts/bin` or `Scripts/obj` entry reaches the assets or folders;
+  `Volt.Editor.Tests` 311 passed with four new tests: listing plus
+  external open, refusing a path outside the project, reporting a failed
+  launch without throwing, and opening a file written after the last
+  refresh.
+- Three baselines were regenerated and reviewed: `editor-default`,
+  `editor-authoring`, and `editor-rotate-world-snap` now show the fixture
+  project's `Scripts` folder as a tree row, a third tile, and "3 items".
+  The update mode also rewrote `editor-ecs-query.png` with 33 antialias
+  pixels of noise, so that one was restored from HEAD.
+
+### Not verified here
+
+- No GPU and no display server; the browser is exercised through the
+  headless CPU capture, not a window.
+- Windows and macOS file associations were not exercised.
+
+### Next
+
+- Asset import (PNG texture or glTF mesh) as the next vertical slice.

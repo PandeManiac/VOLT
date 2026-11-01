@@ -23,7 +23,8 @@ public sealed record ProjectAsset(
 	DateTime LastWriteTimeUtc);
 
 /// <summary>
-/// Discovers files beneath a project's Assets and Scenes folders.
+/// Discovers files beneath a project's Assets, Scenes, and Scripts
+/// folders.
 /// </summary>
 /// <remarks>
 /// Asset identities are normalized project-relative paths, never
@@ -50,8 +51,8 @@ public sealed class ProjectAssetCatalog
 	public IReadOnlyList<ProjectAsset> Assets => _assets;
 
 	/// <summary>
-	/// Gets the project-relative folders beneath Assets and Scenes,
-	/// including folders that contain no files.
+	/// Gets the project-relative folders beneath Assets, Scenes, and
+	/// Scripts, including folders that contain no files.
 	/// </summary>
 	public IReadOnlyList<string> Folders => _folders;
 
@@ -63,6 +64,11 @@ public sealed class ProjectAssetCatalog
 
 		ScanDirectory("Assets");
 		ScanDirectory("Scenes");
+
+		// Game code lives outside Assets and Scenes, next to the project
+		// file the build reads. Its bin/obj trees are generated output,
+		// not project content the user authored.
+		ScanDirectory("Scripts", skipBuildOutput: true);
 
 		_assets.Sort((left, right) =>
 			string.Compare(left.Id, right.Id, StringComparison.OrdinalIgnoreCase));
@@ -91,7 +97,9 @@ public sealed class ProjectAssetCatalog
 		return Find(id) is not null;
 	}
 
-	private void ScanDirectory(string relativeDirectory)
+	private void ScanDirectory(
+		string relativeDirectory,
+		bool skipBuildOutput = false)
 	{
 		string directory = Path.Combine(
 			ProjectRoot,
@@ -126,7 +134,8 @@ public sealed class ProjectAssetCatalog
 			string id = NormalizeId(relative);
 
 			if (id.StartsWith("../", StringComparison.Ordinal) ||
-				Path.IsPathRooted(id))
+				Path.IsPathRooted(id) ||
+				(skipBuildOutput && IsBuildOutput(id)))
 			{
 				continue;
 			}
@@ -157,7 +166,8 @@ public sealed class ProjectAssetCatalog
 			string id = NormalizeId(relative);
 
 			if (id.StartsWith("../", StringComparison.Ordinal) ||
-				Path.IsPathRooted(id))
+				Path.IsPathRooted(id) ||
+				(skipBuildOutput && IsBuildOutput(id)))
 			{
 				continue;
 			}
@@ -212,6 +222,20 @@ public sealed class ProjectAssetCatalog
 			".ttf" or ".otf" => ProjectAssetKind.Font,
 			_ => ProjectAssetKind.Other
 		};
+	}
+
+	private static bool IsBuildOutput(string id)
+	{
+		foreach (string segment in id.Split('/'))
+		{
+			if (segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+				segment.Equals("obj", StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	public static string NormalizeId(string path)

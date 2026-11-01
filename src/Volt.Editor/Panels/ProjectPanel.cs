@@ -1558,10 +1558,12 @@ public sealed class ProjectPanel : Panel
 				item.Id,
 				StringComparison.OrdinalIgnoreCase));
 
-		MenuItem open = new("Open", () => OpenTag(asset))
+		MenuItem open = new(
+			asset.Kind == ProjectAssetKind.Script ? "Open in Editor" : "Open",
+			() => OpenTag(asset))
 		{
 			IsEnabled = !multiple &&
-				asset.Kind == ProjectAssetKind.Scene
+				asset.Kind is ProjectAssetKind.Scene or ProjectAssetKind.Script
 		};
 
 		MenuItem rename = new("Rename…", () => ShowRenameAssetDialog(asset))
@@ -2233,6 +2235,12 @@ public sealed class ProjectPanel : Panel
 
 		if (tag is not ProjectAsset asset)
 		{
+			return;
+		}
+
+		if (asset.Kind == ProjectAssetKind.Script)
+		{
+			_session.OpenProjectFile(asset.Id);
 			return;
 		}
 

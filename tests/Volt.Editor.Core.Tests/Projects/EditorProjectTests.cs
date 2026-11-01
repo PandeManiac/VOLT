@@ -506,4 +506,45 @@ public sealed class EditorProjectTests : IDisposable
 		Assert.False(project.AssetCatalog.FileExists(
 			"Scenes/Other.volt.scene.json"));
 	}
+
+	[Fact]
+	public void AssetCatalog_ListsGameCodeAndSkipsItsBuildOutput()
+	{
+		EditorProject project = EditorProject.Create(_root, "GameCode");
+		string scripts = Path.Combine(project.RootPath, "Scripts");
+
+		string[] files =
+		[
+			Path.Combine(scripts, "Runtime", "PlayerMotor.cs"),
+			Path.Combine(scripts, "obj", "Release", "net10.0", "Generated.cs"),
+			Path.Combine(scripts, "bin", "Release", "GameScripts.dll")
+		];
+
+		foreach (string file in files)
+		{
+			Directory.CreateDirectory(
+				Path.GetDirectoryName(file) ?? scripts);
+			File.WriteAllText(file, "// game code");
+		}
+
+		project.AssetCatalog.Refresh();
+
+		ProjectAsset asset = Assert.Single(
+			project.AssetCatalog.Assets,
+			item => item.Id == "Scripts/Runtime/PlayerMotor.cs");
+
+		Assert.Equal(ProjectAssetKind.Script, asset.Kind);
+		Assert.Contains("Scripts", project.AssetCatalog.Folders);
+		Assert.Contains("Scripts/Runtime", project.AssetCatalog.Folders);
+
+		// bin/obj hold what the build produced, not what the user wrote.
+		Assert.DoesNotContain(
+			project.AssetCatalog.Assets,
+			item => item.Id.Contains("/obj/", StringComparison.Ordinal) ||
+				item.Id.Contains("/bin/", StringComparison.Ordinal));
+		Assert.DoesNotContain(
+			project.AssetCatalog.Folders,
+			folder => folder.Contains("/obj", StringComparison.Ordinal) ||
+				folder.Contains("/bin", StringComparison.Ordinal));
+	}
 }

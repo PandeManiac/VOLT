@@ -23,6 +23,7 @@ public sealed class EditorSession : IDisposable
 	private readonly HashSet<Guid> _selection = [];
 	private PlaySession? _play;
 	private readonly Func<long> _allocatedBytes;
+	private readonly Func<string, bool> _openExternalFile;
 	private long _lastAllocatedBytes;
 	private GameplayAssembly? _gameplay;
 	private int _runtimeDiagnosticCount;
@@ -37,10 +38,17 @@ public sealed class EditorSession : IDisposable
 	/// accounting is deterministic in tests; the default reads the
 	/// runtime's counter.
 	/// </param>
-	public EditorSession(Func<long>? allocatedBytesProvider = null)
+	/// <param name="externalFileOpener">
+	/// Opens a project file with the OS-registered application. A test
+	/// can supply its own opener so no process is launched.
+	/// </param>
+	public EditorSession(
+		Func<long>? allocatedBytesProvider = null,
+		Func<string, bool>? externalFileOpener = null)
 	{
 		_allocatedBytes = allocatedBytesProvider ??
 			(() => GC.GetTotalAllocatedBytes(precise: false));
+		_openExternalFile = externalFileOpener ?? ExternalFileLauncher.Open;
 
 		_lastAllocatedBytes = _allocatedBytes();
 
@@ -349,6 +357,81 @@ public sealed class EditorSession : IDisposable
 			SetScene(scene, relativePath, dirty: false);
 			Log($"Opened scene '{scene.Name}'.");
 		});
+	}
+
+	/// <summary>
+	/// Opens a project file in the application the operating system
+	/// associates with its extension.
+	/// </summary>
+	/// <remarks>
+	/// The editor deliberately ships no code editor. Handing the path to
+	/// the OS keeps the user's own tooling, and its settings, in charge of
+	/// source files.
+	/// </remarks>
+	public bool OpenProjectFile(string relativePath)
+	{
+		ThrowIfDisposed();
+
+		bool opened = false;
+
+		RunGuarded(() =>
+		{
+			EditorProject project = RequireProject();
+			ProjectAssetCatalog catalog = project.AssetCatalog;
+
+			if (!catalog.TryResolvePath(relativePath, out string fullPath))
+			{
+				// A file appears as soon as it is written, which is often
+				// before the browser's next refresh.
+				catalog.Refresh();
+
+				if (!catalog.TryResolvePath(relativePath, out fullPath))
+				{
+					Log(
+						$"'{relativePath}' is not part of this project.",
+						EditorLogLevel.Warning);
+					SetStatus(
+						$"{Path.GetFileName(relativePath)} was not found");
+					return;
+				}
+			}
+
+			if (!IsInsideProject(project.RootPath, fullPath))
+			{
+				Log(
+					$"'{relativePath}' resolves outside the project.",
+					EditorLogLevel.Error);
+				SetStatus("The file resolves outside the project");
+				return;
+			}
+
+			opened = _openExternalFile(fullPath);
+
+			if (opened)
+			{
+				SetStatus($"Opening {Path.GetFileName(fullPath)} in your editor");
+				return;
+			}
+
+			Log(
+				$"No application is registered to open " +
+					$"{Path.GetFileName(fullPath)}.",
+				EditorLogLevel.Warning);
+			SetStatus("Could not open the file");
+		});
+
+		return opened;
+	}
+
+	private static bool IsInsideProject(string root, string fullPath)
+	{
+		string prefix = Path.GetFullPath(root)
+			.TrimEnd(Path.DirectorySeparatorChar) +
+			Path.DirectorySeparatorChar;
+
+		return Path.GetFullPath(fullPath).StartsWith(
+			prefix,
+			StringComparison.Ordinal);
 	}
 
 	public SceneDocument? CreateScene(string relativePath, string name)
