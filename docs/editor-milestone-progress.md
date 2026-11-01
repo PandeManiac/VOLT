@@ -1288,3 +1288,36 @@ so unless someone ran the report first.
 
 - Texture import, starting with a PNG decoder and a UV path.
 - Running the whole-project validation at editor startup.
+
+## Validation when a project opens (November 2026)
+
+Validation existed on demand and before Play, but a developer who opened a
+project and started editing could still work for a while before
+discovering that a mesh file had been moved.
+
+- `ProjectValidator.Validate(EditorProject)` checks a project that is
+  already open, so opening does not re-read the manifest it just loaded.
+- `OpenProjectCore` runs it after the startup scene loads, writes every
+  issue to the Console at its severity, and adds one summary line. When
+  there are errors the status line says so and points at the Console;
+  warnings alone leave the status untouched.
+- Creating a project skips the check: a project that was just written
+  cannot have broken references, and reporting its not-yet-built game code
+  would be noise at the one moment everything is known to be new.
+- Verified: release build with 0 warnings and 0 errors;
+  `Volt.Editor.Tests` 338 passed, including reopening a project with a
+  moved mesh (error line naming the file, `Project validation: 1 error`
+  summary, error status), reopening a sound project with no error entries
+  and no error status, and confirming that creating a project logs no
+  validation summary.
+
+### Not verified here
+
+- No display server: the summary is exercised through the session log and
+  status the start screen's open path uses.
+
+### Next
+
+- Texture import, starting with a PNG decoder and a UV path.
+- Filtering the Console by source so validation and game messages can be
+  read apart.

@@ -299,7 +299,11 @@ public sealed class EditorSession : IDisposable
 			CloseProjectCore();
 
 			EditorProject project = EditorProject.Create(projectRoot, name);
-			OpenProjectCore(project);
+
+			// A project that was just written cannot have broken
+			// references yet, so the project-wide check would only add
+			// noise about game code that has not been built.
+			OpenProjectCore(project, validate: false);
 			Log($"Created project '{project.Name}'.");
 		});
 	}
@@ -1946,7 +1950,7 @@ public sealed class EditorSession : IDisposable
 		return guard(action);
 	}
 
-	private void OpenProjectCore(EditorProject project)
+	private void OpenProjectCore(EditorProject project, bool validate = true)
 	{
 		Project = project;
 		ProjectChanged?.Invoke(this);
@@ -1958,6 +1962,51 @@ public sealed class EditorSession : IDisposable
 			dirty: false);
 
 		Log($"Startup scene '{startup.Name}' loaded.");
+
+		if (validate)
+		{
+			ReportProjectValidation(project);
+		}
+	}
+
+	/// <summary>
+	/// Reports what the project that was just opened cannot draw or run.
+	/// </summary>
+	/// <remarks>
+	/// Opening is when a developer learns that a file was moved or an
+	/// assembly was never built. Play validates the scene it runs, but this
+	/// is the project-wide answer, including scenes that are not open.
+	/// </remarks>
+	private void ReportProjectValidation(EditorProject project)
+	{
+		ProjectValidationReport report = ProjectValidator.Validate(project);
+
+		foreach (ProjectIssue issue in report.Issues)
+		{
+			Log(
+				$"{issue.Location}: {issue.Message}",
+				issue.Severity == ProjectIssueSeverity.Error
+					? EditorLogLevel.Error
+					: EditorLogLevel.Warning);
+		}
+
+		if (report.Issues.Count == 0)
+		{
+			return;
+		}
+
+		Log(
+			$"Project validation: {report.Errors} " +
+			$"error{(report.Errors == 1 ? string.Empty : "s")}, " +
+			$"{report.Warnings} " +
+			$"warning{(report.Warnings == 1 ? string.Empty : "s")}.");
+
+		if (report.Errors > 0)
+		{
+			SetStatus(
+				$"Opened with {report.Errors} project " +
+				$"error{(report.Errors == 1 ? string.Empty : "s")} — see Console");
+		}
 	}
 
 	private void SetScene(

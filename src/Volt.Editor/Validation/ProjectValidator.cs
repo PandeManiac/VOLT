@@ -129,10 +129,37 @@ public static class ProjectValidator
 			return report;
 		}
 
-		ValidateScenes(project, report);
-		ValidateGameplay(project, report);
+		Validate(project, report);
 
 		return report;
+	}
+
+	/// <summary>
+	/// Validates a project that is already open.
+	/// </summary>
+	/// <param name="project">The open project.</param>
+	/// <returns>Everything found, with counts.</returns>
+	/// <remarks>
+	/// Opening runs this, so re-reading the manifest from disk would only
+	/// repeat work the caller has already done.
+	/// </remarks>
+	public static ProjectValidationReport Validate(EditorProject project)
+	{
+		ArgumentNullException.ThrowIfNull(project);
+
+		ProjectValidationReport report = new();
+
+		Validate(project, report);
+
+		return report;
+	}
+
+	private static void Validate(
+		EditorProject project,
+		ProjectValidationReport report)
+	{
+		ValidateScenes(project, report);
+		ValidateGameplay(project, report);
 	}
 
 	/// <summary>
