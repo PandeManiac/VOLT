@@ -1,5 +1,6 @@
 using System.Numerics;
 using Volt.Editor.Core.Scenes;
+using Volt.Graphics.Vulkan.Rendering;
 using Volt.Editor.Rendering;
 using Volt.Ui;
 using Volt.Ui.Input;
@@ -848,9 +849,16 @@ internal sealed class SceneViewport : Widget, IFrameTick
 
 			LightData? light = entity.GetComponent<LightData>();
 
-			EditorMeshInfo? mesh = renderer is not null && renderer.Visible
-				? EditorMeshLibrary.Resolve(renderer.Mesh)
-				: null;
+			EditorMeshInfo? mesh =
+				renderer is not null &&
+				renderer.Visible &&
+				ProjectMeshResolver.TryResolve(
+					_session.Project,
+					renderer.Mesh,
+					out EditorMeshInfo resolvedMesh,
+					out _)
+					? resolvedMesh
+					: null;
 
 			Vector3 center = mesh is EditorMeshInfo info
 				? info.Center
@@ -929,14 +937,17 @@ internal sealed class SceneViewport : Widget, IFrameTick
 				continue;
 			}
 
-			if (EditorMeshLibrary.Resolve(renderer.Mesh) is not
-				EditorMeshInfo mesh)
+			if (!ProjectMeshResolver.TryResolve(
+				_session.Project,
+				renderer.Mesh,
+				out EditorMeshInfo mesh,
+				out VulkanSceneVertex[]? vertices))
 			{
 				continue;
 			}
 
 			_request.Instances.Add(
-				new ViewportMeshInstance(mesh.Id, target.World));
+				new ViewportMeshInstance(mesh.Id, target.World, vertices));
 		}
 
 		_renderer.PublishRequest(_request);
@@ -1838,7 +1849,11 @@ internal sealed class SceneViewport : Widget, IFrameTick
 
 			bool renderable = renderer is not null &&
 				renderer.Visible &&
-				EditorMeshLibrary.Resolve(renderer.Mesh) is not null;
+				ProjectMeshResolver.TryResolve(
+					_session.Project,
+					renderer.Mesh,
+					out _,
+					out _);
 
 			if (selected && light is null)
 			{

@@ -19,13 +19,20 @@ internal enum ViewportKind
 /// One mesh instance a viewport draws.
 /// </summary>
 /// <param name="MeshId">
-/// The resolved built-in mesh identifier. Unknown identifiers are
-/// skipped by the renderer instead of failing the frame.
+/// The resolved mesh identifier. Unknown identifiers are skipped by the
+/// renderer instead of failing the frame.
 /// </param>
 /// <param name="World">The world-space model matrix.</param>
+/// <param name="Vertices">
+/// The geometry of a mesh imported from the project, or
+/// <see langword="null"/> for a built-in primitive the renderer already
+/// owns. Carrying the vertices lets both renderers draw the same
+/// imported mesh without a shared registry or a second parse.
+/// </param>
 internal readonly record struct ViewportMeshInstance(
 	string MeshId,
-	Matrix4x4 World);
+	Matrix4x4 World,
+	VulkanSceneVertex[]? Vertices = null);
 
 /// <summary>
 /// A directional light resolved from authored scene data.

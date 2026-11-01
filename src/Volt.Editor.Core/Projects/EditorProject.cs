@@ -1,5 +1,7 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Volt.Editor.Core.Assets;
 using Volt.Editor.Core.Gameplay;
 using Volt.Editor.Core.Scenes;
 
@@ -29,6 +31,11 @@ public sealed class EditorProject
 		WriteIndented = true,
 		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
 	};
+
+	private readonly Dictionary<string, MeshCacheEntry> _meshes =
+		new(StringComparer.OrdinalIgnoreCase);
+
+	private readonly Lock _meshGate = new();
 
 	private EditorProject(
 		string rootPath,
@@ -84,6 +91,112 @@ public sealed class EditorProject
 	public string ScenesPath => Path.Combine(RootPath, "Scenes");
 
 	public string ManifestPath => Path.Combine(RootPath, ManifestFileName);
+
+	/// <summary>
+	/// Loads a mesh asset a scene references.
+	/// </summary>
+	/// <param name="meshId">The project-relative asset identifier.</param>
+	/// <param name="mesh">The loaded geometry when this succeeds.</param>
+	/// <param name="diagnostic">
+	/// Why the mesh could not be loaded, when it could not be. A scene
+	/// that names a broken file has to stay openable, so a failure is
+	/// reported rather than thrown.
+	/// </param>
+	/// <returns>Whether the mesh is available to draw.</returns>
+	/// <remarks>
+	/// Loaded geometry is cached against the file's size and write time,
+	/// so painting a viewport does not re-read or re-parse it every
+	/// frame, while an edited file is picked up on the next lookup.
+	/// </remarks>
+	public bool TryLoadMesh(
+		string meshId,
+		out ImportedMesh mesh,
+		out string? diagnostic)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(meshId);
+
+		mesh = null!;
+		diagnostic = null;
+
+		ProjectAsset? asset = AssetCatalog.Find(meshId);
+
+		if (asset is null)
+		{
+			AssetCatalog.Refresh();
+			asset = AssetCatalog.Find(meshId);
+		}
+
+		if (asset is null)
+		{
+			diagnostic = $"'{meshId}' is not part of this project.";
+			return false;
+		}
+
+		if (!asset.FileName.EndsWith(
+			".obj",
+			StringComparison.OrdinalIgnoreCase))
+		{
+			diagnostic =
+				$"'{asset.FileName}' is not a mesh format this build can " +
+				"import yet.";
+			return false;
+		}
+
+		lock (_meshGate)
+		{
+			if (_meshes.TryGetValue(asset.Id, out MeshCacheEntry cached) &&
+				cached.Matches(asset))
+			{
+				mesh = cached.Mesh!;
+				diagnostic = cached.Diagnostic;
+				return cached.Mesh is not null;
+			}
+
+			try
+			{
+				mesh = ObjMeshLoader.Load(asset.Id, asset.FullPath);
+
+				_meshes[asset.Id] = new MeshCacheEntry(
+					asset.Length,
+					asset.LastWriteTimeUtc,
+					Mesh: mesh,
+					Diagnostic: null);
+
+				return true;
+			}
+
+			catch (Exception exception)
+				when (exception is IOException or
+					UnauthorizedAccessException or
+					InvalidDataException or
+					DecoderFallbackException)
+			{
+				diagnostic = $"'{asset.FileName}' could not be read: " +
+					exception.Message;
+
+				_meshes[asset.Id] = new MeshCacheEntry(
+					asset.Length,
+					asset.LastWriteTimeUtc,
+					Mesh: null,
+					Diagnostic: diagnostic);
+
+				return false;
+			}
+		}
+	}
+
+	private readonly record struct MeshCacheEntry(
+		long Length,
+		DateTime LastWriteTimeUtc,
+		ImportedMesh? Mesh,
+		string? Diagnostic)
+	{
+		public bool Matches(ProjectAsset asset)
+		{
+			return Length == asset.Length &&
+				LastWriteTimeUtc == asset.LastWriteTimeUtc;
+		}
+	}
 
 	/// <summary>
 	/// Records the project's game-code paths and saves the manifest.

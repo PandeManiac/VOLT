@@ -244,9 +244,12 @@ internal static class SoftwareSceneRasterizer
 
 		foreach (ViewportMeshInstance instance in job.Instances)
 		{
-			if (!s_meshes.Value.TryGetValue(
-					instance.MeshId,
-					out VulkanSceneVertex[]? mesh))
+			// An imported mesh carries its own geometry; a built-in one
+			// is looked up in the shared table.
+			VulkanSceneVertex[]? mesh = instance.Vertices;
+
+			if (mesh is null &&
+				!s_meshes.Value.TryGetValue(instance.MeshId, out mesh))
 			{
 				continue;
 			}

@@ -1040,3 +1040,55 @@ from the browser.
 ### Next
 
 - Asset import (PNG texture or glTF mesh) as the next vertical slice.
+
+## OBJ mesh import (November 2026)
+
+The Project Browser could show a mesh file, but nothing could draw it: both
+renderers resolved identifiers only through `EditorMeshLibrary`, whose
+three primitives were compiled in. A scene referencing an exported mesh
+therefore drew nothing in the authoring view and fell back to a cube in
+Play Mode.
+
+- `ObjMeshLoader` reads Wavefront OBJ: positions and faces, with polygons
+  triangulated as a fan, negative indices resolved, and the
+  `v/vt/vn` form accepted. Normals, texture coordinates, and materials
+  are ignored rather than misread. Malformed input reports the line it
+  came from.
+- `EditorProject.TryLoadMesh` loads a referenced asset, caching geometry
+  against the file's size and write time, so painting does not re-parse
+  while an edited file is picked up on the next lookup. A missing,
+  unsupported, or broken file returns a diagnostic: a scene naming one
+  still opens.
+- `ProjectMeshResolver` is the single place that turns an authored
+  reference into drawable geometry for both viewports, picking bounds, and
+  focus, so an object cannot look one way and pick another. Imported
+  vertices carry a baked face shade, because the scene shader has no
+  normals and an unshaded mesh reads as a flat silhouette.
+- `ViewportMeshInstance` may now carry its own vertices. The CPU
+  rasterizer draws them directly; the GPU renderer uploads them on first
+  use and re-uploads when the file behind them changes.
+- Verified: release build with 0 warnings and 0 errors;
+  `Volt.Editor.Core.Tests` 101 passed, including the OBJ parser (quad
+  triangulation, negative indices, ignored directives, unreferenced
+  vertices excluded from bounds, malformed faces reported) and project
+  loading (triangles, cache replacement after an edit, unsupported
+  format, broken file, missing asset);
+  `Volt.Editor.Tests` 314 passed, including an end-to-end test that writes
+  an OBJ into a project, resolves it, and rasterizes it into a viewport
+  image with visible coverage. All golden baselines still match, which
+  confirms the built-in mesh path is pixel-unchanged.
+
+### Not verified here
+
+- No GPU and no display server: imported geometry is verified through the
+  CPU rasterizer; the Vulkan upload path was written and compiled but not
+  executed.
+- Textures and glTF/GLB are not imported yet, and an imported mesh is not
+  listed in the primitive menu (it is assigned through the Mesh Asset
+  field, which accepts a project asset).
+
+### Next
+
+- Texture import, which needs a texture pipeline before it can render.
+- A viewport check that a picked imported mesh matches its rendered
+  silhouette.

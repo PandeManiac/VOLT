@@ -52,6 +52,7 @@ internal sealed class EditorSceneRenderer : IViewportRenderer, IDisposable
 	private readonly string _vertexShaderPath;
 	private readonly string _fragmentShaderPath;
 	private readonly Dictionary<string, VulkanMeshBuffers> _meshes = [];
+	private readonly Dictionary<string, VulkanSceneVertex[]> _meshSources = [];
 	private readonly Dictionary<ViewportKind, ViewportRenderRequest> _requests = [];
 	private readonly Dictionary<(ViewportKind Kind, int Slot), SlotTarget> _targets = [];
 
@@ -277,6 +278,8 @@ internal sealed class EditorSceneRenderer : IViewportRenderer, IDisposable
 	{
 		VulkanOffscreenRenderTarget target = slotTarget.Target;
 
+		EnsureInstanceMeshes(request);
+
 		target.EnsureRenderingLayout(commandBuffer);
 
 		ClearColorValue clear = new(
@@ -404,6 +407,44 @@ internal sealed class EditorSceneRenderer : IViewportRenderer, IDisposable
 		return normalized < 0 ? normalized + Slots : normalized;
 	}
 
+	/// <summary>
+	/// Uploads the geometry of meshes imported into the project.
+	/// </summary>
+	/// <remarks>
+	/// A built-in primitive is uploaded once in the constructor. An
+	/// imported mesh arrives with its request, so it is uploaded the
+	/// first time it is drawn and re-uploaded when the file behind it
+	/// changes, which the resolver reports as a new array.
+	/// </remarks>
+	private void EnsureInstanceMeshes(ViewportRenderRequest request)
+	{
+		foreach (ViewportMeshInstance instance in request.Instances)
+		{
+			if (instance.Vertices is not VulkanSceneVertex[] vertices ||
+				ReferenceEquals(
+					_meshSources.GetValueOrDefault(instance.MeshId),
+					vertices))
+			{
+				continue;
+			}
+
+			if (_meshes.Remove(
+				instance.MeshId,
+				out VulkanMeshBuffers? existing))
+			{
+				existing.Dispose();
+			}
+
+			_meshes[instance.MeshId] = VulkanMeshBuffers.Create(
+				_instance,
+				_device,
+				_physicalDevice,
+				vertices.AsSpan());
+
+			_meshSources[instance.MeshId] = vertices;
+		}
+	}
+
 	private void DisposeMeshes()
 	{
 		foreach (VulkanMeshBuffers mesh in _meshes.Values)
@@ -412,6 +453,7 @@ internal sealed class EditorSceneRenderer : IViewportRenderer, IDisposable
 		}
 
 		_meshes.Clear();
+		_meshSources.Clear();
 	}
 
 	private void ThrowIfDisposed()
