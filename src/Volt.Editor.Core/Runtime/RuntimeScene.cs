@@ -118,6 +118,17 @@ public sealed class RuntimeScene : IDisposable
 
 	public IReadOnlyList<string> Diagnostics => _diagnostics;
 
+	/// <summary>
+	/// Gets the log game code writes to while this world runs.
+	/// </summary>
+	/// <remarks>
+	/// A system already receives the world, so
+	/// <c>scene.Log.Info("...")</c> is the whole contract and the editor
+	/// drains what it finds. The log belongs to this world: starting Play
+	/// again begins empty.
+	/// </remarks>
+	public RuntimeLog Log { get; } = new();
+
 	public RuntimeCamera? Camera { get; }
 
 	public float ElapsedSeconds { get; private set; }

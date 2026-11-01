@@ -69,6 +69,25 @@ public sealed class GameplaySessionTests : IDisposable
 	}
 
 	[Fact]
+	public void GameCodeMessagesReachTheConsoleOnce()
+	{
+		_session.NewProject(Path.Combine(_root, "Game"), "Game");
+		Assert.NotNull(_session.BuildGameCode());
+
+		_session.StartPlay();
+		_session.Update(PlaySession.FixedDeltaSeconds);
+		_session.Update(PlaySession.FixedDeltaSeconds);
+
+		Assert.Single(
+			_session.LogEntries,
+			entry => entry.Message.Contains(
+				"Game: Player motor ready",
+				StringComparison.Ordinal));
+
+		_session.Stop();
+	}
+
+	[Fact]
 	public void StartPlayRunsTheProjectsSystemAndKeepsTheAuthoredScene()
 	{
 		_session.NewProject(Path.Combine(_root, "Game"), "Game");

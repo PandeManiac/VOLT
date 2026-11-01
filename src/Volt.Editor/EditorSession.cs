@@ -28,6 +28,8 @@ public sealed class EditorSession : IDisposable
 	private long _lastAllocatedBytes;
 	private GameplayAssembly? _gameplay;
 	private int _runtimeDiagnosticCount;
+	private int _runtimeLogCount;
+	private int _reportedDroppedLogMessages;
 	private bool _disposed;
 
 	/// <summary>
@@ -1590,6 +1592,8 @@ public sealed class EditorSession : IDisposable
 			systems: _gameplay?.Registration.Systems);
 
 		_play.StateChanged += OnPlayStateChanged;
+		_runtimeLogCount = 0;
+		_reportedDroppedLogMessages = 0;
 
 		try
 		{
@@ -1602,6 +1606,10 @@ public sealed class EditorSession : IDisposable
 			}
 
 			_runtimeDiagnosticCount = runtime.Diagnostics.Count;
+
+			// Systems may write while starting, so drain what OnStart
+			// already produced instead of waiting for the first tick.
+			ReportRuntimeLog();
 
 			if (_gameplay is not null)
 			{
@@ -1653,6 +1661,8 @@ public sealed class EditorSession : IDisposable
 		_play.Dispose();
 		_play = null;
 		_runtimeDiagnosticCount = 0;
+		_runtimeLogCount = 0;
+		_reportedDroppedLogMessages = 0;
 		Input.Clear();
 		PlayStateChanged?.Invoke(this);
 		RuntimeUpdated?.Invoke(this);
@@ -1833,6 +1843,51 @@ public sealed class EditorSession : IDisposable
 		{
 			Log(diagnostics[_runtimeDiagnosticCount], EditorLogLevel.Warning);
 			_runtimeDiagnosticCount++;
+		}
+
+		ReportRuntimeLog();
+	}
+
+	/// <summary>
+	/// Copies messages the running game wrote into the Console.
+	/// </summary>
+	/// <remarks>
+	/// The world owns the log and the editor only reads what it has not
+	/// seen, so a message appears once no matter how often a frame is
+	/// pumped. Messages dropped past the world's buffer limit are reported
+	/// once, because a game logging every tick must not bury everything
+	/// else.
+	/// </remarks>
+	private void ReportRuntimeLog()
+	{
+		if (_play?.Runtime is not RuntimeScene runtime)
+		{
+			return;
+		}
+
+		IReadOnlyList<RuntimeLogEntry> entries = runtime.Log.Entries;
+
+		while (_runtimeLogCount < entries.Count)
+		{
+			RuntimeLogEntry entry = entries[_runtimeLogCount++];
+
+			Log(
+				$"Game: {entry.Message}",
+				entry.Level == RuntimeLogLevel.Warning
+					? EditorLogLevel.Warning
+					: EditorLogLevel.Info);
+		}
+
+		int dropped = runtime.Log.DroppedCount;
+
+		if (dropped > _reportedDroppedLogMessages)
+		{
+			_reportedDroppedLogMessages = dropped;
+
+			Log(
+				$"Game logged {dropped} more messages than Play Mode " +
+					"keeps; the rest were dropped.",
+				EditorLogLevel.Warning);
 		}
 	}
 

@@ -335,6 +335,11 @@ public static class GameplayProjectScaffold
 		builder.AppendLine("/// </summary>");
 		builder.AppendLine("public sealed class PlayerMotorSystem : IGameplaySystem");
 		builder.AppendLine("{");
+		builder.AppendLine("\tpublic void OnStart(RuntimeScene scene)");
+		builder.AppendLine("\t{");
+		builder.AppendLine("\t\tscene.Log.Info(\"Player motor ready\");");
+		builder.AppendLine("\t}");
+		builder.AppendLine();
 		builder.AppendLine("\tpublic void Update(RuntimeScene scene, float deltaSeconds)");
 		builder.AppendLine("\t{");
 		builder.AppendLine("\t\tComponentQuery query = new(");

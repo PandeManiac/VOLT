@@ -57,6 +57,19 @@ public struct PlayerControlState
 /// </summary>
 public sealed class PlayerControlSystem : IGameplaySystem
 {
+	/// <summary>
+	/// Announces the system in the editor's Console.
+	/// </summary>
+	/// <remarks>
+	/// Writing through the world it runs against is the whole logging
+	/// contract: no static logger and no editor reference, so the same
+	/// code works in a standalone run.
+	/// </remarks>
+	public void OnStart(RuntimeScene scene)
+	{
+		scene.Log.Info("Player control ready");
+	}
+
 	public void Update(RuntimeScene scene, float deltaSeconds)
 	{
 		float horizontal = scene.Input.Horizontal;

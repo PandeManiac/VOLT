@@ -1174,3 +1174,42 @@ minute.
 - Texture import, starting with a PNG decoder and a UV path.
 - Filtering the mesh and material fields' pickers to their own asset
   kinds.
+
+## Game code in the Console (November 2026)
+
+A project's systems could move objects, throw, and be reported when they
+faulted, but there was no way for them to say anything. Debugging game
+code meant inferring behaviour from a moving cube, and the Console only
+ever carried editor messages.
+
+- `RuntimeScene` owns a `RuntimeLog`, so a system writes
+  `scene.Log.Info("…")` through the world it already receives. There is
+  no static logger, no editor reference, and nothing to configure before
+  a world exists, so the same code works in a standalone run.
+- The buffer is bounded at 500 messages per world and counts what it
+  dropped. A system logging every tick would otherwise grow the editor's
+  memory for the length of a session and bury every other message.
+- The editor drains what it has not seen into the Console, prefixing game
+  messages with `Game:`, keeping warnings as warnings, and reporting a
+  dropped-message count once. `OnStart` messages appear when Play begins
+  rather than after the first tick, and starting Play again begins empty.
+- The scaffolded project and the sample game both announce themselves
+  in `OnStart`, so a new project exercises the contract from its first
+  Play.
+- Verified: release build with 0 warnings and 0 errors;
+  `Volt.Editor.Core.Tests` 117 passed, including levels and order, the
+  bounded buffer with its dropped count, a system writing in `OnStart`
+  and on each tick, and one log per world; `Volt.Editor.Tests` 325
+  passed, including a session test that builds a new project's scaffolded
+  game code, starts Play, pumps two frames, and finds exactly one
+  `Game: Player motor ready` entry.
+
+### Not verified here
+
+- No display server: the Console is exercised through the session log it
+  reads, not by opening the panel.
+
+### Next
+
+- Texture import, starting with a PNG decoder and a UV path.
+- Filtering the Console by source so game messages can be isolated.
