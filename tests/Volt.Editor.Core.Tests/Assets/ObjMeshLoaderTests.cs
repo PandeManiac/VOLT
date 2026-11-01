@@ -52,7 +52,7 @@ public sealed class ObjMeshLoaderTests
 	}
 
 	[Fact]
-	public void TextureAndNormalComponentsAreAcceptedAndDiscarded()
+	public void NormalComponentsAreAcceptedAndDiscarded()
 	{
 		ImportedMesh mesh = ObjMeshLoader.Parse(
 			"tri.obj",
@@ -72,6 +72,148 @@ public sealed class ObjMeshLoaderTests
 
 		Assert.Equal(1, mesh.TriangleCount);
 		Assert.Equal(3, mesh.Positions.Count);
+		Assert.Equal([Vector2.Zero, Vector2.Zero, Vector2.Zero], mesh.Uvs);
+	}
+
+	[Fact]
+	public void TextureCoordinatesAreKeptPerCorner()
+	{
+		ImportedMesh mesh = ObjMeshLoader.Parse(
+			"quad.obj",
+			new StringReader(
+				"""
+				v 0 0 0
+				v 1 0 0
+				v 1 1 0
+				v 0 1 0
+				vt 0 0
+				vt 1 0
+				vt 1 1
+				vt 0 1
+				f 1/1 2/2 3/3 4/4
+				"""));
+
+		Assert.True(mesh.HasTextureCoordinates);
+		Assert.Equal(6, mesh.Uvs.Count);
+		Assert.Equal(
+			[
+				new Vector2(0f, 0f),
+				new Vector2(1f, 0f),
+				new Vector2(1f, 1f),
+				new Vector2(0f, 0f),
+				new Vector2(1f, 1f),
+				new Vector2(0f, 1f)
+			],
+			mesh.Uvs);
+	}
+
+	[Fact]
+	public void OnePositionMayCarryDifferentTextureCoordinates()
+	{
+		// Two triangles that share every position but use a different
+		// corner of the image on the shared seam: a per-position layout
+		// could not represent this, a per-corner one can.
+		ImportedMesh mesh = ObjMeshLoader.Parse(
+			"seam.obj",
+			new StringReader(
+				"""
+				v 0 0 0
+				v 1 0 0
+				v 0 1 0
+				vt 0 0
+				vt 1 0
+				vt 0 1
+				vt 0.5 0.5
+				f 1/1 2/2 3/3
+				f 1/4 3/4 2/4
+				"""));
+
+		Assert.Equal(2, mesh.TriangleCount);
+		Assert.Equal(6, mesh.Uvs.Count);
+		Assert.Equal(new Vector2(0f, 0f), mesh.Uvs[0]);
+		Assert.Equal(new Vector2(0.5f, 0.5f), mesh.Uvs[3]);
+	}
+
+	[Fact]
+	public void NegativeTextureIndicesCountFromTheCoordinatesSeenSoFar()
+	{
+		ImportedMesh mesh = ObjMeshLoader.Parse(
+			"tri.obj",
+			new StringReader(
+				"""
+				v 0 0 0
+				v 1 0 0
+				v 0 1 0
+				vt 0 0
+				vt 1 1
+				f 1/-2 2/-1 3/-2
+				"""));
+
+		Assert.Equal(
+			[
+				new Vector2(0f, 0f),
+				new Vector2(1f, 1f),
+				new Vector2(0f, 0f)
+			],
+			mesh.Uvs);
+	}
+
+	[Fact]
+	public void AMeshWithoutTextureCoordinatesReportsNone()
+	{
+		ImportedMesh mesh = ObjMeshLoader.Parse(
+			"plain.obj",
+			new StringReader(
+				"""
+				v 0 0 0
+				v 1 0 0
+				v 0 1 0
+				f 1 2 3
+				"""));
+
+		Assert.False(mesh.HasTextureCoordinates);
+		Assert.Empty(mesh.Uvs);
+	}
+
+	[Fact]
+	public void AFaceMayOmitTextureCoordinatesThatOtherFacesUse()
+	{
+		ImportedMesh mesh = ObjMeshLoader.Parse(
+			"mixed.obj",
+			new StringReader(
+				"""
+				v 0 0 0
+				v 1 0 0
+				v 0 1 0
+				v 1 1 0
+				vt 0 0
+				vt 1 1
+				f 1/1 2/2 3/1
+				f 2 3 4
+				"""));
+
+		Assert.Equal(2, mesh.TriangleCount);
+		Assert.Equal(6, mesh.Uvs.Count);
+		Assert.Equal(Vector2.Zero, mesh.Uvs[3]);
+		Assert.Equal(Vector2.Zero, mesh.Uvs[5]);
+	}
+
+	[Fact]
+	public void ATextureIndexPastTheEndIsReported()
+	{
+		InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+			ObjMeshLoader.Parse(
+				"bad.obj",
+				new StringReader(
+					"""
+					v 0 0 0
+					v 1 0 0
+					v 0 1 0
+					vt 0 0
+					f 1/1 2/2 3/1
+					""")));
+
+		Assert.Contains("texture coordinate 2", error.Message);
 	}
 
 	[Fact]

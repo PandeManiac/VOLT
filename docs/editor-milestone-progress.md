@@ -1477,6 +1477,45 @@ part of importing a texture.
 
 ### Next
 
-- OBJ texture coordinates, a material `texture` reference, and CPU
-  sampling in the software viewport.
+- A material `texture` reference and CPU sampling in the software
+  viewport.
 - A material preview that shows the decoded image in the Inspector.
+
+## OBJ texture coordinates (November 2026)
+
+A decoded PNG could not be applied to anything, because imported
+geometry had no texture coordinates. `ObjMeshLoader` now reads `vt`
+lines and the `v/vt/vn` corner form.
+
+- Coordinates are stored **per corner**, alongside the position
+  indices. A modelling tool routinely gives one shared position a
+different coordinate on each side of a seam, and a per-position array
+  cannot represent that; a per-corner one can without expanding the
+  vertex list.
+- Negative indices resolve relative to the coordinates seen so far,
+  exactly as vertex and normal indices do.
+- A one-component `vt` is legal in OBJ and reads as a zero second
+  coordinate. A face with no texture index fills zeros for its own
+  corners, so the per-corner list always aligns with the index list.
+- A file with no `vt` at all reports no coordinates (`Uvs` empty,
+  `HasTextureCoordinates` false) instead of a list of zeros that would
+  sample one texel across the whole mesh. The first test run caught that
+  distinction: the loader was reporting a mapping where the file had
+  none.
+- Verified: release build with 0 warnings and 0 errors; the OBJ tests
+  are 13 passed, including a quad with four corner coordinates, two
+  triangles sharing a position with different seam coordinates,
+  negative texture indices, a mixed file where one face omits the
+  coordinates another uses, an out-of-range texture index, and the
+  no-coordinates case.
+
+### Not verified here
+
+- Nothing samples a texture yet: the scene vertex format and both
+  renderers are untouched, so an imported mesh with coordinates still
+  draws in its material colour only.
+
+### Next
+
+- A material `texture` reference, validation of the image, and CPU
+  sampling in the software viewport.
