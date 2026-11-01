@@ -8,6 +8,15 @@ using Volt.Editor.Core.Scenes;
 
 namespace Volt.Editor.Core.Tests.Gameplay;
 
+/// <summary>
+/// Covers loading a project's gameplay assembly.
+/// </summary>
+/// <remarks>
+/// The catalog is process-wide and these tests register into its default
+/// instance, so they share a collection with the project workflow tests
+/// instead of running beside them.
+/// </remarks>
+[Collection("GameplayCatalog")]
 public sealed class GameplayAssemblyTests
 {
 	[Fact]

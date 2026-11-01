@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Volt.Editor.Core.Gameplay;
 using Volt.Editor.Core.Scenes;
 
 namespace Volt.Editor.Core.Projects;
@@ -52,13 +53,118 @@ public sealed class EditorProject
 
 	public ProjectAssetCatalog AssetCatalog { get; }
 
+	/// <summary>
+	/// Gets or sets the project-relative path of the C# project that holds
+	/// this project's gameplay code, when it has one.
+	/// </summary>
+	/// <remarks>
+	/// Game code lives outside <c>Assets</c> so its build output never
+	/// appears in the asset browser. The path is optional: a project that
+	/// predates game-code support, or one whose scripts were removed, opens
+	/// exactly as before and simply runs the built-in behaviours.
+	/// </remarks>
+	public string? GameplayProjectPath { get; private set; }
+
+	/// <summary>
+	/// Gets the project-relative path of the built gameplay assembly.
+	/// </summary>
+	public string? GameplayAssemblyPath { get; private set; }
+
+	/// <summary>
+	/// Gets why game code was not scaffolded when a project was created.
+	/// </summary>
+	/// <remarks>
+	/// <see langword="null"/> when the scaffold was written, or when the
+	/// project was opened rather than created.
+	/// </remarks>
+	public string? GameplayScaffoldReason { get; private set; }
+
 	public string AssetsPath => Path.Combine(RootPath, "Assets");
 
 	public string ScenesPath => Path.Combine(RootPath, "Scenes");
 
 	public string ManifestPath => Path.Combine(RootPath, ManifestFileName);
 
-	public static EditorProject Create(string rootPath, string name)
+	/// <summary>
+	/// Records the project's game-code paths and saves the manifest.
+	/// </summary>
+	/// <remarks>
+	/// Both paths are validated as project-relative before they are
+	/// stored, so a scripted or malformed call cannot point the editor at
+	/// a file outside the project. Clearing both removes the gameplay
+	/// section, which returns the project to built-in behaviours only.
+	/// </remarks>
+	public void AttachGameplayProject(
+		string? projectRelativePath,
+		string? assemblyRelativePath)
+	{
+		AttachGameplayPaths(projectRelativePath, assemblyRelativePath);
+		SaveManifest();
+	}
+
+	/// <summary>
+	/// Resolves the built gameplay assembly, whether or not the manifest's
+	/// recorded path is still the newest build.
+	/// </summary>
+	/// <remarks>
+	/// A developer's own <c>dotnet build</c> may produce Debug output while
+	/// the engine builds Release, so the script folder is searched for the
+	/// newest assembly when the recorded path is missing.
+	/// </remarks>
+	public bool TryResolveGameplayAssembly(out string assemblyPath)
+	{
+		assemblyPath = string.Empty;
+
+		if (!string.IsNullOrWhiteSpace(GameplayAssemblyPath))
+		{
+			string candidate = ResolvePath(GameplayAssemblyPath);
+
+			if (File.Exists(candidate))
+			{
+				assemblyPath = candidate;
+				return true;
+			}
+		}
+
+		if (GameplayProjectPath is null)
+		{
+			return false;
+		}
+
+		string? built = GameplayProjectScaffold.FindBuiltAssembly(RootPath);
+
+		if (built is null)
+		{
+			return false;
+		}
+
+		assemblyPath = built;
+		return true;
+	}
+
+	/// <summary>
+	/// Gets the full path of the project's game-code project file, or
+	/// <see langword="null"/> when it has none.
+	/// </summary>
+	public string? ResolveGameplayProjectPath()
+	{
+		if (!string.IsNullOrWhiteSpace(GameplayProjectPath))
+		{
+			string candidate = ResolvePath(GameplayProjectPath);
+
+			if (File.Exists(candidate))
+			{
+				return candidate;
+			}
+		}
+
+		return GameplayProjectScaffold.FindScriptProject(RootPath);
+	}
+
+	public static EditorProject Create(
+		string rootPath,
+		string name,
+		string? engineRoot = null)
 	{
 		ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
 		ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -87,6 +193,30 @@ public sealed class EditorProject
 
 		SceneDocument startup = CreateStarterScene(project);
 		project.SaveScene(startup, DefaultStartupScene);
+
+		// A new project owns real game code from the start: a buildable
+		// C# project with a working component, binding, and system. When no
+		// engine checkout can be found to reference, the project is still
+		// created and the reason is recorded for the caller to report.
+		GameplayScaffoldResult scaffold = GameplayProjectScaffold.Create(
+			fullRoot,
+			project.Name,
+			engineRoot);
+
+		if (scaffold.Created)
+		{
+			project.GameplayProjectPath = ProjectAssetCatalog.NormalizeId(
+				Path.GetRelativePath(fullRoot, scaffold.ProjectPath));
+
+			project.GameplayAssemblyPath = ProjectAssetCatalog.NormalizeId(
+				Path.GetRelativePath(fullRoot, scaffold.AssemblyPath));
+		}
+
+		else
+		{
+			project.GameplayScaffoldReason = scaffold.SkipReason;
+		}
+
 		project.SaveManifest();
 		project.AssetCatalog.Refresh();
 
@@ -153,6 +283,11 @@ public sealed class EditorProject
 		// is reported while opening, not later during Play.
 		_ = project.ResolvePath(project.StartupScenePath);
 
+		if (dto.Gameplay is GameplayManifestDto gameplay)
+		{
+			project.AttachGameplayPaths(gameplay.Project, gameplay.Assembly);
+		}
+
 		project.AssetCatalog.Refresh();
 		return project;
 	}
@@ -166,7 +301,15 @@ public sealed class EditorProject
 			Version = CurrentVersion,
 			Id = Id,
 			Name = Name,
-			StartupScene = StartupScenePath
+			StartupScene = StartupScenePath,
+			Gameplay = GameplayProjectPath is null &&
+				GameplayAssemblyPath is null
+					? null
+					: new GameplayManifestDto
+					{
+						Project = GameplayProjectPath,
+						Assembly = GameplayAssemblyPath
+					}
 		};
 
 		AtomicWrite(
@@ -668,6 +811,29 @@ public sealed class EditorProject
 		return result;
 	}
 
+	private void AttachGameplayPaths(
+		string? projectRelativePath,
+		string? assemblyRelativePath)
+	{
+		GameplayProjectPath = NormalizeOptionalPath(projectRelativePath);
+		GameplayAssemblyPath = NormalizeOptionalPath(assemblyRelativePath);
+	}
+
+	private string? NormalizeOptionalPath(string? relativePath)
+	{
+		if (string.IsNullOrWhiteSpace(relativePath))
+		{
+			return null;
+		}
+
+		string id = ProjectAssetCatalog.NormalizeId(relativePath);
+
+		// Resolve so a manifest that points outside the project is refused
+		// while opening, not when a build is attempted.
+		_ = ResolvePath(id);
+		return id;
+	}
+
 	private int ReplaceReferencesInScenes(string oldId, string newId)
 	{
 		int changed = 0;
@@ -890,5 +1056,22 @@ public sealed class EditorProject
 		public string? Name { get; set; }
 
 		public string? StartupScene { get; set; }
+
+		public GameplayManifestDto? Gameplay { get; set; }
+	}
+
+	/// <summary>
+	/// The manifest's optional gameplay section.
+	/// </summary>
+	/// <remarks>
+	/// Both paths are project-relative, like every other path in the
+	/// manifest, so a project folder can move between machines and
+	/// checkouts without carrying absolute paths.
+	/// </remarks>
+	internal sealed class GameplayManifestDto
+	{
+		public string? Project { get; set; }
+
+		public string? Assembly { get; set; }
 	}
 }
