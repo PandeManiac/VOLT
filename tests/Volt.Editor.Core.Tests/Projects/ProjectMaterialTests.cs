@@ -267,6 +267,59 @@ public sealed class ProjectMaterialTests : IDisposable
 		Assert.Equal("Assets/Textures/wood.png", material.Texture);
 	}
 
+	[Fact]
+	public void RenamingAFolderRepointsTexturesInsideIt()
+	{
+		EditorProject project = EditorProject.Create(_root, "Rename");
+		WriteTextureFile(project, "Assets/Textures/wood.png");
+		WriteTextureFile(project, "Assets/Other/stone.png");
+
+		string wood = project.CreateMaterialFromTexture(
+			"Assets/Textures/wood.png")!;
+		string stone = project.CreateMaterialFromTexture(
+			"Assets/Other/stone.png")!;
+
+		Assert.Equal(
+			"Assets/Images",
+			project.RenameFolder("Assets/Textures", "Images"));
+
+		Assert.True(project.TryLoadMaterial(
+			wood,
+			out MaterialAsset movedWood,
+			out _));
+
+		Assert.Equal("Assets/Images/wood.png", movedWood.Texture);
+
+		// A texture outside the renamed folder keeps its own path.
+		Assert.True(project.TryLoadMaterial(
+			stone,
+			out MaterialAsset unmoved,
+			out _));
+
+		Assert.Equal("Assets/Other/stone.png", unmoved.Texture);
+	}
+
+	[Fact]
+	public void RenamingAParentFolderRepointsNestedTextures()
+	{
+		EditorProject project = EditorProject.Create(_root, "Rename");
+		WriteTextureFile(project, "Assets/Art/Textures/wood.png");
+
+		string wood = project.CreateMaterialFromTexture(
+			"Assets/Art/Textures/wood.png")!;
+
+		Assert.Equal(
+			"Assets/Artwork",
+			project.RenameFolder("Assets/Art", "Artwork"));
+
+		Assert.True(project.TryLoadMaterial(
+			wood,
+			out MaterialAsset material,
+			out _));
+
+		Assert.Equal("Assets/Artwork/Textures/wood.png", material.Texture);
+	}
+
 	private static void WriteTextureFile(
 		EditorProject project,
 		string relativePath)

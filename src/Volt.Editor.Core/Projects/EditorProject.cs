@@ -1057,9 +1057,40 @@ public sealed class EditorProject
 	/// </remarks>
 	private void RewriteTextureReferences(string oldId, string newId)
 	{
-		AssetCatalog.Refresh();
+		PatchMaterialTextures(texture =>
+			string.Equals(texture, oldId, StringComparison.OrdinalIgnoreCase)
+				? newId
+				: null);
+	}
 
-		string quotedOld = $"\"{oldId}\"";
+	/// <summary>
+	/// Repoints materials that name an image inside a renamed folder.
+	/// </summary>
+	/// <param name="oldPrefix">The folder's previous identity.</param>
+	/// <param name="newPrefix">The folder's new identity.</param>
+	private void RewriteTextureReferencesInFolder(
+		string oldPrefix,
+		string newPrefix)
+	{
+		string prefix = oldPrefix.TrimEnd('/') + "/";
+
+		PatchMaterialTextures(texture =>
+			texture.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+				? newPrefix.TrimEnd('/') + "/" + texture[prefix.Length..]
+				: null);
+	}
+
+	/// <summary>
+	/// Rewrites the image path in every material the mapper changes.
+	/// </summary>
+	/// <param name="rewrite">
+	/// Returns the replacement path, or null to leave the material alone.
+	/// </param>
+	private void PatchMaterialTextures(Func<string, string?> rewrite)
+	{
+		ArgumentNullException.ThrowIfNull(rewrite);
+
+		AssetCatalog.Refresh();
 
 		foreach (ProjectAsset asset in AssetCatalog.Assets)
 		{
@@ -1074,17 +1105,26 @@ public sealed class EditorProject
 					asset.Id,
 					out MaterialAsset material,
 					out _) ||
-					!string.Equals(
-						material.Texture,
-						oldId,
-						StringComparison.OrdinalIgnoreCase))
+					material.Texture is not string texture)
 				{
 					continue;
 				}
 
+				string? replacement = rewrite(texture);
+
+				if (replacement is null ||
+					string.Equals(
+						replacement,
+						texture,
+						StringComparison.Ordinal))
+				{
+					continue;
+				}
+
+				string quoted = $"\"{texture}\"";
 				string text = File.ReadAllText(asset.FullPath);
 				int index = text.IndexOf(
-					quotedOld,
+					quoted,
 					StringComparison.OrdinalIgnoreCase);
 
 				if (index < 0)
@@ -1095,8 +1135,8 @@ public sealed class EditorProject
 				File.WriteAllText(
 					asset.FullPath,
 					text[..index] +
-						$"\"{newId}\"" +
-						text[(index + quotedOld.Length)..]);
+						$"\"{replacement}\"" +
+						text[(index + quoted.Length)..]);
 
 				// The length and write time may not change enough to
 				// invalidate the cache, so the entry is dropped outright.
@@ -1195,6 +1235,7 @@ public sealed class EditorProject
 		}
 
 		ReplaceFolderReferencesInScenes(oldPrefix, newPrefix);
+		RewriteTextureReferencesInFolder(id, renamedId);
 		AssetCatalog.Refresh();
 
 		return renamedId;

@@ -1689,10 +1689,25 @@ the albedo is preserved, assert a hand-added `note` field survives the
 patch, assert an unrelated material keeps its own image, and assert
 renaming a mesh leaves materials alone.
 
+### Folder renames follow the same rule
+
+Renaming a folder now repoints material `texture` paths by prefix, so a
+`Textures` folder renamed to `Images` keeps every material that lives
+inside it working, including images nested several levels below the
+folder. Scene references already followed folder renames; this closes the
+last reference the editor can follow.
+
+The rewrite is shared with the single-asset rename: one mapper decides
+whether a path changes, and the patching, cache eviction and error
+handling are the same code for both operations.
+
+### Verified
+
+Two further core tests rename a folder containing one texture and assert
+the material follows while a texture outside the folder does not, and
+rename a parent folder to assert a nested texture path is repointed.
+
 ### Not verified here
 
-- Renaming a folder that contains images does not yet repoint material
-  `texture` paths; scene references already follow folder renames, so
-  this is the remaining half of the same rule.
-- No display server: the rename dialog itself was not exercised, only
-  the project operation it calls.
+- No display server: the rename dialogs were not exercised, only the
+  project operations they call.
