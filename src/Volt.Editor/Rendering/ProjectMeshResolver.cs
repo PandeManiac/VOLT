@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using Volt.Editor.Core.Assets;
@@ -7,20 +8,21 @@ using Volt.Graphics.Vulkan.Rendering;
 namespace Volt.Editor.Rendering;
 
 /// <summary>
-/// Resolves an authored mesh reference to geometry a renderer can draw.
+/// Resolves an authored mesh and material reference to geometry a
+/// renderer can draw.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Scenes store a stable identifier, never a runtime handle. A reference
+/// Scenes store stable identifiers, never runtime handles. A reference
 /// may name a built-in primitive or a mesh imported into the project, and
 /// every caller - the two viewports, picking, and focusing - goes through
 /// here so an object cannot look one way and pick another.
 /// </para>
 /// <para>
-/// Imported geometry is converted once per loaded mesh. The conversion
-/// is cached against the mesh value, which the project already caches
-/// against the file's size and write time, so an edited file produces
-/// new vertices and everything downstream picks them up.
+/// The material is applied by tinting the baked vertex colours. The
+/// scene shader carries one albedo per vertex and no material binding,
+/// so this is what makes an authored colour visible in both the CPU and
+/// GPU paths without a second pipeline.
 /// </para>
 /// </remarks>
 internal static class ProjectMeshResolver
@@ -29,14 +31,23 @@ internal static class ProjectMeshResolver
 		Vector3.Normalize(new Vector3(0.35f, 0.85f, 0.40f));
 
 	private static readonly Vector3 s_albedo =
-		new(0.78f, 0.80f, 0.85f);
+		MaterialLoader.DefaultAlbedo;
 
 	private static readonly ConditionalWeakTable<
 		ImportedMesh,
 		VulkanSceneVertex[]> s_vertices = new();
 
+	private static readonly ConditionalWeakTable<
+		ImportedMesh,
+		ConcurrentDictionary<int, VulkanSceneVertex[]>> s_tinted = new();
+
+	private static readonly Dictionary<(string Id, int Rgb), VulkanSceneVertex[]>
+		s_builtinTints = [];
+
+	private static readonly Lock s_tintGate = new();
+
 	/// <summary>
-	/// Resolves a mesh reference.
+	/// Resolves a mesh reference with the default material.
 	/// </summary>
 	/// <param name="project">The open project, when one is open.</param>
 	/// <param name="meshId">The reference stored in the scene.</param>
@@ -54,6 +65,41 @@ internal static class ProjectMeshResolver
 		out EditorMeshInfo info,
 		out VulkanSceneVertex[]? vertices)
 	{
+		return TryResolve(
+			project,
+			meshId,
+			materialId: null,
+			out info,
+			out vertices);
+	}
+
+	/// <summary>
+	/// Resolves a mesh and material reference.
+	/// </summary>
+	/// <param name="project">The open project, when one is open.</param>
+	/// <param name="meshId">The mesh reference stored in the scene.</param>
+	/// <param name="materialId">
+	/// The material reference stored in the scene. Empty and
+	/// <c>builtin:default</c> mean no tint, and an unresolvable reference
+	/// falls back to the same untinted shading rather than hiding the
+	/// object.
+	/// </param>
+	/// <param name="info">
+	/// The descriptor renderers and picking use for this mesh.
+	/// </param>
+	/// <param name="vertices">
+	/// The geometry to draw: imported geometry, tinted built-in geometry
+	/// when a material applies, or <see langword="null"/> when the
+	/// renderer's own untinted built-in mesh should be used.
+	/// </param>
+	/// <returns>Whether the reference names something drawable.</returns>
+	public static bool TryResolve(
+		EditorProject? project,
+		string? meshId,
+		string? materialId,
+		out EditorMeshInfo info,
+		out VulkanSceneVertex[]? vertices)
+	{
 		info = default;
 		vertices = null;
 
@@ -62,9 +108,17 @@ internal static class ProjectMeshResolver
 			return false;
 		}
 
+		Vector3? tint = ResolveAlbedo(project, materialId);
+
 		if (EditorMeshLibrary.Resolve(meshId) is EditorMeshInfo builtin)
 		{
 			info = builtin;
+
+			if (tint is Vector3 builtinTint)
+			{
+				vertices = TintedBuiltin(builtin.Id, builtinTint);
+			}
+
 			return true;
 		}
 
@@ -80,9 +134,93 @@ internal static class ProjectMeshResolver
 			mesh.Center,
 			mesh.HalfExtent);
 
-		vertices = s_vertices.GetValue(mesh, CreateVertices);
+		VulkanSceneVertex[] source = s_vertices.GetValue(mesh, CreateVertices);
+
+		vertices = tint is Vector3 meshTint
+			? s_tinted
+				.GetValue(mesh, _ => new ConcurrentDictionary<int, VulkanSceneVertex[]>())
+				.GetOrAdd(RgbKey(meshTint), _ => Tint(source, meshTint))
+			: source;
 
 		return true;
+	}
+
+	private static Vector3? ResolveAlbedo(
+		EditorProject? project,
+		string? materialId)
+	{
+		if (string.IsNullOrWhiteSpace(materialId) ||
+			string.Equals(
+				materialId,
+				MaterialLoader.DefaultId,
+				StringComparison.OrdinalIgnoreCase))
+		{
+			return null;
+		}
+
+		return project is not null &&
+			project.TryLoadMaterial(
+				materialId,
+				out MaterialAsset material,
+				out _)
+				? material.Albedo
+				: null;
+	}
+
+	private static VulkanSceneVertex[] TintedBuiltin(
+		string meshId,
+		Vector3 albedo)
+	{
+		(string Id, int Rgb) key = (meshId, RgbKey(albedo));
+
+		lock (s_tintGate)
+		{
+			if (s_builtinTints.TryGetValue(key, out VulkanSceneVertex[]? cached))
+			{
+				return cached;
+			}
+
+			VulkanSceneVertex[] tinted = Tint(
+				EditorMeshLibrary.CreateVertices(meshId),
+				albedo);
+
+			s_builtinTints[key] = tinted;
+
+			return tinted;
+		}
+	}
+
+	private static VulkanSceneVertex[] Tint(
+		VulkanSceneVertex[] source,
+		Vector3 albedo)
+	{
+		VulkanSceneVertex[] tinted = new VulkanSceneVertex[source.Length];
+
+		for (int index = 0; index < source.Length; index++)
+		{
+			VulkanSceneVertex vertex = source[index];
+
+			tinted[index] = new VulkanSceneVertex(
+				vertex.Position,
+				vertex.Color * albedo);
+		}
+
+		return tinted;
+	}
+
+	private static int RgbKey(Vector3 color)
+	{
+		int Channel(float value)
+		{
+			return (int)Math.Clamp(
+				MathF.Round(value * 255f),
+				0f,
+				255f);
+		}
+
+		return (Channel(color.X) << 16) |
+			(Channel(color.Y) << 8) |
+			Channel(color.Z);
 	}
 
 	/// <summary>

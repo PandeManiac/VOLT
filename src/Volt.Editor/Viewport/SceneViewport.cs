@@ -855,6 +855,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 				ProjectMeshResolver.TryResolve(
 					_session.Project,
 					renderer.Mesh,
+					renderer.Material,
 					out EditorMeshInfo resolvedMesh,
 					out _)
 					? resolvedMesh
@@ -940,6 +941,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 			if (!ProjectMeshResolver.TryResolve(
 				_session.Project,
 				renderer.Mesh,
+				renderer.Material,
 				out EditorMeshInfo mesh,
 				out VulkanSceneVertex[]? vertices))
 			{
@@ -1852,6 +1854,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 				ProjectMeshResolver.TryResolve(
 					_session.Project,
 					renderer.Mesh,
+					renderer.Material,
 					out _,
 					out _);
 

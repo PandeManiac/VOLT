@@ -1092,3 +1092,49 @@ Play Mode.
 - Texture import, which needs a texture pipeline before it can render.
 - A viewport check that a picked imported mesh matches its rendered
   silhouette.
+
+## Authored material colour (November 2026)
+
+`MeshRendererData` had a Material field from the first version of the
+scene model, but nothing read it: every object drew in its own baked
+shading, and an imported mesh could not be coloured at all. A material
+reference was therefore a setting that promised an effect and delivered
+none.
+
+- `MaterialLoader` reads a small JSON asset (`{ "albedo": "#RRGGBB" }`, or
+  three 0..1 numbers). Only the property that changes what is rendered is
+  read, so a file cannot promise an effect this build lacks. Malformed
+  JSON, a missing albedo, and a bad colour each report the file.
+- `EditorProject.TryLoadMaterial` caches the colour against the file's
+  size and write time, and `CreateMaterial` writes a default-coloured
+  file, naming it against the existing assets. The Assets menu gained
+  **New Material** so the workflow starts in the editor.
+- `ProjectMeshResolver` applies the material by tinting the baked vertex
+  colours, for built-in primitives and imported meshes alike. The scene
+  shader already carries one albedo per vertex and no material binding,
+  so the authored colour reaches the CPU capture and the GPU viewport
+  through the same data, with no second pipeline. An empty,
+  `builtin:default`, or unresolvable reference leaves the mesh untinted
+  rather than hiding it.
+- Verified: release build with 0 warnings and 0 errors;
+  `Volt.Editor.Core.Tests` 112 passed, including hex and numeric albedo
+  parsing, alpha trimming, malformed input, material creation naming, the
+  cached colour after an edit, and refusing a scene as a material;
+  `Volt.Editor.Tests` 319 passed, including tinting a built-in mesh,
+  tinting an imported mesh while keeping its positions, the fallbacks,
+  and a rasterized frame where a red material makes the centre pixel
+  red. All golden baselines still match, because the default material
+  changes no colour.
+
+### Not verified here
+
+- No GPU and no display server: the tint is verified through the CPU
+  rasterizer; the GPU path consumes the same tinted vertices but was not
+  executed.
+- Textures are still absent: a material sets a flat colour, not an image.
+
+### Next
+
+- Texture import, starting with a PNG decoder and a UV path.
+- Listing project materials in the material field's picker, filtered to
+  that asset kind.

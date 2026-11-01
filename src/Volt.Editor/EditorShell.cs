@@ -767,6 +767,12 @@ public sealed class EditorShell : Panel
 			() => Guard("New scene", CreateNewScene),
 			() => _session.Project is not null);
 
+		AddCommand(
+			assets,
+			"New Material",
+			() => Guard("New material", CreateNewMaterial),
+			() => _session.Project is not null);
+
 		MenuItem create = bar.AddMenu("GameObject");
 
 		AddCommand(
@@ -1947,6 +1953,18 @@ public sealed class EditorShell : Panel
 		_session.CreateScene(
 			relative,
 			$"Scene {index - 1}");
+	}
+
+	private void CreateNewMaterial()
+	{
+		EditorProject project = _session.Project ??
+			throw new InvalidOperationException("No project is open.");
+
+		string id = project.CreateMaterial();
+
+		_session.SetStatus(
+			$"Created {Path.GetFileName(id)} in " +
+			$"{Path.GetDirectoryName(id)?.Replace('\\', '/')}");
 	}
 
 	private void ShowPreferences()

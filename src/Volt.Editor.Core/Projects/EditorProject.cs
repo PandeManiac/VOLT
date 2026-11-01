@@ -35,6 +35,9 @@ public sealed class EditorProject
 	private readonly Dictionary<string, MeshCacheEntry> _meshes =
 		new(StringComparer.OrdinalIgnoreCase);
 
+	private readonly Dictionary<string, MaterialCacheEntry> _materials =
+		new(StringComparer.OrdinalIgnoreCase);
+
 	private readonly Lock _meshGate = new();
 
 	private EditorProject(
@@ -182,6 +185,141 @@ public sealed class EditorProject
 
 				return false;
 			}
+		}
+	}
+
+	/// <summary>
+	/// Loads a material asset a scene references.
+	/// </summary>
+	/// <param name="materialId">The project-relative asset identifier.</param>
+	/// <param name="material">The loaded material when this succeeds.</param>
+	/// <param name="diagnostic">
+	/// Why the material could not be loaded, when it could not be.
+	/// </param>
+	/// <returns>Whether the material is available to apply.</returns>
+	/// <remarks>
+	/// The built-in default is not a file: it is the shading every mesh
+	/// already has, so asking for it is reported as missing here and the
+	/// renderer treats the reference as no tint at all.
+	/// </remarks>
+	public bool TryLoadMaterial(
+		string materialId,
+		out MaterialAsset material,
+		out string? diagnostic)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(materialId);
+
+		material = null!;
+		diagnostic = null;
+
+		ProjectAsset? asset = AssetCatalog.Find(materialId);
+
+		if (asset is null)
+		{
+			AssetCatalog.Refresh();
+			asset = AssetCatalog.Find(materialId);
+		}
+
+		if (asset is null)
+		{
+			diagnostic = $"'{materialId}' is not part of this project.";
+			return false;
+		}
+
+		if (asset.Kind != ProjectAssetKind.Material)
+		{
+			diagnostic =
+				$"'{asset.FileName}' is not a material file.";
+			return false;
+		}
+
+		lock (_meshGate)
+		{
+			if (_materials.TryGetValue(
+					asset.Id,
+					out MaterialCacheEntry cached) &&
+				cached.Matches(asset))
+			{
+				material = cached.Material!;
+				diagnostic = cached.Diagnostic;
+				return cached.Material is not null;
+			}
+
+			try
+			{
+				material = MaterialLoader.Load(asset.Id, asset.FullPath);
+
+				_materials[asset.Id] = new MaterialCacheEntry(
+					asset.Length,
+					asset.LastWriteTimeUtc,
+					Material: material,
+					Diagnostic: null);
+
+				return true;
+			}
+
+			catch (Exception exception)
+				when (exception is IOException or
+					UnauthorizedAccessException or
+					InvalidDataException or
+					DecoderFallbackException)
+			{
+				diagnostic = $"'{asset.FileName}' could not be read: " +
+					exception.Message;
+
+				_materials[asset.Id] = new MaterialCacheEntry(
+					asset.Length,
+					asset.LastWriteTimeUtc,
+					Material: null,
+					Diagnostic: diagnostic);
+
+				return false;
+			}
+		}
+	}
+
+	/// <summary>
+	/// Creates a new material asset with the default colour.
+	/// </summary>
+	/// <remarks>
+	/// The file is named against the existing assets, so creating several
+	/// materials never overwrites one. The folder is created on demand:
+	/// a project without materials needs no placeholder to start.
+	/// </remarks>
+	/// <returns>The project-relative identity of the new material.</returns>
+	public string CreateMaterial()
+	{
+		string folder = Path.Combine(AssetsPath, "Materials");
+		Directory.CreateDirectory(folder);
+
+		int index = 0;
+		string path;
+
+		do
+		{
+			string name = index == 0 ? "Material" : $"Material {index}";
+			path = Path.Combine(folder, name + ".material");
+			index++;
+		}
+		while (File.Exists(path));
+
+		File.WriteAllText(path, MaterialLoader.CreateDefaultJson());
+		AssetCatalog.Refresh();
+
+		return ProjectAssetCatalog.NormalizeId(
+			Path.GetRelativePath(RootPath, path));
+	}
+
+	private readonly record struct MaterialCacheEntry(
+		long Length,
+		DateTime LastWriteTimeUtc,
+		MaterialAsset? Material,
+		string? Diagnostic)
+	{
+		public bool Matches(ProjectAsset asset)
+		{
+			return Length == asset.Length &&
+				LastWriteTimeUtc == asset.LastWriteTimeUtc;
 		}
 	}
 

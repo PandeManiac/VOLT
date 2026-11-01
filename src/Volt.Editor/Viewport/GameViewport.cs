@@ -327,6 +327,7 @@ internal sealed class GameViewport : Widget, IFrameTick
 		return ProjectMeshResolver.TryResolve(
 			_session.Project,
 			renderer.Mesh,
+			renderer.Material,
 			out EditorMeshInfo mesh,
 			out VulkanSceneVertex[]? vertices)
 				? (mesh.Id, vertices)
