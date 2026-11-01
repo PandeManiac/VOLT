@@ -1541,6 +1541,12 @@ samples the image as it fills each triangle.
   barycentric weights interpolate them across the triangle. The mapped
   triangles never touch the existing scanline path, so every existing
   golden image is unchanged.
+- The interpolation is perspective-correct: each corner's weight is
+  scaled by its reciprocal clip W, so a floor's texture converges toward
+  the horizon instead of swimming. The first version used plain screen
+  weights, which are affine; `InterpolateUv` now owns that math and has
+  a test for the classic case where a screen-space midpoint is a quarter
+  of the way along the coordinate in 3D.
 - OBJ texture coordinates are bottom-up, so the sampler flips V once at
   the sampling site and the decoded image stays a faithful copy.
 - Validation now reports a material whose texture cannot be loaded as a
@@ -1566,6 +1572,9 @@ image resolves untextured but still drawable.
   next GPU-side slice and it needs a machine with a Vulkan device.
 - Sampling is nearest-neighbour with edge clamping and no mipmaps, which
   is right for a review image and not a general texture pipeline.
+- The validator's missing-texture warning is covered by a test that sets
+  a material on the scaffolded cube; the warning names the image and the
+  project stays valid, because the object still draws in its colour.
 
 ### Next
 

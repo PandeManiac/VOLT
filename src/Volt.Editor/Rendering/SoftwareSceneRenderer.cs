@@ -494,9 +494,9 @@ internal static class SoftwareSceneRasterizer
 	/// clip-space position, so a clipped edge samples the same part of
 	/// the image the original triangle would have. Filling uses
 	/// barycentric weights, which interpolate the coordinate across the
-	/// whole triangle; the mapping is affine in screen space, which is
-	/// what a review renderer needs and is close enough at the field of
-	/// view a viewport uses.
+	/// whole triangle. Each weight is scaled by the corner's reciprocal
+	/// clip W, so the mapping is perspective-correct: a receding surface's
+	/// texture converges toward the horizon instead of bending.
 	/// </remarks>
 	private static void ClipAndDrawTextured(
 		Vector4 first,
@@ -575,6 +575,7 @@ internal static class SoftwareSceneRasterizer
 		}
 
 		Span<Vector3> screen = stackalloc Vector3[12];
+		Span<float> inverseDepths = stackalloc float[12];
 
 		for (int index = 0; index < count; index++)
 		{
@@ -591,6 +592,8 @@ internal static class SoftwareSceneRasterizer
 				((point.X * inverse) * 0.5f + 0.5f) * width,
 				((point.Y * inverse) * 0.5f + 0.5f) * height,
 				point.Z * inverse);
+
+			inverseDepths[index] = inverse;
 		}
 
 		for (int index = 1; index + 1 < count; index++)
@@ -602,6 +605,9 @@ internal static class SoftwareSceneRasterizer
 				sourceUv[0],
 				sourceUv[index],
 				sourceUv[index + 1],
+				inverseDepths[0],
+				inverseDepths[index],
+				inverseDepths[index + 1],
 				red,
 				green,
 				blue,
@@ -613,6 +619,43 @@ internal static class SoftwareSceneRasterizer
 		}
 	}
 
+	/// <summary>
+	/// Interpolates a texture coordinate across a triangle.
+	/// </summary>
+	/// <remarks>
+	/// Screen-space barycentric weights are affine, so using them
+	/// directly makes a receding surface's texture swim. Weighting each
+	/// corner by the reciprocal of its clip-space W and dividing by the
+	/// total is the standard perspective-correct form, and it is what
+	/// makes a floor's texture converge toward the horizon instead of
+	/// bending.
+	/// </remarks>
+	internal static Vector2 InterpolateUv(
+		Vector2 first,
+		float firstInverseW,
+		Vector2 second,
+		float secondInverseW,
+		Vector2 third,
+		float thirdInverseW,
+		float firstWeight,
+		float secondWeight,
+		float thirdWeight)
+	{
+		float weightedFirst = firstWeight * firstInverseW;
+		float weightedSecond = secondWeight * secondInverseW;
+		float weightedThird = thirdWeight * thirdInverseW;
+		float total = weightedFirst + weightedSecond + weightedThird;
+
+		if (total <= 1e-9f)
+		{
+			return first;
+		}
+
+		return ((first * weightedFirst) +
+			(second * weightedSecond) +
+			(third * weightedThird)) / total;
+	}
+
 	private static void RasterizeTextured(
 		Vector3 first,
 		Vector3 second,
@@ -620,6 +663,9 @@ internal static class SoftwareSceneRasterizer
 		Vector2 firstUv,
 		Vector2 secondUv,
 		Vector2 thirdUv,
+		float firstInverseW,
+		float secondInverseW,
+		float thirdInverseW,
 		byte red,
 		byte green,
 		byte blue,
@@ -700,10 +746,16 @@ internal static class SoftwareSceneRasterizer
 
 				// OBJ texture coordinates put the origin at the bottom of
 				// the image, while the decoder keeps PNG's top-down rows.
-				Vector2 uv =
-					(firstUv * weightFirst) +
-					(secondUv * weightSecond) +
-					(thirdUv * weightThird);
+				Vector2 uv = InterpolateUv(
+					firstUv,
+					firstInverseW,
+					secondUv,
+					secondInverseW,
+					thirdUv,
+					thirdInverseW,
+					weightFirst,
+					weightSecond,
+					weightThird);
 
 				Vector4 texel = image.Sample(uv.X, 1f - uv.Y);
 

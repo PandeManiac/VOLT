@@ -125,6 +125,43 @@ public sealed class ProjectValidationTests : IDisposable
 	}
 
 	[Fact]
+	public void AMissingMaterialTextureIsAWarning()
+	{
+		using EditorSession session = CreateProject();
+		EditorProject project = session.Project!;
+
+		Write(
+			project,
+			"Assets/Materials/Textured.material",
+			"""
+			{ "albedo": "#FFFFFF", "texture": "Assets/Textures/missing.png" }
+			""");
+
+		project.AssetCatalog.Refresh();
+
+		SceneEntity cube = session.Scene!.Entities.First(
+			entity => entity.Name == "Cube");
+
+		cube.GetComponent<MeshRendererData>()!.Material =
+			"Assets/Materials/Textured.material";
+
+		session.SaveScene();
+
+		ProjectValidationReport report =
+			ProjectValidator.Validate(project.RootPath);
+
+		// A missing image must not hide the object: the material still
+		// loads and draws in its colour, so this stays a warning.
+		Assert.True(report.IsValid);
+		Assert.Contains(
+			report.Issues,
+			issue => issue.Severity == ProjectIssueSeverity.Warning &&
+				issue.Message.Contains(
+					"material texture could not be loaded",
+					StringComparison.Ordinal));
+	}
+
+	[Fact]
 	public void ABrokenSceneIsReportedWithoutHidingTheOthers()
 	{
 		using EditorSession session = CreateProject();
