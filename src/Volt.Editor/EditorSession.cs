@@ -5,6 +5,7 @@ using Volt.Editor.Core.Gameplay;
 using Volt.Editor.Core.Projects;
 using Volt.Editor.Core.Runtime;
 using Volt.Editor.Core.Scenes;
+using Volt.Editor.Validation;
 
 namespace Volt.Editor;
 
@@ -1578,6 +1579,15 @@ public sealed class EditorSession : IDisposable
 		SceneDocument scene = RequireScene();
 		Stop();
 
+		// Play runs the scene as authored, so a reference that cannot be
+		// drawn would silently leave a hole in the game. Report it and
+		// stay in authoring instead of pretending the scene is sound.
+		if (Project is EditorProject openProject &&
+			!ValidateSceneForPlay(openProject, scene))
+		{
+			return;
+		}
+
 		// Play uses what is already built. Compiling is the developer's
 		// explicit action, not a side effect of pressing Play.
 		TryLoadProjectGameplay();
@@ -1627,6 +1637,36 @@ public sealed class EditorSession : IDisposable
 
 		PlayStateChanged?.Invoke(this);
 		SetStatus("Playing");
+	}
+
+	private bool ValidateSceneForPlay(
+		EditorProject project,
+		SceneDocument scene)
+	{
+		ProjectValidationReport report = ProjectValidator.ValidateScene(
+			project,
+			ScenePath ?? project.StartupScenePath,
+			scene);
+
+		foreach (ProjectIssue issue in report.Issues)
+		{
+			Log(
+				$"{issue.Location}: {issue.Message}",
+				issue.Severity == ProjectIssueSeverity.Error
+					? EditorLogLevel.Error
+					: EditorLogLevel.Warning);
+		}
+
+		if (report.IsValid)
+		{
+			return true;
+		}
+
+		SetStatus(
+			$"Play refused: {report.Errors} broken " +
+			$"reference{(report.Errors == 1 ? string.Empty : "s")}");
+
+		return false;
 	}
 
 	public void Pause()

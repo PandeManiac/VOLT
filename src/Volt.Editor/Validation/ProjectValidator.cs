@@ -135,6 +135,34 @@ public static class ProjectValidator
 		return report;
 	}
 
+	/// <summary>
+	/// Validates the asset references of one scene.
+	/// </summary>
+	/// <param name="project">The project the scene belongs to.</param>
+	/// <param name="location">
+	/// How to name the scene in a report, usually its path.
+	/// </param>
+	/// <param name="scene">The loaded scene to check.</param>
+	/// <returns>Everything found in that scene.</returns>
+	/// <remarks>
+	/// Play checks the scene it is about to run with this, so a project
+	/// with one broken scene does not block playing a sound one.
+	/// </remarks>
+	public static ProjectValidationReport ValidateScene(
+		EditorProject project,
+		string location,
+		SceneDocument scene)
+	{
+		ArgumentNullException.ThrowIfNull(project);
+		ArgumentNullException.ThrowIfNull(scene);
+
+		ProjectValidationReport report = new();
+
+		ValidateReferences(project, location, scene, report);
+
+		return report;
+	}
+
 	private static SceneDocument? LoadStartupScene(
 		EditorProject project,
 		ProjectValidationReport report)

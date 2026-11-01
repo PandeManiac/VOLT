@@ -1254,3 +1254,37 @@ project was unsound until someone noticed a hole in the viewport.
 
 - Texture import, starting with a PNG decoder and a UV path.
 - Running validation as part of the editor's own startup check.
+
+## Play checks what it is about to run (November 2026)
+
+Validation could be asked for, but Play still started a scene whose mesh
+reference did not resolve: the game ran with a hole in it and nothing said
+so unless someone ran the report first.
+
+- `StartPlay` validates the scene it is about to run through
+  `ProjectValidator.ValidateScene`, which uses the same resolver the
+  viewports use. Errors are written to the Console at error level and the
+  status line reads `Play refused: 1 broken reference`; Play Mode never
+  starts.
+- Warnings alone do not block: an unreadable material still leaves Play
+  available, because the object is drawn with its default shading and a
+  developer may be part-way through authoring.
+- The check is scoped to the open scene, not the whole project, so a
+  broken reference elsewhere does not stop a sound scene from running.
+- Authoring is untouched by a refusal: the scene, its selection, and the
+  broken reference remain so it can be fixed and played again.
+- Verified: release build with 0 warnings and 0 errors;
+  `Volt.Editor.Tests` 335 passed, including refusing a scene with a
+  missing mesh (no runtime, error logged, status set, scene intact), still
+  starting when only a material warning applies, starting with built-in
+  meshes, and fixing the file then playing successfully.
+
+### Not verified here
+
+- No display server: the toolbar's Play button calls the same session
+  method these tests exercise.
+
+### Next
+
+- Texture import, starting with a PNG decoder and a UV path.
+- Running the whole-project validation at editor startup.
