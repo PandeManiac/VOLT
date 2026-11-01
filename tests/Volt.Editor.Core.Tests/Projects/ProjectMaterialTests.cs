@@ -108,4 +108,55 @@ public sealed class ProjectMaterialTests : IDisposable
 
 		Assert.Contains("could not be read", diagnostic);
 	}
+
+	[Fact]
+	public void AMaterialCanBeCreatedFromATexture()
+	{
+		EditorProject project = EditorProject.Create(_root, "Materials");
+		string texturePath = Path.Combine(
+			project.AssetsPath,
+			"Textures",
+			"wood.png");
+
+		Directory.CreateDirectory(
+			Path.GetDirectoryName(texturePath)!);
+		File.WriteAllBytes(texturePath, [0x89, 0x50, 0x4E, 0x47]);
+		project.AssetCatalog.Refresh();
+
+		string? id = project.CreateMaterialFromTexture(
+			"Assets/Textures/wood.png");
+
+		Assert.Equal("Assets/Materials/wood Material.material", id);
+
+		Assert.True(project.TryLoadMaterial(
+			id!,
+			out MaterialAsset material,
+			out string? diagnostic));
+
+		Assert.Null(diagnostic);
+		Assert.Equal("Assets/Textures/wood.png", material.Texture);
+
+		// White albedo, so the image appears unchanged.
+		Assert.Equal(1f, material.Albedo.X, 4);
+		Assert.Equal(1f, material.Albedo.Y, 4);
+		Assert.Equal(1f, material.Albedo.Z, 4);
+
+		// A second material from the same image is numbered, not written
+		// over the first.
+		Assert.Equal(
+			"Assets/Materials/wood Material 1.material",
+			project.CreateMaterialFromTexture(
+				"Assets/Textures/wood.png"));
+	}
+
+	[Fact]
+	public void OnlyATextureCanBecomeATexturedMaterial()
+	{
+		EditorProject project = EditorProject.Create(_root, "Materials");
+		string material = project.CreateMaterial();
+
+		project.AssetCatalog.Refresh();
+
+		Assert.Null(project.CreateMaterialFromTexture(material));
+	}
 }

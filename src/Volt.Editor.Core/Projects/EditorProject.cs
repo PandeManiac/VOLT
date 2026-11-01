@@ -406,6 +406,61 @@ public sealed class EditorProject
 			Path.GetRelativePath(RootPath, path));
 	}
 
+	/// <summary>
+	/// Creates a material that shows one texture.
+	/// </summary>
+	/// <param name="textureId">The project-relative image asset.</param>
+	/// <returns>
+	/// The new material's identifier, or <see langword="null"/> when the
+	/// reference is not an image in this project.
+	/// </returns>
+	/// <remarks>
+	/// The material is named after the image so the browser shows a
+	/// relationship rather than an opaque number, and a name already taken
+	/// is numbered instead of overwritten.
+	/// </remarks>
+	public string? CreateMaterialFromTexture(string textureId)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(textureId);
+
+		ProjectAsset? asset = AssetCatalog.Find(textureId);
+
+		if (asset is null)
+		{
+			AssetCatalog.Refresh();
+			asset = AssetCatalog.Find(textureId);
+		}
+
+		if (asset is null || asset.Kind != ProjectAssetKind.Texture)
+		{
+			return null;
+		}
+
+		string folder = Path.Combine(AssetsPath, "Materials");
+		Directory.CreateDirectory(folder);
+
+		string stem = Path.GetFileNameWithoutExtension(asset.FileName);
+		int index = 0;
+		string path;
+
+		do
+		{
+			string name = index == 0
+				? $"{stem} Material"
+				: $"{stem} Material {index}";
+
+			path = Path.Combine(folder, name + ".material");
+			index++;
+		}
+		while (File.Exists(path));
+
+		File.WriteAllText(path, MaterialLoader.CreateTexturedJson(asset.Id));
+		AssetCatalog.Refresh();
+
+		return ProjectAssetCatalog.NormalizeId(
+			Path.GetRelativePath(RootPath, path));
+	}
+
 	private readonly record struct MaterialCacheEntry(
 		long Length,
 		DateTime LastWriteTimeUtc,

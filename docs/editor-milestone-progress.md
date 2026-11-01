@@ -1580,3 +1580,40 @@ image resolves untextured but still drawable.
 
 - A GPU sampler for the scene pipeline, behind the same material value.
 - A material preview in the Inspector.
+
+## Creating a material from a texture (November 2026)
+
+A textured material was only reachable by writing its JSON by hand: the
+editor could create a flat material, and it could assign one, but it
+could not connect an imported image to a material. The Project Browser's
+context menu on a `.png` now offers **Create Material From Texture**.
+
+- The new material is named after the image (`wood.png` becomes
+  `Assets/Materials/wood Material.material`) and numbered if that name
+  is taken, so creating one never overwrites an existing material.
+- Its albedo is white, so the image appears unchanged; a tint applied
+  here would silently alter every texture the editor creates.
+- The action refuses anything that is not a texture in the project and
+  reports it as a warning, rather than writing a material that points at
+  a mesh or a scene.
+- Creating a material does not assign it: the developer still chooses
+  which object shows it, which is the same two-step flow as a flat
+  material.
+
+### Verified
+
+Release build with 0 warnings and 0 errors. The core tests create a
+material from a texture and read the texture path and white albedo back
+out of the file, assert a second creation is numbered rather than
+overwriting the first, and assert a non-texture asset is refused. The
+session test covers the editor action itself.
+
+### Not verified here
+
+- No display server, so the context menu item was not clicked in a
+  window; the session action it calls is covered directly.
+
+### Next
+
+- Creating a texture-less material from the menu could reuse the same
+  naming rules.

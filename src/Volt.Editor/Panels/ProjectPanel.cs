@@ -1586,6 +1586,15 @@ public sealed class ProjectPanel : Panel
 				_session.Selection.Count > 0
 		};
 
+		MenuItem materialFromTexture = new(
+			"Create Material From Texture",
+			() => RunAssetAction(
+				() => _session.CreateMaterialFromTexture(asset.Id)))
+		{
+			IsEnabled = !multiple &&
+				asset.Kind == ProjectAssetKind.Texture
+		};
+
 		MenuItem rename = new("Rename…", () => ShowRenameAssetDialog(asset))
 		{
 			IsEnabled = !multiple
@@ -1607,6 +1616,7 @@ public sealed class ProjectPanel : Panel
 			open,
 			place,
 			assign,
+			materialFromTexture,
 			rename,
 			duplicate,
 			MenuItem.Separator,

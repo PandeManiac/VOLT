@@ -73,6 +73,25 @@ public static class MaterialLoader
 	}
 
 	/// <summary>
+	/// Gets the text a material created from an image contains.
+	/// </summary>
+	/// <param name="texturePath">The project-relative image path.</param>
+	/// <remarks>
+	/// The albedo is white so the image appears unchanged: a tint here
+	/// would silently change every texture the editor creates.
+	/// </remarks>
+	public static string CreateTexturedJson(string texturePath)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(texturePath);
+
+		return
+			"{\n" +
+			"  \"albedo\": \"#FFFFFF\",\n" +
+			$"  \"texture\": \"{texturePath}\"\n" +
+			"}\n";
+	}
+
+	/// <summary>
 	/// Loads one material file.
 	/// </summary>
 	/// <param name="id">The project-relative identifier to record.</param>

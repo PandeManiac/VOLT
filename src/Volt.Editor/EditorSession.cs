@@ -947,6 +947,44 @@ public sealed class EditorSession : IDisposable
 		return assigned;
 	}
 
+	/// <summary>
+	/// Creates a material that shows one texture.
+	/// </summary>
+	/// <param name="textureId">The project-relative image asset.</param>
+	/// <returns>
+	/// The new material's identifier, or <see langword="null"/> when the
+	/// reference is not an image.
+	/// </returns>
+	/// <remarks>
+	/// The action only creates the file. Assigning it stays a separate
+	/// step, exactly as it is for a flat material, so creating one cannot
+	/// change the scene by accident.
+	/// </remarks>
+	public string? CreateMaterialFromTexture(string textureId)
+	{
+		ThrowIfDisposed();
+
+		EditorProject project = RequireProject();
+		string? materialId = project.CreateMaterialFromTexture(textureId);
+
+		if (materialId is null)
+		{
+			Log(
+				$"'{textureId}' is not an image this project can use as a " +
+				"texture.",
+				EditorLogLevel.Warning);
+
+			SetStatus($"Could not create a material from {Path.GetFileName(textureId)}");
+
+			return null;
+		}
+
+		Log($"Created '{materialId}' from '{textureId}'.");
+		SetStatus($"Created {Path.GetFileName(materialId)}");
+
+		return materialId;
+	}
+
 	public bool DeleteActiveEntity()
 	{
 		if (Scene is null || ActiveEntityId is not Guid id)

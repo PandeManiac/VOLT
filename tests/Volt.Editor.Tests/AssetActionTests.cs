@@ -79,6 +79,47 @@ public sealed class AssetActionTests : IDisposable
 	}
 
 	[Fact]
+	public void AMaterialIsCreatedFromATexture()
+	{
+		EditorProject project = OpenProject();
+		Write(project, "Assets/Textures/rock.png", "not decoded by this action");
+		project.AssetCatalog.Refresh();
+
+		string? material = _session.CreateMaterialFromTexture(
+			"Assets/Textures/rock.png");
+
+		Assert.Equal("Assets/Materials/rock Material.material", material);
+		Assert.True(project.AssetCatalog.FileExists(material!));
+
+		// Creating the material must not change the scene.
+		Assert.DoesNotContain(
+			_session.Scene!.Entities,
+			entity => entity.GetComponent<MeshRendererData>() is
+				MeshRendererData renderer &&
+				renderer.Material == material);
+	}
+
+	[Fact]
+	public void SomethingThatIsNotATextureCannotBecomeAMaterial()
+	{
+		EditorProject project = OpenProject();
+		Write(
+			project,
+			"Assets/Materials/Red.material",
+			"""{ "albedo": "#FF0000" }""");
+		project.AssetCatalog.Refresh();
+
+		Assert.Null(_session.CreateMaterialFromTexture(
+			"Assets/Materials/Red.material"));
+
+		Assert.Contains(
+			_session.LogEntries,
+			entry => entry.Message.Contains(
+				"not an image",
+				StringComparison.Ordinal));
+	}
+
+	[Fact]
 	public void ASceneIsNotAMesh()
 	{
 		EditorProject project = OpenProject();
