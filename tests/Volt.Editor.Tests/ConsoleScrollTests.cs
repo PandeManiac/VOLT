@@ -45,6 +45,48 @@ public sealed class ConsoleScrollTests : IDisposable
 	}
 
 	[Fact]
+	public void NewMessagesAppendWithoutRebuildingTheVisibleRows()
+	{
+		ScrollView scroll = BuildConsole();
+
+		StackPanel rows = Assert.IsType<StackPanel>(scroll.Content);
+
+		Widget firstRow = rows.Children[0];
+		int before = rows.Children.Count;
+
+		_session.Log("A new diagnostic message");
+		Frame(0.1);
+
+		// A rebuild would replace every row; appending leaves the row
+		// objects the author is reading exactly where they were.
+		Assert.Same(firstRow, rows.Children[0]);
+		Assert.Equal(before + 1, rows.Children.Count);
+	}
+
+	[Fact]
+	public void AppendingDropsTheRowForADiscardedEntry()
+	{
+		for (int index = 0; index < 600; index++)
+		{
+			_session.Log($"Diagnostic message {index:000}");
+		}
+
+		ScrollView scroll = BuildConsole();
+
+		StackPanel rows = Assert.IsType<StackPanel>(scroll.Content);
+
+		Widget secondRow = rows.Children[1];
+
+		_session.Log("The newest message");
+		Frame(0.1);
+
+		// The log is full, so one arrival retires the oldest row and the
+		// rows below it keep their identity.
+		Assert.Equal(500, rows.Children.Count);
+		Assert.Same(secondRow, rows.Children[0]);
+	}
+
+	[Fact]
 	public void EveryRetainedEntryIsReachable()
 	{
 		for (int index = 0; index < 600; index++)
@@ -54,9 +96,7 @@ public sealed class ConsoleScrollTests : IDisposable
 
 		ScrollView scroll = BuildConsole();
 
-		StackPanel rows = Descendants(scroll)
-			.OfType<StackPanel>()
-			.First();
+		StackPanel rows = Assert.IsType<StackPanel>(scroll.Content);
 
 		// The session keeps the newest 500 entries; the console used to
 		// render only the newest 200 of them, silently hiding the rest.

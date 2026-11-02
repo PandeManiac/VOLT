@@ -35,6 +35,7 @@ public sealed class ConsolePanel : Panel
 	private bool _renderedInfo;
 	private bool _renderedWarnings;
 	private bool _renderedErrors;
+	private readonly List<(EditorLogEntry Entry, Widget Row)> _rendered = [];
 	private bool _disposed;
 
 	public ConsolePanel(EditorSession session)
@@ -169,7 +170,135 @@ public sealed class ConsolePanel : Panel
 
 	private void OnLogChanged(EditorSession session)
 	{
-		Rebuild();
+		if (!TryAppendNewEntries())
+		{
+			Rebuild();
+		}
+	}
+
+	/// <summary>
+	/// Adds the rows for entries that arrived since the rows were built,
+	/// and drops the rows for entries the session has discarded.
+	/// </summary>
+	/// <remarks>
+	/// Rebuilding every row per message cost about 1.4 ms per log line on
+	/// a full console, which a chatty play session pays sixty times a
+	/// second. The retained log is a queue, so the normal case is a few
+	/// appends and, once the log is full, one removal from the front.
+	/// </remarks>
+	/// <returns>Whether the change was applied incrementally.</returns>
+	private bool TryAppendNewEntries()
+	{
+		if (_rendered.Count == 0 || Context is null)
+		{
+			return false;
+		}
+
+		IReadOnlyList<EditorLogEntry> entries = _session.LogEntries;
+
+		while (_rendered.Count > 0 && IndexOf(entries, _rendered[0].Entry) < 0)
+		{
+			_rows.Remove(_rendered[0].Row);
+			_rendered[0].Row.Dispose();
+			_rendered.RemoveAt(0);
+		}
+
+		if (_rendered.Count == 0)
+		{
+			return false;
+		}
+
+		int anchor = IndexOf(entries, _rendered[^1].Entry);
+
+		if (anchor < 0)
+		{
+			return false;
+		}
+
+		bool followTail = _pendingTail ||
+			_scroll.MaximumScroll <= 1f ||
+			_scroll.ScrollOffset.Y >= _scroll.MaximumScroll - 1f;
+
+		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
+
+		for (int index = anchor + 1; index < entries.Count; index++)
+		{
+			EditorLogEntry entry = entries[index];
+
+			if (!IsSeverityVisible(entry.Level))
+			{
+				continue;
+			}
+
+			Widget row = BuildRow(entry, theme);
+
+			_rows.Add(row);
+			_rendered.Add((entry, row));
+		}
+
+		RefreshCounts(entries);
+		UpdateEmptyState();
+		_scroll.InvalidateMeasure();
+
+		if (followTail)
+		{
+			_pendingTail = true;
+		}
+
+		return true;
+	}
+
+	private static int IndexOf(
+		IReadOnlyList<EditorLogEntry> entries,
+		EditorLogEntry entry)
+	{
+		for (int index = entries.Count - 1; index >= 0; index--)
+		{
+			if (Equals(entries[index], entry))
+			{
+				return index;
+			}
+		}
+
+		return -1;
+	}
+
+	private void RefreshCounts(IReadOnlyList<EditorLogEntry> entries)
+	{
+		int info = entries.Count(entry => entry.Level == EditorLogLevel.Info);
+		int warnings = entries.Count(entry => entry.Level == EditorLogLevel.Warning);
+		int errors = entries.Count(entry => entry.Level == EditorLogLevel.Error);
+
+		_info.Text = info.ToString(CultureInfo.InvariantCulture);
+		_warnings.Text = warnings.ToString(CultureInfo.InvariantCulture);
+		_errors.Text = errors.ToString(CultureInfo.InvariantCulture);
+
+		_info.IsActive = _session.ConsoleShowsInfo;
+		_warnings.IsActive = _session.ConsoleShowsWarnings;
+		_errors.IsActive = _session.ConsoleShowsErrors;
+
+		_renderedInfo = _session.ConsoleShowsInfo;
+		_renderedWarnings = _session.ConsoleShowsWarnings;
+		_renderedErrors = _session.ConsoleShowsErrors;
+	}
+
+	private void UpdateEmptyState()
+	{
+		IReadOnlyList<EditorLogEntry> entries = _session.LogEntries;
+
+		_emptyHost.IsVisible = _rendered.Count == 0;
+		_scroll.IsVisible = _rendered.Count > 0;
+
+		if (_rendered.Count == 0)
+		{
+			_empty.Title = entries.Count == 0
+				? "Console is clear"
+				: "All messages are filtered out";
+
+			_empty.Description = entries.Count == 0
+				? "Editor actions, warnings, and engine diagnostics appear here."
+				: "Enable a severity filter above to show its messages.";
+		}
 	}
 
 	private void OnSettingsChanged(EditorSession session)
@@ -203,31 +332,16 @@ public sealed class ConsolePanel : Panel
 		}
 
 		_rows.ClearChildren();
+		_rendered.Clear();
 
 		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
 		IReadOnlyList<EditorLogEntry> entries = _session.LogEntries;
 
-		int info = entries.Count(entry => entry.Level == EditorLogLevel.Info);
-		int warnings = entries.Count(entry => entry.Level == EditorLogLevel.Warning);
-		int errors = entries.Count(entry => entry.Level == EditorLogLevel.Error);
-
-		_info.Text = info.ToString(CultureInfo.InvariantCulture);
-		_warnings.Text = warnings.ToString(CultureInfo.InvariantCulture);
-		_errors.Text = errors.ToString(CultureInfo.InvariantCulture);
-
-		_info.IsActive = _session.ConsoleShowsInfo;
-		_warnings.IsActive = _session.ConsoleShowsWarnings;
-		_errors.IsActive = _session.ConsoleShowsErrors;
-
-		_renderedInfo = _session.ConsoleShowsInfo;
-		_renderedWarnings = _session.ConsoleShowsWarnings;
-		_renderedErrors = _session.ConsoleShowsErrors;
+		RefreshCounts(entries);
 
 		// The session already bounds how much log it keeps, so every
 		// retained entry is rendered. Capping the rows here as well left
 		// older entries unreachable while the header still counted them.
-		int shown = 0;
-
 		for (int index = 0; index < entries.Count; index++)
 		{
 			EditorLogEntry entry = entries[index];
@@ -237,24 +351,13 @@ public sealed class ConsolePanel : Panel
 				continue;
 			}
 
-			_rows.Add(BuildRow(entry, theme));
-			shown++;
+			Widget row = BuildRow(entry, theme);
+
+			_rows.Add(row);
+			_rendered.Add((entry, row));
 		}
 
-		_emptyHost.IsVisible = shown == 0;
-		_scroll.IsVisible = shown > 0;
-
-		if (shown == 0)
-		{
-			_empty.Title = entries.Count == 0
-				? "Console is clear"
-				: "All messages are filtered out";
-
-			_empty.Description = entries.Count == 0
-				? "Editor actions, warnings, and engine diagnostics appear here."
-				: "Enable a severity filter above to show its messages.";
-		}
-
+		UpdateEmptyState();
 		_scroll.InvalidateMeasure();
 
 		if (followTail)
