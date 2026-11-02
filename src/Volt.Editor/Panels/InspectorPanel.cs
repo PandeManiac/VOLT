@@ -407,22 +407,28 @@ public sealed class InspectorPanel : Panel
 	{
 		List<UiPropertyGroup> groups = [];
 
+		// The rows belong to the document they were built from. A scene
+		// reload disposes them while a field can still hold typed text,
+		// and that commit must not reach an entity that merely shares
+		// its id in the replacement scene.
+		SceneDocument? sourceScene = _session.Scene;
+
 		List<UiProperty> transformProperties =
 		[
 			new Vector3Property(
 				"Position",
 				() => entity.Transform.Position,
-				value => ApplyTransform(entity, transform =>
+				value => ApplyTransform(sourceScene, entity, transform =>
 					transform.Position = value)),
 			new Vector3Property(
 				"Rotation",
 				() => entity.Transform.EulerAngles,
-				value => ApplyTransform(entity, transform =>
+				value => ApplyTransform(sourceScene, entity, transform =>
 					transform.EulerAngles = value)),
 			new Vector3Property(
 				"Scale",
 				() => entity.Transform.Scale,
-				value => ApplyTransform(entity, transform =>
+				value => ApplyTransform(sourceScene, entity, transform =>
 					transform.Scale = value))
 		];
 
@@ -454,6 +460,7 @@ public sealed class InspectorPanel : Panel
 					descriptor.Properties)
 				{
 					UiProperty? uiProperty = CreateProperty(
+						sourceScene,
 						entity,
 						component,
 						property);
@@ -498,6 +505,7 @@ public sealed class InspectorPanel : Panel
 	}
 
 	private UiProperty? CreateProperty(
+		SceneDocument? scene,
 		SceneEntity entity,
 		AuthoredComponent component,
 		EditorPropertyDescriptor property)
@@ -509,14 +517,24 @@ public sealed class InspectorPanel : Panel
 				EditorPropertyKind.Boolean => new BoolProperty(
 					property.DisplayName,
 					() => property.GetValue(component) is true,
-					value => SetProperty(entity, component, property, value)),
+					value => SetProperty(
+						scene,
+						entity,
+						component,
+						property,
+						value)),
 
 				EditorPropertyKind.Integer => new IntProperty(
 					property.DisplayName,
 					() => property.GetValue(component) is int integer
 						? integer
 						: 0,
-					value => SetProperty(entity, component, property, value))
+					value => SetProperty(
+						scene,
+						entity,
+						component,
+						property,
+						value))
 				{
 					Minimum = ToInt(property.Minimum, int.MinValue),
 					Maximum = ToInt(property.Maximum, int.MaxValue)
@@ -527,7 +545,12 @@ public sealed class InspectorPanel : Panel
 					() => property.GetValue(component) is float number
 						? number
 						: 0f,
-					value => SetProperty(entity, component, property, value))
+					value => SetProperty(
+						scene,
+						entity,
+						component,
+						property,
+						value))
 				{
 					Minimum = property.Minimum,
 					Maximum = property.Maximum
@@ -540,6 +563,7 @@ public sealed class InspectorPanel : Panel
 						property.EnumNames,
 						property.GetValue(component)?.ToString()),
 					index => SetProperty(
+						scene,
 						entity,
 						component,
 						property,
@@ -555,7 +579,12 @@ public sealed class InspectorPanel : Panel
 					() => property.GetValue(component) is Vector3 vector
 						? vector
 						: Vector3.Zero,
-					value => SetProperty(entity, component, property, value)),
+					value => SetProperty(
+						scene,
+						entity,
+						component,
+						property,
+						value)),
 
 				EditorPropertyKind.Color => new ColorProperty(
 					property.DisplayName,
@@ -563,6 +592,7 @@ public sealed class InspectorPanel : Panel
 						? ToUiColor(color)
 						: UiColor.White,
 					value => SetProperty(
+						scene,
 						entity,
 						component,
 						property,
@@ -571,12 +601,22 @@ public sealed class InspectorPanel : Panel
 				EditorPropertyKind.Asset => new AssetProperty(
 					property.DisplayName,
 					() => property.GetValue(component) as string,
-					value => SetProperty(entity, component, property, value)),
+					value => SetProperty(
+						scene,
+						entity,
+						component,
+						property,
+						value)),
 
 				EditorPropertyKind.Text => new StringProperty(
 					property.DisplayName,
 					() => property.GetValue(component) as string ?? string.Empty,
-					value => SetProperty(entity, component, property, value)),
+					value => SetProperty(
+						scene,
+						entity,
+						component,
+						property,
+						value)),
 
 				_ => new ReadOnlyTextProperty(
 					property.DisplayName,
@@ -594,11 +634,23 @@ public sealed class InspectorPanel : Panel
 	}
 
 	private void SetProperty(
+		SceneDocument? scene,
 		SceneEntity entity,
 		AuthoredComponent component,
 		EditorPropertyDescriptor property,
 		object? value)
 	{
+		// Disposing a row commits the text it still holds. Only the row's
+		// own document and object may receive that value.
+		if (scene is not SceneDocument boundScene ||
+			!ReferenceEquals(boundScene, _session.Scene) ||
+			boundScene.Find(entity.Id) is not SceneEntity current ||
+			!ReferenceEquals(current, entity) ||
+			!current.Components.Contains(component))
+		{
+			return;
+		}
+
 		try
 		{
 			// The selection shares the edit, the way it already shares
@@ -618,9 +670,18 @@ public sealed class InspectorPanel : Panel
 	}
 
 	private void ApplyTransform(
+		SceneDocument? scene,
 		SceneEntity entity,
 		Action<TransformData> mutate)
 	{
+		if (scene is not SceneDocument boundScene ||
+			!ReferenceEquals(boundScene, _session.Scene) ||
+			boundScene.Find(entity.Id) is not SceneEntity current ||
+			!ReferenceEquals(current, entity))
+		{
+			return;
+		}
+
 		try
 		{
 			TransformData next = entity.Transform.Clone();

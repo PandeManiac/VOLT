@@ -427,7 +427,10 @@ editor while the current scene is dirty asks **Save**, **Discard**, or
 **Cancel**. Save writes the current scene before the operation
 continues, Cancel leaves it open and dirty, and closing the window uses
 the same prompt instead of discarding the scene silently. **File →
-Close Project** returns to the start screen through the same guard.
+Close Project** returns to the start screen through the same guard. A
+field that still holds an uncommitted edit counts as unsaved work:
+starting a document change commits it first, so the prompt appears and
+the value is never dropped or carried into the next scene.
 
 The dirty marker follows the history instead of latching on the first
 change. Undoing back to the state that was last saved clears it, and a

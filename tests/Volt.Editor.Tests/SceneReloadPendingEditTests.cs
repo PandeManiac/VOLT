@@ -96,6 +96,44 @@ public sealed class SceneReloadPendingEditTests : IDisposable
 		Assert.Empty(_session.Selection);
 	}
 
+	[Fact]
+	public void ReloadingKeepsATypedPropertyOutOfTheNewScene()
+	{
+		// The inspector is used on its own here, so no shell commits the
+		// field before the reload. Disposing the old property rows must
+		// not replay their edit into the scene that replaced them.
+		SceneEntity cube = _session.Scene!.Entities.First(
+			entity => entity.GetComponent<MeshRendererData>() is not null);
+		float original = cube.Transform.Position.X;
+
+		_session.Select(cube.Id);
+
+		using InspectorPanel inspector = new(_session);
+
+		_context.Add(inspector);
+		Layout();
+
+		NumericField positionX = Descendants(inspector)
+			.OfType<NumericField>()
+			.First();
+
+		Assert.True(positionX.Focus());
+		_context.TextInput("7");
+		Layout();
+
+		Assert.True(positionX.HasPendingTextEdit);
+		Assert.False(_session.IsSceneDirty);
+
+		_session.ReloadScene();
+		Layout();
+
+		Assert.Equal(
+			original,
+			_session.Scene!.Find(cube.Id)!.Transform.Position.X,
+			3);
+		Assert.False(_session.IsSceneDirty);
+	}
+
 	private EditorShell BuildShell()
 	{
 		EditorShell shell = new(_session);
