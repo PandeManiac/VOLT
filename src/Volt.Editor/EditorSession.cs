@@ -167,6 +167,21 @@ public sealed class EditorSession : IDisposable
 	/// </remarks>
 	public Func<Action, bool>? UnsavedChangesGuard { get; set; }
 
+	/// <summary>
+	/// Gets or sets the callback that applies an edit a focused control
+	/// is still holding before a document-changing operation starts.
+	/// </summary>
+	/// <remarks>
+	/// A field commits on Enter or focus loss, so its text is not part of
+	/// the scene or the undo history yet. <see cref="IsSceneDirty"/> alone
+	/// therefore cannot tell whether switching scenes would drop work.
+	/// The operation asks the UI to commit first, and only then decides
+	/// whether <see cref="UnsavedChangesGuard"/> has to ask the author.
+	/// The callback is supplied by the shell, so the session stays free
+	/// of widget references.
+	/// </remarks>
+	public Action? CommitPendingEdits { get; set; }
+
 	public IReadOnlyCollection<Guid> Selection => _selection;
 
 	public Guid? ActiveEntityId { get; private set; }
@@ -1926,6 +1941,11 @@ public sealed class EditorSession : IDisposable
 	private bool RunGuarded(Action action)
 	{
 		ArgumentNullException.ThrowIfNull(action);
+
+		// A focused field can hold an edit that has not reached the scene
+		// yet. Apply it before the dirty check so the guard can ask about
+		// it instead of letting the document change discard it.
+		CommitPendingEdits?.Invoke();
 
 		if (!IsSceneDirty ||
 			Scene is null ||

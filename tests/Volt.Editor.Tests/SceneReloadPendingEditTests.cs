@@ -1,6 +1,7 @@
 using Volt.Editor.Core.Scenes;
 using Volt.Editor.Panels;
 using Volt.Ui;
+using Volt.Ui.Input;
 using Volt.Ui.Widgets;
 
 namespace Volt.Editor.Tests;
@@ -77,8 +78,15 @@ public sealed class SceneReloadPendingEditTests : IDisposable
 		disk.RenameEntity(cube.Id, "FromDisk");
 		SceneSerializer.Save(path, disk);
 
-		Assert.True(_session.OpenScene(_session.ScenePath!));
+		// The typed name is still pending, so opening the scene has to
+		// ask about it before the document is replaced. Discarding drops
+		// the edit with the old scene rather than renaming an object in
+		// the freshly loaded one.
+		Assert.False(_session.OpenScene(_session.ScenePath!));
+		Assert.True(_context.HasModal);
+
 		Layout();
+		Click(FindButton(_context.Modal!, "Discard"));
 
 		Assert.Equal("FromDisk", _session.Scene!.Find(cube.Id)!.Name);
 		Assert.Null(_session.Undo.UndoDescription);
@@ -102,6 +110,21 @@ public sealed class SceneReloadPendingEditTests : IDisposable
 	{
 		_context.BeginFrame(0.0, new UiSize(1440f, 900f), UiPoint.Zero);
 		_context.Draw();
+	}
+
+	private void Click(Button button)
+	{
+		UiPoint point = button.GlobalVisualBounds.Center;
+
+		_context.PointerDown(UiMouseButton.Left, point);
+		_context.PointerUp(UiMouseButton.Left, point);
+	}
+
+	private static Button FindButton(Widget root, string text)
+	{
+		return Descendants(root)
+			.OfType<Button>()
+			.Single(button => button.Text == text);
 	}
 
 	private static IEnumerable<Widget> Descendants(Widget root)

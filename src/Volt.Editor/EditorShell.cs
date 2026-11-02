@@ -143,6 +143,7 @@ public sealed class EditorShell : Panel
 		_session.StatusChanged += OnStatusChanged;
 		_session.RuntimeUpdated += OnRuntimeUpdated;
 		_session.SettingsChanged += OnSettingsChanged;
+		_session.CommitPendingEdits = CommitFocusedText;
 		_session.UnsavedChangesGuard = GuardUnsavedChanges;
 
 		UpdateStartVisibility();
@@ -215,6 +216,7 @@ public sealed class EditorShell : Panel
 		_disposed = true;
 		RemoveShortcuts();
 
+		_session.CommitPendingEdits = null;
 		_session.UnsavedChangesGuard = null;
 		_session.ProjectChanged -= OnProjectChanged;
 		_session.SceneChanged -= OnSceneChanged;

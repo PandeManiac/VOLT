@@ -261,6 +261,70 @@ public sealed class UnsavedChangesTests : IDisposable
 	}
 
 	[Fact]
+	public void Shell_AsksBeforeDroppingATypedPropertyIntoAnotherScene()
+	{
+		EditorShell shell = BuildShell();
+		SceneDocument original = _session.Scene!;
+		SceneEntity cube = original.Entities.First(
+			entity => entity.GetComponent<MeshRendererData>() is not null);
+
+		_session.Select(cube.Id);
+		Layout();
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+		NumericField positionX = Descendants(inspector)
+			.OfType<NumericField>()
+			.First();
+
+		Assert.True(positionX.Focus());
+		_context.TextInput("7");
+		Layout();
+
+		// The typed value is still in the field, not in the scene, so
+		// the scene itself is clean. Opening another scene must not use
+		// that as permission to throw the edit away.
+		Assert.True(positionX.HasPendingTextEdit);
+		Assert.False(_session.IsSceneDirty);
+
+		Assert.False(_session.OpenScene(SecondScene));
+		Assert.True(_context.HasModal);
+		Assert.Same(original, _session.Scene);
+		Assert.Equal(7f, cube.Transform.Position.X, 3);
+		Assert.True(_session.IsSceneDirty);
+
+		Layout();
+		Click(FindButton(_context.Modal!, "Cancel"));
+
+		// Cancel keeps the scene and the edit the author just typed, so
+		// they can save it or keep working.
+		Assert.Same(original, _session.Scene);
+		Assert.Equal(7f, cube.Transform.Position.X, 3);
+		Assert.True(_session.IsSceneDirty);
+
+		Assert.False(_session.OpenScene(SecondScene));
+		Assert.True(_context.HasModal);
+
+		Layout();
+		Click(FindButton(_context.Modal!, "Save"));
+
+		Assert.Equal("Second", _session.Scene!.Name);
+		Assert.False(_session.IsSceneDirty);
+
+		string saved = Path.Combine(
+			_root,
+			"Game",
+			"Scenes",
+			"Main.volt.scene.json");
+
+		Assert.Equal(
+			7f,
+			SceneSerializer.Load(saved).Find(cube.Id)!.Transform.Position.X,
+			3);
+	}
+
+	[Fact]
 	public void Shell_SavesAPendingFieldEditFromTheDialog()
 	{
 		EditorShell shell = BuildShell();
