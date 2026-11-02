@@ -3167,6 +3167,56 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_CancelingARenameRestoresKeyboardFocus()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem scenes = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Scenes");
+
+		folders.SetSelection([scenes]);
+		Paint(0.2);
+
+		IconTileView main = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Main.volt.scene.json");
+
+		Click(main);
+		Paint(0.25);
+
+		Assert.True(_context.KeyDown(UiKey.F2));
+		Paint(0.3);
+
+		Button cancel = Descendants(_context.Modal!)
+			.OfType<Button>()
+			.Single(button => button.Text == "Cancel");
+
+		Click(cancel);
+		Paint(0.35);
+
+		Assert.Null(_context.Modal);
+		Assert.True(
+			main.HasFocus,
+			"Canceling a dialog must return focus to the selected asset.");
+		Assert.True(_context.KeyDown(UiKey.F2));
+		Assert.True(_context.HasModal);
+	}
+
+	[Fact]
 	public void ProjectBrowser_F2RenamesTheFocusedTile()
 	{
 		const string Main = "Scenes/Main.volt.scene.json";

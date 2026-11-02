@@ -479,6 +479,12 @@ public sealed class ProjectPanel : Panel
 		}
 	}
 
+	private void CloseDialogAndFocus(UiContext context)
+	{
+		context.CloseModal();
+		FocusSelection();
+	}
+
 	private void FocusSelection()
 	{
 		if (_selectedAssetIds.Count == 0 &&
@@ -785,7 +791,7 @@ public sealed class ProjectPanel : Panel
 			MinHeight = 28f
 		};
 
-		cancel.Clicked += _ => context.CloseModal();
+		cancel.Clicked += _ => CloseDialogAndFocus(context);
 
 		create.Clicked += _ =>
 		{
@@ -1543,7 +1549,7 @@ public sealed class ProjectPanel : Panel
 			MinHeight = 28f
 		};
 
-		cancel.Clicked += _ => context.CloseModal();
+		cancel.Clicked += _ => CloseDialogAndFocus(context);
 
 		rename.Clicked += _ =>
 		{
@@ -1797,7 +1803,7 @@ public sealed class ProjectPanel : Panel
 			MinHeight = 28f
 		};
 
-		cancel.Clicked += _ => context.CloseModal();
+		cancel.Clicked += _ => CloseDialogAndFocus(context);
 
 		rename.Clicked += _ =>
 		{				try
@@ -1922,7 +1928,7 @@ public sealed class ProjectPanel : Panel
 			MinHeight = 28f
 		};
 
-		cancel.Clicked += _ => context.CloseModal();
+		cancel.Clicked += _ => CloseDialogAndFocus(context);
 
 		delete.Clicked += _ =>
 		{
