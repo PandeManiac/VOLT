@@ -45,6 +45,25 @@ public sealed class ConsoleScrollTests : IDisposable
 	}
 
 	[Fact]
+	public void EveryRetainedEntryIsReachable()
+	{
+		for (int index = 0; index < 600; index++)
+		{
+			_session.Log($"Diagnostic message {index:000}");
+		}
+
+		ScrollView scroll = BuildConsole();
+
+		StackPanel rows = Descendants(scroll)
+			.OfType<StackPanel>()
+			.First();
+
+		// The session keeps the newest 500 entries; the console used to
+		// render only the newest 200 of them, silently hiding the rest.
+		Assert.Equal(500, rows.Children.Count);
+	}
+
+	[Fact]
 	public void ConsoleOpensAtTheNewestMessage()
 	{
 		ScrollView scroll = BuildConsole();

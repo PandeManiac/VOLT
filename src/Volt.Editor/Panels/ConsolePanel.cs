@@ -223,10 +223,12 @@ public sealed class ConsolePanel : Panel
 		_renderedWarnings = _session.ConsoleShowsWarnings;
 		_renderedErrors = _session.ConsoleShowsErrors;
 
-		int start = Math.Max(0, entries.Count - 200);
+		// The session already bounds how much log it keeps, so every
+		// retained entry is rendered. Capping the rows here as well left
+		// older entries unreachable while the header still counted them.
 		int shown = 0;
 
-		for (int index = start; index < entries.Count; index++)
+		for (int index = 0; index < entries.Count; index++)
 		{
 			EditorLogEntry entry = entries[index];
 
