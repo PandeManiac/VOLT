@@ -281,8 +281,10 @@ ratios without discarding the state inside open panels.
   object, shift-click adds another, and dragging on empty space with the
   left button draws a box that takes every object its bounds touch
   (shift keeps what was already selected). The hierarchy highlights the
-  whole selection, the inspector edits every selected object and says so
-  under the name, and the gizmo follows the active one. With more than
+  whole selection and the gizmo follows the active one. The inspector's
+  transform fields edit every selected object and its subtitle says so
+  (`transform edits: all · other edits: active`); its component fields
+  edit the active object, which the same line states. With more than
   one object selected, the scene view also frames the selection's
   combined extent in corner brackets labelled with the object count, so
   the reach of a group edit is visible before it is applied.
