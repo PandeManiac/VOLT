@@ -14,7 +14,10 @@ namespace Volt.Editor.Tests;
 /// </summary>
 /// <remarks>
 /// The baselines are ordinary PNG files in
-/// <c>tests/Volt.Editor.Tests/Baselines</c>. A comparison allows a small
+/// <c>tests/Volt.Editor.Tests/Baselines</c>, except the captures the
+/// guide publishes: those are compared against the image under
+/// <c>docs/images</c>, so the same interface state is stored once
+/// instead of twice and cannot drift. A comparison allows a small
 /// per-channel difference and a fraction of a percent of differing
 /// pixels, so a new runtime or a tiny antialiasing change does not fail
 /// the build, while a moved panel, a lost label, or a wrong colour does.
@@ -195,12 +198,12 @@ public sealed class GoldenSnapshotTests : IDisposable
 			CountColors(actual) > 24,
 			"The capture must contain real interface content.");
 
-		string directory = BaselineDirectory();
-		string baselinePath = Path.Combine(directory, name);
+		string baselinePath = BaselinePath(name);
 
 		if (Environment.GetEnvironmentVariable(UpdateVariable) == "1")
 		{
-			Directory.CreateDirectory(directory);
+			Directory.CreateDirectory(
+				Path.GetDirectoryName(baselinePath) ?? BaselineDirectory());
 			actual.SavePng(baselinePath);
 			return;
 		}
@@ -306,6 +309,47 @@ public sealed class GoldenSnapshotTests : IDisposable
 		}
 
 		return colors.Count;
+	}
+
+	/// <summary>
+	/// Resolves the file a capture is compared against.
+	/// </summary>
+	/// <remarks>
+	/// A capture the guide publishes is compared against the guide's own
+	/// image. Storing it twice would mean regenerating both copies after
+	/// every interface change, and the two could drift while each still
+	/// looked plausible on its own.
+	/// </remarks>
+	private static string BaselinePath(string name)
+	{
+		string shared = Path.Combine(
+			DocsImageDirectory(),
+			SharedImageName(name));
+
+		return File.Exists(shared)
+			? shared
+			: Path.Combine(BaselineDirectory(), name);
+	}
+
+	/// <summary>
+	/// Names a capture the guide already publishes under another name.
+	/// </summary>
+	private static string SharedImageName(string name)
+	{
+		return name == "editor-default.png"
+			? "editor-workspace.png"
+			: name;
+	}
+
+	private static string DocsImageDirectory()
+	{
+		return Path.GetFullPath(Path.Combine(
+			BaselineDirectory(),
+			"..",
+			"..",
+			"..",
+			"docs",
+			"images"));
 	}
 
 	/// <summary>
