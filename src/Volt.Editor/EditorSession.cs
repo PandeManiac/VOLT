@@ -297,10 +297,11 @@ public sealed class EditorSession : IDisposable
 
 		return RunGuarded(() =>
 		{
-			CloseProjectCore();
-
 			EditorProject project = EditorProject.Create(projectRoot, name);
-			OpenProjectCore(project);
+			SceneDocument startup = project.LoadStartupScene();
+
+			CloseProjectCore();
+			OpenProjectCore(project, startup);
 			Log($"Created project '{project.Name}'.");
 		});
 	}
@@ -311,10 +312,11 @@ public sealed class EditorSession : IDisposable
 
 		return RunGuarded(() =>
 		{
-			CloseProjectCore();
-
 			EditorProject project = EditorProject.Open(projectRoot);
-			OpenProjectCore(project);
+			SceneDocument startup = project.LoadStartupScene();
+
+			CloseProjectCore();
+			OpenProjectCore(project, startup);
 			Log($"Opened project '{project.Name}'.");
 		});
 	}
@@ -1492,12 +1494,13 @@ public sealed class EditorSession : IDisposable
 		return guard(action);
 	}
 
-	private void OpenProjectCore(EditorProject project)
+	private void OpenProjectCore(
+		EditorProject project,
+		SceneDocument startup)
 	{
 		Project = project;
 		ProjectChanged?.Invoke(this);
 
-		SceneDocument startup = project.LoadStartupScene();
 		SetScene(
 			startup,
 			project.StartupScenePath,

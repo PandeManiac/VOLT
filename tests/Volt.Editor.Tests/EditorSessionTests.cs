@@ -79,6 +79,67 @@ public sealed class EditorSessionTests : IDisposable
 	}
 
 	[Fact]
+	public void FailedOpenProject_PreservesTheCurrentProjectAndSelection()
+	{
+		_session.NewProject(Path.Combine(_root, "Current"), "Current");
+		SceneEntity selected = _session.CreateEntity("Selected")!;
+		_session.Select(selected.Id);
+		EditorProject originalProject = _session.Project!;
+		SceneDocument originalScene = _session.Scene!;
+		string invalidProject = Path.Combine(_root, "NotAProject");
+		Directory.CreateDirectory(invalidProject);
+
+		Assert.Throws<FileNotFoundException>(
+			() => _session.OpenProject(invalidProject));
+
+		Assert.Same(originalProject, _session.Project);
+		Assert.Same(originalScene, _session.Scene);
+		Assert.Equal(selected.Id, _session.ActiveEntityId);
+		Assert.Same(selected, _session.ActiveEntity);
+	}
+
+	[Fact]
+	public void FailedNewProject_PreservesTheCurrentProjectAndSelection()
+	{
+		_session.NewProject(Path.Combine(_root, "Current"), "Current");
+		SceneEntity selected = _session.CreateEntity("Selected")!;
+		_session.Select(selected.Id);
+		EditorProject originalProject = _session.Project!;
+		SceneDocument originalScene = _session.Scene!;
+
+		Assert.Throws<InvalidOperationException>(
+			() => _session.NewProject(originalProject.RootPath, "Collision"));
+
+		Assert.Same(originalProject, _session.Project);
+		Assert.Same(originalScene, _session.Scene);
+		Assert.Equal(selected.Id, _session.ActiveEntityId);
+		Assert.Same(selected, _session.ActiveEntity);
+	}
+
+	[Fact]
+	public void ProjectWithMissingStartupScene_PreservesTheCurrentProject()
+	{
+		_session.NewProject(Path.Combine(_root, "Current"), "Current");
+		SceneEntity selected = _session.CreateEntity("Selected")!;
+		_session.Select(selected.Id);
+		EditorProject originalProject = _session.Project!;
+		SceneDocument originalScene = _session.Scene!;
+
+		EditorProject invalidProject = EditorProject.Create(
+			Path.Combine(_root, "MissingStartup"),
+			"MissingStartup");
+		File.Delete(invalidProject.ResolvePath(
+			invalidProject.StartupScenePath));
+
+		Assert.Throws<FileNotFoundException>(
+			() => _session.OpenProject(invalidProject.RootPath));
+
+		Assert.Same(originalProject, _session.Project);
+		Assert.Same(originalScene, _session.Scene);
+		Assert.Equal(selected.Id, _session.ActiveEntityId);
+	}
+
+	[Fact]
 	public void NewProject_OpensStarterSceneThatReopensWithSameIds()
 	{
 		string projectRoot = Path.Combine(_root, "Game");
