@@ -149,6 +149,61 @@ public sealed class GizmoDragTests : IDisposable
 	}
 
 	[Fact]
+	public void SceneSwitchDuringDrag_DoesNotApplyGestureToReusedEntityId()
+	{
+		SceneEntity original = CreateBox();
+		_session.Tool = EditorTool.Translate;
+		_session.LocalTransform = false;
+		_session.Undo.Clear();
+
+		Paint();
+		GizmoHandleHit xAxis = Handle(GizmoHandle.AxisX);
+		PointerDown(xAxis.StartPixel);
+		PointerMove(xAxis.EndPixel);
+
+		Assert.NotEqual(Vector3.Zero, original.Transform.Position);
+
+		SceneDocument replacement = _session.CreateScene(
+			"Scenes/Replacement.volt.scene.json",
+			"Replacement")!;
+		SceneEntity replacementEntity = replacement.CreateEntity(
+			"Same identity",
+			id: original.Id);
+		replacementEntity.Transform.Position = new Vector3(4f, 2f, 1f);
+		Vector3 replacementStart = replacementEntity.Transform.Position;
+
+		// A pointer event arriving after the scene transition must not
+		// replay the captured gesture against this scene's matching ID.
+		PointerMove(new UiPoint(xAxis.EndPixel.X + 30f, xAxis.EndPixel.Y));
+
+		Assert.Equal(replacementStart, replacementEntity.Transform.Position);
+		Assert.False(_session.Undo.CanUndo);
+	}
+
+	[Fact]
+	public void SelectionChangeDuringDrag_CancelsAndRestoresPreview()
+	{
+		SceneEntity first = CreateBox();
+		SceneEntity second = _session.CreateEntity("Second")!;
+		_session.Tool = EditorTool.Translate;
+		_session.LocalTransform = false;
+		_session.Select(first.Id);
+		_session.Undo.Clear();
+
+		Paint();
+		GizmoHandleHit xAxis = Handle(GizmoHandle.AxisX);
+		PointerDown(xAxis.StartPixel);
+		PointerMove(xAxis.EndPixel);
+
+		Assert.NotEqual(Vector3.Zero, first.Transform.Position);
+		_session.Select(second.Id);
+
+		Assert.Equal(Vector3.Zero, first.Transform.Position);
+		Assert.Equal(second.Id, _session.ActiveEntityId);
+		Assert.False(_session.Undo.CanUndo);
+	}
+
+	[Fact]
 	public void LocalMode_DragsAlongTheObjectsOwnAxis()
 	{
 		SceneEntity box = CreateBox();

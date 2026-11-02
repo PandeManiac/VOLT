@@ -150,6 +150,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 	private float _dragGizmoLength = 1f;
 	private float _dragFacing = 1f;
 	private bool _dragMoved;
+	private SceneDocument? _dragScene;
 
 	/// <summary>
 	/// Gets the gizmo geometry built by the last painted frame.
@@ -184,7 +185,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 		Cursor = UiCursor.Crosshair;
 
 		_session.SceneChanged += OnSessionChanged;
-		_session.SelectionChanged += OnSessionChanged;
+		_session.SelectionChanged += OnSelectionChanged;
 		_session.PlayStateChanged += OnSessionChanged;
 	}
 
@@ -792,15 +793,37 @@ internal sealed class SceneViewport : Widget, IFrameTick
 		EndLook(releaseCapture: true);
 		CancelDrag();
 		_session.SceneChanged -= OnSessionChanged;
-		_session.SelectionChanged -= OnSessionChanged;
+		_session.SelectionChanged -= OnSelectionChanged;
 		_session.PlayStateChanged -= OnSessionChanged;
 		_session.ViewportNavigating = false;
 	}
 
 	private void OnSessionChanged(EditorSession session)
 	{
+		// A captured gizmo gesture belongs to the scene in which it
+		// began. SceneChanged is also raised for ordinary edits, so use
+		// identity rather than treating every notification as a scene
+		// switch. Never restore captured transforms into a replacement
+		// scene: a reused entity ID would corrupt unrelated authored data.
+		if (_activeHandle != GizmoHandle.None &&
+			!ReferenceEquals(_dragScene, session.Scene))
+		{
+			AbandonDrag();
+		}
+
 		_worldDirty = true;
 		InvalidateVisual();
+	}
+
+	private void OnSelectionChanged(EditorSession session)
+	{
+		if (_activeHandle != GizmoHandle.None &&
+			ReferenceEquals(_dragScene, session.Scene))
+		{
+			CancelDrag();
+		}
+
+		OnSessionChanged(session);
 	}
 
 	private void EnsureWorldMatrices(SceneDocument scene)
@@ -1075,6 +1098,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 		_dragParentRotationInverse.Clear();
 
 		_dragEntityId = activeId;
+		_dragScene = scene;
 		_dragBefore = entity.Transform.Clone();
 		_dragOrigin = origin;
 		_dragGizmoLength = _gizmo.WorldLength;
@@ -1628,6 +1652,19 @@ internal sealed class SceneViewport : Widget, IFrameTick
 		InvalidateVisual();
 	}
 
+	/// <summary>
+	/// Drops a gesture after its scene has been replaced. Its preview
+	/// lived in the old scene, so there is nothing to restore in the new
+	/// one.
+	/// </summary>
+	private void AbandonDrag()
+	{
+		_activeHandle = GizmoHandle.None;
+		_dragMoved = false;
+		ClearDrag();
+		ReleasePointer();
+	}
+
 	private void ClearDrag()
 	{
 		_dragStarts.Clear();
@@ -1636,6 +1673,7 @@ internal sealed class SceneViewport : Widget, IFrameTick
 		_dragParentRotation.Clear();
 		_dragParentRotationInverse.Clear();
 		_dragBefore = null;
+		_dragScene = null;
 		_dragGesture = DragGesture.None;
 		_worldDirty = true;
 	}
