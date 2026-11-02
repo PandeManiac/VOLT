@@ -127,7 +127,7 @@ public sealed class ColorField : Widget
 			return;
 		}
 
-		if (!TryParse(_hex.Text, out UiColor parsed))
+		if (!TryParse(_hex.Text, _value.A, out UiColor parsed))
 		{
 			_hex.Text = Format(_value);
 			return;
@@ -152,7 +152,10 @@ public sealed class ColorField : Widget
 			$"#{color.R:X2}{color.G:X2}{color.B:X2}");
 	}
 
-	private static bool TryParse(string text, out UiColor color)
+	private static bool TryParse(
+		string text,
+		byte defaultAlpha,
+		out UiColor color)
 	{
 		color = default;
 
@@ -179,7 +182,11 @@ public sealed class ColorField : Widget
 		}
 
 		color = value.Length == 6
-			? UiColor.FromRgb(packed)
+			? new UiColor(
+				(byte)(packed >> 16),
+				(byte)(packed >> 8),
+				(byte)packed,
+				defaultAlpha)
 			: UiColor.FromArgb(packed);
 
 		return true;
