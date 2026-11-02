@@ -140,6 +140,22 @@ public sealed class EditorSessionTests : IDisposable
 	}
 
 	[Fact]
+	public void FailedSceneOpen_DoesNotStopTheCurrentPlaySession()
+	{
+		_session.NewProject(Path.Combine(_root, "OpenScene"), "OpenScene");
+		SceneDocument originalScene = _session.Scene!;
+		_session.StartPlay();
+		PlaySession originalPlay = _session.Play!;
+
+		Assert.Throws<FileNotFoundException>(
+			() => _session.OpenScene("Scenes/Missing.volt.scene.json"));
+
+		Assert.Same(originalScene, _session.Scene);
+		Assert.Same(originalPlay, _session.Play);
+		Assert.Equal(PlayState.Playing, _session.PlayState);
+	}
+
+	[Fact]
 	public void NewProject_OpensStarterSceneThatReopensWithSameIds()
 	{
 		string projectRoot = Path.Combine(_root, "Game");

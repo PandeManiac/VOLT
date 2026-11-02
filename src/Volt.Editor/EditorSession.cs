@@ -357,9 +357,8 @@ public sealed class EditorSession : IDisposable
 		return RunGuarded(() =>
 		{
 			EditorProject project = RequireProject();
-			Stop();
-
 			SceneDocument scene = project.LoadScene(relativePath);
+			Stop();
 			SetScene(scene, relativePath, dirty: false);
 			Log($"Opened scene '{scene.Name}'.");
 		});
