@@ -131,6 +131,7 @@ public sealed class EditorShell : Panel
 		Background = _theme.Palette.WindowBackground;
 
 		_layout = layout ?? DockLayout.CreateEditorDefault();
+		_layout.Changed += OnLayoutChanged;
 		_defaultProjectPath = defaultProjectFolder ??
 			Path.Combine(Environment.CurrentDirectory, "VoltGame");
 
@@ -2185,6 +2186,11 @@ public sealed class EditorShell : Panel
 		scrim.Add(card);
 
 		context.ShowModal(scrim);
+	}
+
+	private void OnLayoutChanged(DockLayout layout)
+	{
+		UpdateWindowMenuChecks();
 	}
 
 	private void TogglePanel(PanelTab tab)

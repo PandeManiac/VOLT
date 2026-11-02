@@ -337,6 +337,21 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ClosingAPanelUpdatesTheWindowMenu()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		MenuItem window = shell.MenuBarView.Menus
+			.Single(menu => menu.Label == "Window");
+		MenuItem project = window.Children
+			.Single(item => item.Label == "Project");
+
+		Assert.True(project.IsChecked);
+		Assert.True(shell.Layout.ClosePanel("project"));
+		Assert.False(project.IsChecked);
+	}
+
+	[Fact]
 	public void ResetLayout_ReopensPanelsAndRestoresRatios()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);
