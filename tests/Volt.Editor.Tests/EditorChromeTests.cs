@@ -563,6 +563,35 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void Inspector_HidesTheEntitySubtitleWhenNothingIsSelected()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneEntity cube = _session.Scene!.Entities.First(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+
+		_session.Select(cube.Id);
+		Paint(0.1);
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		Label subtitle = Descendants(inspector)
+			.OfType<Label>()
+			.Single(label => label.Text.Contains("component"));
+
+		Assert.True(subtitle.IsVisible);
+
+		_session.SelectNone();
+		Paint(0.2);
+
+		// The inspector is empty again, so nothing may be left over from
+		// the object that was selected before.
+		Assert.False(subtitle.IsVisible);
+		Assert.Empty(subtitle.Text);
+	}
+
+	[Fact]
 	public void VisiblePanels_EachPaintGeometry()
 	{
 		// A panel that paints nothing is a blank rectangle; the whole

@@ -208,6 +208,7 @@ public sealed class InspectorPanel : Panel
 			: BuildComponentSignature(entity);
 
 		_name.IsVisible = entity is not null;
+		_entitySubtitle.IsVisible = entity is not null;
 		_componentBar.IsVisible = entity is not null;
 		_addBar.IsVisible = entity is not null;
 		_grid.IsVisible = entity is not null;
@@ -216,6 +217,7 @@ public sealed class InspectorPanel : Panel
 		if (entity is null)
 		{
 			_name.SetTextFromSource(string.Empty);
+			_entitySubtitle.Text = string.Empty;
 			_componentBar.ClearChildren();
 			_addableComponents.Clear();
 			_componentTypes.SetItems(Array.Empty<string>());
