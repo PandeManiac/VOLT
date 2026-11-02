@@ -273,20 +273,32 @@ public sealed class PropertyGrid : ScrollView
 			case EnumProperty enumProperty:
 				{
 					Dropdown dropdown = new();
+					bool syncing = false;
 					dropdown.SetItems(
 						enumProperty.Options,
 						enumProperty.Get());
 
 					dropdown.SelectionChanged += _ =>
 					{
-						if (!property.IsReadOnly &&
+						if (!syncing && !property.IsReadOnly &&
 							dropdown.SelectedIndex >= 0)
 						{
 							enumProperty.Set(dropdown.SelectedIndex);
 						}
 					};
 
-					sync = () => dropdown.SelectedIndex = enumProperty.Get();
+					sync = () =>
+					{
+						syncing = true;
+						try
+						{
+							dropdown.SelectedIndex = enumProperty.Get();
+						}
+						finally
+						{
+							syncing = false;
+						}
+					};
 
 					return dropdown;
 				}
@@ -393,6 +405,13 @@ public sealed class PropertyGrid : ScrollView
 		if (editor is TextField text)
 		{
 			return text.HasUncommittedText;
+		}
+
+		if (editor is CheckBox or Dropdown)
+		{
+			// These controls commit each interaction immediately; focus
+			// does not represent an in-progress edit that needs preserving.
+			return false;
 		}
 
 		if (editor.HasFocus)

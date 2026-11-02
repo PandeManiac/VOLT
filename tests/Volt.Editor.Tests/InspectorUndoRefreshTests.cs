@@ -71,6 +71,33 @@ public sealed class InspectorUndoRefreshTests : IDisposable
 		Assert.True(meshAsset.HasFocus);
 	}
 
+	[Fact]
+	public void UndoWhileInspectorCheckboxRemainsFocused_RefreshesValue()
+	{
+		SceneEntity entity = _session.Scene!.Entities.Single(
+			candidate => candidate.GetComponent<MeshRendererData>() is not null);
+		_session.Select(entity.Id);
+
+		using InspectorPanel inspector = new(_session);
+		_context.Add(inspector);
+		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
+		CheckBox visible = Descendants(inspector)
+			.OfType<CheckBox>()
+			.Single(field => field.Text == "Visible");
+		Assert.True(visible.IsChecked);
+
+		Assert.True(visible.Focus());
+		Assert.True(_context.KeyDown(UiKey.Space));
+		Assert.False(visible.IsChecked);
+		Assert.False(entity.GetComponent<MeshRendererData>()!.Visible);
+
+		_session.UndoLast();
+
+		Assert.True(entity.GetComponent<MeshRendererData>()!.Visible);
+		Assert.True(visible.IsChecked);
+		Assert.True(visible.HasFocus);
+	}
+
 	public void Dispose()
 	{
 		_context.Dispose();
