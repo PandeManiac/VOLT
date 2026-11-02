@@ -95,6 +95,14 @@ public sealed class Splitter : Widget
 			return false;
 		}
 
+		// Focus loss drops capture without delivering a pointer-up event.
+		// Do not let a later hover movement resume the old resize gesture.
+		if (!IsPointerCaptured)
+		{
+			_dragging = false;
+			return false;
+		}
+
 		float delta = Orientation == UiOrientation.Vertical
 			? pointer.GlobalPosition.X - _lastPosition.X
 			: pointer.GlobalPosition.Y - _lastPosition.Y;
