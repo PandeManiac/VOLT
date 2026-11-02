@@ -1,3 +1,4 @@
+using Volt.Editor.Core.Editing;
 using Volt.Editor.Core.Scenes;
 
 namespace Volt.Editor.Tests;
@@ -72,6 +73,25 @@ public sealed class SelectionActiveObjectTests : IDisposable
 		// Removing the active row has to pick a replacement
 		// deterministically, so the same rows always produce the same
 		// inspector. Scene order is what the hierarchy shows.
+		Assert.Equal(third.Id, _session.ActiveEntityId);
+	}
+
+	[Fact]
+	public void RemovingTheActiveObjectElsewhereKeepsAnActiveObject()
+	{
+		SceneEntity first = _session.CreateEntity("First")!;
+		SceneEntity second = _session.CreateEntity("Second")!;
+		SceneEntity third = _session.CreateEntity("Third")!;
+
+		_session.SelectMany([first.Id, second.Id, third.Id], first.Id);
+
+		// A scene edit outside the selection commands removes the active
+		// object while the rest of the selection survives. The inspector
+		// follows the active object, so dropping it would leave an empty
+		// inspector next to three highlighted rows.
+		new DeleteEntityCommand(_session.Scene!, first.Id).Execute();
+
+		Assert.DoesNotContain(first.Id, _session.Selection);
 		Assert.Equal(third.Id, _session.ActiveEntityId);
 	}
 

@@ -1616,9 +1616,13 @@ public sealed class EditorSession : IDisposable
 		if (ActiveEntityId is Guid active &&
 			Scene.Find(active) is null)
 		{
-			ActiveEntityId = _selection.Count == 1
-				? _selection.First()
-				: null;
+			// The active object can disappear without a selection
+			// command, for example when a scene edit outside the editor's
+			// own commands removes it. Leaving the role empty would show
+			// an empty inspector next to the highlighted rows that are
+			// still selected, so it moves to the last remaining object in
+			// scene order, the same replacement a toggle uses.
+			ActiveEntityId = LastSelectedInSceneOrder();
 		}
 
 		SelectionChanged?.Invoke(this);
