@@ -133,6 +133,10 @@ public sealed class UndoStack
 			return;
 		}
 
+		// Only the commands that actually leave the history move the saved
+		// depth, and a saved state that leaves it can no longer be reached.
+		int removed = _undo.Count - Capacity;
+
 		IEditorCommand[] retained = _undo
 			.Take(Capacity)
 			.Reverse()
@@ -147,7 +151,7 @@ public sealed class UndoStack
 
 		if (_savedDepth >= 0)
 		{
-			_savedDepth = Math.Max(-1, _savedDepth - retained.Length);
+			_savedDepth = Math.Max(-1, _savedDepth - removed);
 		}
 	}
 }
