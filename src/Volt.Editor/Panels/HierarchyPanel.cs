@@ -594,6 +594,8 @@ public sealed class HierarchyPanel : Panel
 				.Append(entity.Name)
 				.Append(':')
 				.Append(entity.ParentId)
+				.Append(':')
+				.Append(EditorIcons.ForEntity(entity))
 				.Append(';');
 		}
 

@@ -179,6 +179,11 @@ public sealed class InspectorPanel : Panel
 			_name.SetTextFromSource(entity.Name);
 		}
 
+		UiPalette palette = Context?.Theme.Palette ??
+			UiTheme.CreateDark().Palette;
+		_entityIcon.Icon = EditorIcons.ForEntity(entity);
+		_entityIcon.Color = EditorIcons.EntityColor(entity, palette);
+
 		// A box selection changes how many objects are selected without
 		// changing the object being edited.
 		UpdateSubtitle(entity);
