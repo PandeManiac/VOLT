@@ -63,15 +63,21 @@ reviewed or diffed on a machine with no display server, and
 `tests/Volt.Editor.Tests/EditorSnapshotTests.cs` asserts that a whole
 shell frame renders, encodes, and honours the interface scale.
 
-Two captures are also golden-image regression tests:
-`tests/Volt.Editor.Tests/GoldenSnapshotTests.cs` compares them against
-the PNG baselines in `tests/Volt.Editor.Tests/Baselines`, allowing a
-small per-channel difference and a fraction of a percent of differing
-pixels so a new runtime does not fail the build while a moved panel, a
-lost label, or a wrong colour does. After an intentional interface
-change, rewrite the baselines with
-`VOLT_UPDATE_SNAPSHOTS=1 dotnet test tests/Volt.Editor.Tests --filter
-GoldenSnapshotTests` and review the new images before committing them.
+Six captures are also golden-image regression tests:
+`tests/Volt.Editor.Tests/GoldenSnapshotTests.cs` compares each against a
+committed PNG, allowing a small per-channel difference and a fraction of
+a percent of differing pixels so a new runtime does not fail the build
+while a moved panel, a lost label, or a wrong colour does. The captures
+this guide publishes are compared against the images under
+`docs/images` rather than a private copy, so each interface state is
+stored once: the default workspace capture, for example, is compared
+against `docs/images/editor-workspace.png`. The rotate-and-snap capture is
+the only baseline kept in `tests/Volt.Editor.Tests/Baselines`, because the
+guide does not publish it. After an intentional interface change, rewrite
+the baselines with `VOLT_UPDATE_SNAPSHOTS=1 dotnet test
+tests/Volt.Editor.Tests --filter GoldenSnapshotTests` and review the new
+images before committing them; a baseline that is also a guide image is
+rewritten in place.
 
 `--snapshot-state` selects what a capture shows. `workspace` is the
 default: a temporary starter project with no selection. `authoring`
