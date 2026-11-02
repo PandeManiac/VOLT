@@ -35,6 +35,7 @@ public sealed class HierarchyPanel : Panel
 	private readonly HashSet<Guid> _known = [];
 
 	private string _signature = string.Empty;
+	private string _revealedSelection = string.Empty;
 	private string? _renderedScenePath;
 	private string _renderedFilter = string.Empty;
 	private bool _updating;
@@ -332,7 +333,10 @@ public sealed class HierarchyPanel : Panel
 
 		if (!force && signature == _signature)
 		{
-			SyncSelection();
+			// Nothing about the rows changed, so the author's scroll
+			// position is theirs to keep. Only a different selection is
+			// a request to bring a row back into view.
+			SyncSelection(revealSelection: false);
 			return;
 		}
 
@@ -392,7 +396,10 @@ public sealed class HierarchyPanel : Panel
 		_tree.IsVisible = !empty;
 		_search.IsVisible = true;
 
-		SyncSelection();
+		// A rebuilt tree keeps its selection, so the rows still show the
+		// same objects. Revealing follows a moved or newly selected row,
+		// which keeps a re-parented object in sight.
+		SyncSelection(revealSelection: true);
 		_updating = false;
 	}
 
@@ -465,7 +472,16 @@ public sealed class HierarchyPanel : Panel
 		}
 	}
 
-	private void SyncSelection()
+	/// <summary>
+	/// Mirrors the session's selection into the tree, scrolling rows
+	/// into view only when the selection is not already on screen.
+	/// </summary>
+	/// <param name="revealSelection">
+	/// True when the tree was rebuilt, so the selected rows may have
+	/// moved. False when only the scene's data changed, which must
+	/// leave the author's scroll position alone.
+	/// </param>
+	private void SyncSelection(bool revealSelection)
 	{
 		if (_updating)
 		{
@@ -474,6 +490,13 @@ public sealed class HierarchyPanel : Panel
 
 		_updating = true;
 
+		string selection = BuildSelectionSignature();
+		bool selectionChanged = !string.Equals(
+			selection,
+			_revealedSelection,
+			StringComparison.Ordinal);
+		_revealedSelection = selection;
+
 		List<TreeViewItem> selected = [];
 
 		foreach (Guid id in _session.Selection)
@@ -481,12 +504,28 @@ public sealed class HierarchyPanel : Panel
 			if (_items.TryGetValue(id, out TreeViewItem? item))
 			{
 				selected.Add(item);
-				_tree.Reveal(item);
+
+				if (revealSelection || selectionChanged)
+				{
+					_tree.Reveal(item);
+				}
 			}
 		}
 
 		_tree.SetSelection(selected);
 		_updating = false;
+	}
+
+	private string BuildSelectionSignature()
+	{
+		if (_session.Selection.Count == 0)
+		{
+			return string.Empty;
+		}
+
+		return string.Join(
+			'|',
+			_session.Selection.OrderBy(id => id));
 	}
 
 	private void OnTreeSelectionChanged(
