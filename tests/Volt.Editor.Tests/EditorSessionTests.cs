@@ -156,6 +156,25 @@ public sealed class EditorSessionTests : IDisposable
 	}
 
 	[Fact]
+	public void CreateScene_StopsTheCurrentPlaySessionAfterSceneCreationSucceeds()
+	{
+		_session.NewProject(Path.Combine(_root, "CreateScene"), "CreateScene");
+		SceneDocument originalScene = _session.Scene!;
+		_session.StartPlay();
+		PlaySession originalPlay = _session.Play!;
+
+		SceneDocument created = _session.CreateScene(
+			"Scenes/New.volt.scene.json",
+			"New")!;
+
+		Assert.NotSame(originalScene, created);
+		Assert.Same(created, _session.Scene);
+		Assert.Null(_session.Play);
+		Assert.Equal(PlayState.Stopped, _session.PlayState);
+		Assert.Equal(PlayState.Stopped, originalPlay.State);
+	}
+
+	[Fact]
 	public void NewProject_OpensStarterSceneThatReopensWithSameIds()
 	{
 		string projectRoot = Path.Combine(_root, "Game");

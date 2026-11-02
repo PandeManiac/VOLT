@@ -375,6 +375,7 @@ public sealed class EditorSession : IDisposable
 			EditorProject project = RequireProject();
 			SceneDocument scene = project.CreateScene(relativePath, name);
 
+			Stop();
 			SetScene(scene, relativePath, dirty: false);
 			Log($"Created scene '{scene.Name}'.");
 			created = scene;
