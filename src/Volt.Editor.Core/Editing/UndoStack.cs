@@ -19,6 +19,7 @@ public sealed class UndoStack
 {
 	private readonly Stack<IEditorCommand> _undo = [];
 	private readonly Stack<IEditorCommand> _redo = [];
+	private int _savedDepth = -1;
 
 	public UndoStack(int capacity = 256)
 	{
@@ -48,11 +49,38 @@ public sealed class UndoStack
 	public string? RedoDescription =>
 		_redo.Count > 0 ? _redo.Peek().Description : null;
 
+	/// <summary>
+	/// Whether the history sits exactly where the document was last
+	/// written, so the authored state matches what is on disk.
+	/// </summary>
+	/// <remarks>
+	/// Depth alone cannot answer this after a divergent edit, so an
+	/// execute whose redo region held the saved depth forgets it: the
+	/// document moved on rather than returning to the written state.
+	/// </remarks>
+	public bool IsAtSavedDepth =>
+		_savedDepth >= 0 && _savedDepth == _undo.Count;
+
+	/// <summary>
+	/// Records the current depth as the state on disk.
+	/// </summary>
+	public void MarkSaved()
+	{
+		_savedDepth = _undo.Count;
+	}
+
 	public void Execute(IEditorCommand command)
 	{
 		ArgumentNullException.ThrowIfNull(command);
 
 		command.Execute();
+
+		// A new command replaces the redo region, so a saved depth that
+		// lived there is gone even if the count happens to match again.
+		if (_savedDepth > _undo.Count)
+		{
+			_savedDepth = -1;
+		}
 
 		_undo.Push(command);
 		_redo.Clear();
@@ -94,6 +122,7 @@ public sealed class UndoStack
 	{
 		_undo.Clear();
 		_redo.Clear();
+		_savedDepth = -1;
 		Changed?.Invoke(this);
 	}
 
@@ -114,6 +143,11 @@ public sealed class UndoStack
 		foreach (IEditorCommand command in retained)
 		{
 			_undo.Push(command);
+		}
+
+		if (_savedDepth >= 0)
+		{
+			_savedDepth = Math.Max(-1, _savedDepth - retained.Length);
 		}
 	}
 }

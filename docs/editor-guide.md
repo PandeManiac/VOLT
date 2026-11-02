@@ -416,6 +416,12 @@ continues, Cancel leaves it open and dirty, and closing the window uses
 the same prompt instead of discarding the scene silently. **File →
 Close Project** returns to the start screen through the same guard.
 
+The dirty marker follows the history instead of latching on the first
+change. Undoing back to the state that was last saved clears it, and a
+redo or a new edit sets it again. An edit made at the same history depth
+as the saved state still counts as a change, because the history no
+longer holds what was written.
+
 ## Play Mode
 
 The toolbar's Play button serializes the authored scene, loads that

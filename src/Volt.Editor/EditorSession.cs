@@ -487,6 +487,7 @@ public sealed class EditorSession : IDisposable
 				"No scene path is selected.");
 
 		project.SaveScene(scene, path);
+		Undo.MarkSaved();
 		IsSceneDirty = false;
 		SceneChanged?.Invoke(this);
 		SetStatus($"Saved {Path.GetFileName(path)}");
@@ -502,6 +503,7 @@ public sealed class EditorSession : IDisposable
 
 		project.SaveScene(scene, relativePath);
 		ScenePath = ProjectAssetCatalog.NormalizeId(relativePath);
+		Undo.MarkSaved();
 		IsSceneDirty = false;
 		SceneChanged?.Invoke(this);
 		Log($"Saved scene '{scene.Name}'.");
@@ -533,6 +535,7 @@ public sealed class EditorSession : IDisposable
 			ScenePath is not null)
 		{
 			project.SaveScene(Scene, ScenePath);
+			Undo.MarkSaved();
 			IsSceneDirty = false;
 		}
 
@@ -585,6 +588,7 @@ public sealed class EditorSession : IDisposable
 			ScenePath is not null)
 		{
 			project.SaveScene(Scene, ScenePath);
+			Undo.MarkSaved();
 			IsSceneDirty = false;
 		}
 
@@ -650,6 +654,7 @@ public sealed class EditorSession : IDisposable
 			ScenePath is not null)
 		{
 			project.SaveScene(Scene, ScenePath);
+			Undo.MarkSaved();
 			IsSceneDirty = false;
 		}
 
@@ -685,6 +690,7 @@ public sealed class EditorSession : IDisposable
 			ScenePath is not null)
 		{
 			project.SaveScene(Scene, ScenePath);
+			Undo.MarkSaved();
 			IsSceneDirty = false;
 		}
 
@@ -1623,6 +1629,7 @@ public sealed class EditorSession : IDisposable
 		}
 
 		ValidateSelection();
+		RefreshDirtyFromHistory();
 		SetStatus("Undo");
 	}
 
@@ -1634,7 +1641,25 @@ public sealed class EditorSession : IDisposable
 		}
 
 		ValidateSelection();
+		RefreshDirtyFromHistory();
 		SetStatus("Redo");
+	}
+
+	/// <summary>
+	/// Recomputes the dirty mark from where the history sits, so undoing
+	/// back to the saved state leaves nothing to save.
+	/// </summary>
+	private void RefreshDirtyFromHistory()
+	{
+		bool dirty = !Undo.IsAtSavedDepth;
+
+		if (dirty == IsSceneDirty)
+		{
+			return;
+		}
+
+		IsSceneDirty = dirty;
+		SceneChanged?.Invoke(this);
 	}
 
 	public void StartPlay()
@@ -1856,6 +1881,9 @@ public sealed class EditorSession : IDisposable
 		_selection.Clear();
 		ActiveEntityId = null;
 		Undo.Clear();
+
+		// The scene on disk is the state at the bottom of its history.
+		Undo.MarkSaved();
 
 		Scene.Changed += OnSceneDocumentChanged;
 
