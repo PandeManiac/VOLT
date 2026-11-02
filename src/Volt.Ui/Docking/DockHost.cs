@@ -42,6 +42,15 @@ public sealed class DockHost : Widget
 	public DockLayout Layout { get; }
 
 	/// <summary>
+	/// Gets a cached panel widget, including one whose tab is closed.
+	/// </summary>
+	public Widget? GetCachedContent(string panelId)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(panelId);
+		return _contents.GetValueOrDefault(panelId);
+	}
+
+	/// <summary>
 	/// Requests a structural refresh, for example after a panel title
 	/// changed without a layout change.
 	/// </summary>

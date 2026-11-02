@@ -490,24 +490,35 @@ public sealed class EditorShell : Panel
 		_theme = UiTheme.CreateDark(dpiScale).WithUiScale(_uiScale);
 	}
 
+	private T? FindPanelContent<T>(string panelId) where T : Widget
+	{
+		if (_dock is null)
+		{
+			return null;
+		}
+
+		return FindDescendant<T>(_dock) ??
+			_dock.GetCachedContent(panelId) as T;
+	}
+
 	private void RebuildChrome()
 	{
 		if (_dock is not null)
 		{
 			_projectPanelState =
-				FindDescendant<ProjectPanel>(_dock)?.CaptureState() ??
+				FindPanelContent<ProjectPanel>("project")?.CaptureState() ??
 				_projectPanelState;
 
 			_ecsPanelState =
-				FindDescendant<EcsInspectorPanel>(_dock)?.CaptureState() ??
+				FindPanelContent<EcsInspectorPanel>("ecs")?.CaptureState() ??
 				_ecsPanelState;
 
 			_hierarchyPanelState =
-				FindDescendant<HierarchyPanel>(_dock)?.CaptureState() ??
+				FindPanelContent<HierarchyPanel>("hierarchy")?.CaptureState() ??
 				_hierarchyPanelState;
 
 			_inspectorPanelState =
-				FindDescendant<InspectorPanel>(_dock)?.CaptureState() ??
+				FindPanelContent<InspectorPanel>("inspector")?.CaptureState() ??
 				_inspectorPanelState;
 		}
 

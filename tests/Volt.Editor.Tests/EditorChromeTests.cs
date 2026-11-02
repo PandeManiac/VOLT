@@ -141,8 +141,19 @@ public sealed class EditorChromeTests : IDisposable
 		list.SetSelection([main]);
 		Paint(0.4);
 
+		Assert.True(shell.Layout.ClosePanel("project"));
+		Paint(0.45);
+
 		shell.ApplyUiScale(1.25f);
 		Paint(0.5);
+
+		MenuItem projectItem = shell.MenuBarView.Menus
+			.Single(menu => menu.Label == "Window")
+			.Children.Single(item => item.Label == "Project");
+
+		Assert.False(projectItem.IsChecked);
+		projectItem.Action!.Invoke();
+		Paint(0.6);
 
 		ProjectPanel after = Descendants(shell)
 			.OfType<ProjectPanel>()
