@@ -243,7 +243,22 @@ public sealed class HierarchyPanel : Panel
 
 	private void CreateEntity()
 	{
+		// A filter typed for an earlier task would hide the object the
+		// author just made, which reads as a create that did nothing. The
+		// project browser clears its search before creating a folder for
+		// the same reason.
+		ClearFilter();
 		Guard(() => _session.CreateEntity(UniqueName("GameObject")));
+	}
+
+	private void ClearFilter()
+	{
+		if (_search.Text.Length == 0)
+		{
+			return;
+		}
+
+		_search.Text = string.Empty;
 	}
 
 	private void CreatePrimitive(
@@ -251,6 +266,8 @@ public sealed class HierarchyPanel : Panel
 		string mesh,
 		Guid? parentId = null)
 	{
+		ClearFilter();
+
 		Guard(() =>
 		{
 			SceneDocument scene = _session.Scene ??
