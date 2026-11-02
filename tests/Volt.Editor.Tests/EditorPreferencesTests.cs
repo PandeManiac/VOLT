@@ -1,15 +1,17 @@
+using Volt.Editor.Core.Scenes;
+
 namespace Volt.Editor.Tests;
 
 /// <summary>
-/// Covers editor settings that belong to the project that is open, not
-/// to the project the executable happened to start with.
+/// Covers the settings file itself: what is written for a project, and
+/// when. Each project keeps its own preferences, so switching projects
+/// must not silently drop the changes made in the one being left.
 /// </summary>
 public sealed class EditorPreferencesTests : IDisposable
 {
 	private readonly string _root = Path.Combine(
 		Path.GetTempPath(),
 		$"volt-preferences-{Guid.NewGuid():N}");
-
 	private readonly EditorSession _session = new();
 
 	public EditorPreferencesTests()
@@ -33,71 +35,12 @@ public sealed class EditorPreferencesTests : IDisposable
 	}
 
 	[Fact]
-	public void OpeningProject_LoadsItsSavedSettings()
-	{
-		string projectRoot = Path.Combine(_root, "Game");
-
-		_session.NewProject(projectRoot, "Game");
-		WriteSettings(projectRoot, new EditorSettings
-		{
-			TargetFrameRate = 144,
-			InterfaceScale = 1.25f,
-			WindowWidth = 1280,
-			WindowHeight = 720,
-			WindowX = -120,
-			WindowY = 80
-		});
-
-		_session.CloseProject();
-
-		using EditorShell shell = new(_session);
-		using EditorPreferences preferences = new(
-			_session,
-			shell,
-			new EditorSettings());
-
-		Assert.Equal(60, _session.TargetFrameRate);
-		Assert.Equal(1f, shell.UiScale, 3);
-
-		_session.OpenProject(projectRoot);
-
-		// The scale waits for input dispatch to finish, then rebuilds.
-		shell.Update(0.016);
-
-		Assert.Equal(144, _session.TargetFrameRate);
-		Assert.Equal(1.25f, shell.UiScale, 3);
-		Assert.Equal(1280, preferences.Current.WindowWidth);
-		Assert.Equal(720, preferences.Current.WindowHeight);
-		Assert.Equal(-120, preferences.Current.WindowX);
-		Assert.Equal(80, preferences.Current.WindowY);
-		Assert.Equal(1, preferences.ProjectRevision);
-	}
-
-	[Fact]
-	public void OpeningAnotherProject_SwapsToThatProjectsSettings()
+	public void SwitchingProjectsSavesTheDepartingProjectsSettings()
 	{
 		string first = Path.Combine(_root, "First");
 		string second = Path.Combine(_root, "Second");
 
 		_session.NewProject(first, "First");
-		WriteSettings(first, new EditorSettings
-		{
-			TargetFrameRate = 144,
-			InterfaceScale = 1.5f,
-			WindowWidth = 1280,
-			WindowHeight = 720
-		});
-
-		_session.NewProject(second, "Second");
-		WriteSettings(second, new EditorSettings
-		{
-			TargetFrameRate = 30,
-			InterfaceScale = 0.75f,
-			WindowWidth = 800,
-			WindowHeight = 600
-		});
-
-		_session.CloseProject();
 
 		using EditorShell shell = new(_session);
 		using EditorPreferences preferences = new(
@@ -105,38 +48,32 @@ public sealed class EditorPreferencesTests : IDisposable
 			shell,
 			new EditorSettings());
 
-		_session.OpenProject(first);
-		shell.Update(0.016);
+		_session.TargetFrameRate = 144;
+		_session.ConsoleShowsInfo = false;
 
-		Assert.Equal(144, _session.TargetFrameRate);
-		Assert.Equal(1.5f, shell.UiScale, 3);
+		_session.NewProject(second, "Second");
 
-		_session.OpenProject(second);
-		shell.Update(0.016);
+		// The project that was opened takes its own settings, which for a
+		// folder with no file yet are the defaults.
+		Assert.Equal(
+			EditorSettings.DefaultTargetFrameRate,
+			_session.TargetFrameRate);
+		Assert.True(_session.ConsoleShowsInfo);
 
-		Assert.Equal(30, _session.TargetFrameRate);
-		Assert.Equal(0.75f, shell.UiScale, 3);
-		Assert.Equal(800, preferences.Current.WindowWidth);
-		Assert.Equal(600, preferences.Current.WindowHeight);
+		// The project that was left kept what the author changed.
+		EditorSettings saved = EditorPreferences.Load(first);
+
+		Assert.Equal(144, saved.TargetFrameRate);
+		Assert.False(saved.ConsoleShowsInfo);
+		Assert.True(saved.ConsoleShowsWarnings);
 	}
 
 	[Fact]
-	public void Save_WritesTheOpenProjectRatherThanTheStartupState()
+	public void Save_WritesTheLiveValuesForTheOpenProject()
 	{
-		string projectRoot = Path.Combine(_root, "Game");
+		string project = Path.Combine(_root, "Only");
 
-		_session.NewProject(projectRoot, "Game");
-		WriteSettings(projectRoot, new EditorSettings
-		{
-			TargetFrameRate = 144,
-			InterfaceScale = 1.25f,
-			WindowWidth = 1280,
-			WindowHeight = 720,
-			WindowX = -120,
-			WindowY = 80
-		});
-
-		_session.CloseProject();
+		_session.NewProject(project, "Only");
 
 		using EditorShell shell = new(_session);
 		using EditorPreferences preferences = new(
@@ -144,33 +81,15 @@ public sealed class EditorPreferencesTests : IDisposable
 			shell,
 			new EditorSettings());
 
-		_session.OpenProject(projectRoot);
-		shell.Update(0.016);
+		_session.ConsoleShowsWarnings = false;
+		preferences.Save(1280, 720, 40, 60);
 
-		_session.TargetFrameRate = 30;
-		shell.ApplyUiScale(1.5f);
+		EditorSettings saved = EditorPreferences.Load(project);
 
-		preferences.Save(1000, 700, -60, 40);
-
-		EditorSettings stored = EditorPreferences.Load(projectRoot);
-
-		Assert.Equal(30, stored.TargetFrameRate);
-		Assert.Equal(1.5f, stored.InterfaceScale, 3);
-		Assert.Equal(1000, stored.WindowWidth);
-		Assert.Equal(700, stored.WindowHeight);
-		Assert.Equal(-60, stored.WindowX);
-		Assert.Equal(40, stored.WindowY);
-	}
-
-	private static void WriteSettings(
-		string projectRoot,
-		EditorSettings settings)
-	{
-		string path = EditorPreferences.SettingsPath(projectRoot);
-
-		Directory.CreateDirectory(
-			Path.GetDirectoryName(path) ?? projectRoot);
-
-		File.WriteAllText(path, settings.Serialize());
+		Assert.False(saved.ConsoleShowsWarnings);
+		Assert.Equal(1280, saved.WindowWidth);
+		Assert.Equal(720, saved.WindowHeight);
+		Assert.Equal(40, saved.WindowX);
+		Assert.Equal(60, saved.WindowY);
 	}
 }

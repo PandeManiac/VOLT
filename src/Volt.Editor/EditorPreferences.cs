@@ -26,6 +26,7 @@ internal sealed class EditorPreferences : IDisposable
 
 	private readonly EditorSession _session;
 	private readonly EditorShell _shell;
+	private string? _loadedRoot;
 	private bool _disposed;
 
 	public EditorPreferences(
@@ -40,6 +41,7 @@ internal sealed class EditorPreferences : IDisposable
 		_session = session;
 		_shell = shell;
 		Current = initial.Normalize();
+		_loadedRoot = session.Project?.RootPath;
 
 		_session.ProjectChanged += OnProjectChanged;
 	}
@@ -119,20 +121,11 @@ internal sealed class EditorPreferences : IDisposable
 			return;
 		}
 
-		EditorSettings settings = new()
-		{
-			TargetFrameRate = _session.TargetFrameRate,
-			InterfaceScale = _shell.UiScale,
-			ConsoleShowsInfo = _session.ConsoleShowsInfo,
-			ConsoleShowsWarnings = _session.ConsoleShowsWarnings,
-			ConsoleShowsErrors = _session.ConsoleShowsErrors,
-			WindowWidth = windowWidth,
-			WindowHeight = windowHeight,
-			WindowX = windowX,
-			WindowY = windowY
-		};
+		Write(
+			project.RootPath,
+			Capture(windowWidth, windowHeight, windowX, windowY));
 
-		Write(project.RootPath, settings);
+		_loadedRoot = project.RootPath;
 	}
 
 	public void Dispose()
@@ -155,7 +148,23 @@ internal sealed class EditorPreferences : IDisposable
 			return;
 		}
 
+		// Preferences are saved per project, and the shutdown save writes
+		// whichever project is open then, so leaving a project must not
+		// discard what the author changed while it was open.
+		if (_loadedRoot is string previous &&
+			!string.Equals(previous, project.RootPath, StringComparison.Ordinal))
+		{
+			Write(
+				previous,
+				Capture(
+					Current.WindowWidth,
+					Current.WindowHeight,
+					Current.WindowX,
+					Current.WindowY));
+		}
+
 		Current = Load(project.RootPath);
+		_loadedRoot = project.RootPath;
 		ProjectRevision++;
 
 		_session.TargetFrameRate = Current.TargetFrameRate;
@@ -163,6 +172,26 @@ internal sealed class EditorPreferences : IDisposable
 		_session.ConsoleShowsWarnings = Current.ConsoleShowsWarnings;
 		_session.ConsoleShowsErrors = Current.ConsoleShowsErrors;
 		_shell.RequestUiScale(Current.InterfaceScale);
+	}
+
+	private EditorSettings Capture(
+		int windowWidth,
+		int windowHeight,
+		int? windowX,
+		int? windowY)
+	{
+		return new EditorSettings
+		{
+			TargetFrameRate = _session.TargetFrameRate,
+			InterfaceScale = _shell.UiScale,
+			ConsoleShowsInfo = _session.ConsoleShowsInfo,
+			ConsoleShowsWarnings = _session.ConsoleShowsWarnings,
+			ConsoleShowsErrors = _session.ConsoleShowsErrors,
+			WindowWidth = windowWidth,
+			WindowHeight = windowHeight,
+			WindowX = windowX,
+			WindowY = windowY
+		};
 	}
 
 	private static void Write(string projectRoot, EditorSettings settings)
