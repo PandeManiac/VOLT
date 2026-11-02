@@ -126,6 +126,39 @@ public sealed class MultiComponentStructureTests : IDisposable
 	}
 
 	[Fact]
+	public void TheAddBarFollowsTheSelectionWhenTheActiveObjectStaysTheSame()
+	{
+		EditorComponentDescriptor descriptor =
+			ComponentCatalog.Default.All.Single(candidate =>
+				candidate.Create() is MeshRendererData);
+
+		SceneEntity has = _session.CreateEntity("Has")!;
+		SceneEntity lacks = _session.CreateEntity("Lacks")!;
+
+		_session.AddComponent(has.Id, descriptor.TypeId);
+		_session.SelectMany([has.Id, lacks.Id], has.Id);
+
+		using InspectorPanel inspector = new(_session);
+
+		_context.Add(inspector);
+		Paint(0.0);
+
+		Dropdown types = Descendants(inspector)
+			.OfType<Dropdown>()
+			.Single();
+
+		Assert.Contains(descriptor.DisplayName, types.Items);
+
+		// Toggling off the row that needed the component keeps the active
+		// object unchanged, but there is nothing left to add.
+		_session.Select(lacks.Id, additive: true);
+		Paint(0.1);
+
+		Assert.Equal(has.Id, _session.ActiveEntityId);
+		Assert.DoesNotContain(descriptor.DisplayName, types.Items);
+	}
+
+	[Fact]
 	public void TheAddBarGivesTheComponentToEverySelectedObject()
 	{
 		SceneEntity first = _session.CreateEntity("First")!;

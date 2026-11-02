@@ -21,6 +21,7 @@ public sealed class InspectorPanel : Panel
 	private readonly Dropdown _componentTypes;
 	private readonly Button _addButton;
 	private readonly List<EditorComponentDescriptor> _addableComponents = [];
+	private readonly HashSet<Guid> _addableSelection = [];
 	private readonly EmptyStateView _empty;
 	private readonly IconView _entityIcon;
 	private readonly Label _entitySubtitle;
@@ -219,6 +220,15 @@ public sealed class InspectorPanel : Panel
 		// changing the object being edited.
 		UpdateSubtitle(entity);
 
+		// The add list follows the whole selection, not only the active
+		// object. Toggling another row off can remove the last object
+		// that was missing a component, so the list has to shrink even
+		// though the inspector stayed on the same object.
+		if (!_updating && !SelectionMatchesAddableState())
+		{
+			RebuildAddableComponents();
+		}
+
 		_grid.RefreshValues();
 	}
 
@@ -252,6 +262,7 @@ public sealed class InspectorPanel : Panel
 			_entitySubtitle.Text = string.Empty;
 			_componentBar.ClearChildren();
 			_addableComponents.Clear();
+			_addableSelection.Clear();
 			_componentTypes.SetItems(Array.Empty<string>());
 			_componentTypes.IsEnabled = false;
 			_addButton.IsEnabled = false;
@@ -319,6 +330,27 @@ public sealed class InspectorPanel : Panel
 
 		_componentTypes.IsEnabled = _addableComponents.Count > 0;
 		_addButton.IsEnabled = _addableComponents.Count > 0;
+
+		_addableSelection.Clear();
+		_addableSelection.UnionWith(_session.Selection);
+	}
+
+	private bool SelectionMatchesAddableState()
+	{
+		if (_addableSelection.Count != _session.Selection.Count)
+		{
+			return false;
+		}
+
+		foreach (Guid id in _session.Selection)
+		{
+			if (!_addableSelection.Contains(id))
+			{
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	/// <summary>
