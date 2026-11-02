@@ -522,6 +522,46 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void UiScale_RebuildPreservesHierarchyScrollPosition()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+
+		for (int index = 0; index < 60; index++)
+		{
+			_session.CreateEntity($"Object {index}");
+		}
+
+		HierarchyPanel hierarchy = Descendants(shell)
+			.OfType<HierarchyPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView tree = Descendants(hierarchy).OfType<TreeView>().Single();
+
+		Assert.True(tree.MaximumScroll > 0f);
+
+		_context.Wheel(new UiPoint(0f, -3f), tree.GlobalContentBounds.Center);
+		Paint(0.2);
+
+		float scrolled = tree.ScrollOffset;
+
+		Assert.True(scrolled > 0f, "The hierarchy must scroll.");
+
+		shell.ApplyUiScale(1.25f);
+		Paint(0.3);
+
+		HierarchyPanel rebuilt = Descendants(shell)
+			.OfType<HierarchyPanel>()
+			.Single();
+
+		TreeView treeAfter = Descendants(rebuilt).OfType<TreeView>().Single();
+
+		Assert.NotSame(tree, treeAfter);
+		Assert.Equal(scrolled, treeAfter.ScrollOffset, 1);
+	}
+
+	[Fact]
 	public void UiScale_RebuildPreservesHierarchyExpansion()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);

@@ -155,6 +155,7 @@ public sealed class HierarchyPanel : Panel
 			// restoring it must not open a row the author had closed.
 			_revealedSelection = BuildSelectionSignature();
 			_search.Text = state.Search;
+			_tree.SetScrollOffset(state.ScrollOffset);
 		}
 
 		RefreshStructure(force: true);
@@ -334,6 +335,7 @@ public sealed class HierarchyPanel : Panel
 		{
 			ScenePath = _session.ScenePath ?? string.Empty,
 			Search = _search.Text,
+			ScrollOffset = _tree.ScrollOffset,
 			Expanded = [.. _expanded],
 			Known = [.. _known]
 		};

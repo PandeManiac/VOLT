@@ -31,6 +31,7 @@ public sealed class TreeView : Widget
 	private bool _flattenDirty = true;
 	private float _scrollOffset;
 	private float _maximumScroll;
+	private float? _pendingScrollOffset;
 	private float _rowHeight;
 	private int _hoveredRow = -1;
 	private TreeViewItem? _selectionAnchor;
@@ -225,6 +226,33 @@ public sealed class TreeView : Widget
 	}
 
 	/// <summary>
+	/// Restores a scroll position taken from a tree that was replaced,
+	/// for example after the interface scale rebuilt the panel.
+	/// </summary>
+	/// <remarks>
+	/// The maximum scroll is only known once the tree has been arranged,
+	/// so a request made before the first layout is held and clamped
+	/// when layout runs. An explicit reveal or wheel event in between
+	/// cancels it, because the author has already moved somewhere else.
+	/// </remarks>
+	public void SetScrollOffset(float offset)
+	{
+		if (!float.IsFinite(offset))
+		{
+			return;
+		}
+
+		_pendingScrollOffset = MathF.Max(0f, offset);
+
+		if (_pendingScrollOffset is float pending &&
+			ContentBounds.Height > 0f)
+		{
+			_pendingScrollOffset = null;
+			SetScroll(pending);
+		}
+	}
+
+	/// <summary>
 	/// Scrolls a row to the middle of the viewport without opening a
 	/// parent the author closed.
 	/// </summary>
@@ -275,6 +303,14 @@ public sealed class TreeView : Widget
 	{
 		Flatten();
 		UpdateMaximumScroll();
+
+		// A restore requested before the first layout is applied here,
+		// where the maximum scroll is finally known.
+		if (_pendingScrollOffset is float pending)
+		{
+			_pendingScrollOffset = null;
+			SetScroll(pending);
+		}
 	}
 
 	protected override void RenderSelf(UiDrawList drawList)
@@ -922,6 +958,10 @@ public sealed class TreeView : Widget
 
 	private void SetScroll(float offset)
 	{
+		// Any explicit scroll request wins over a restored position that
+		// has not been applied yet.
+		_pendingScrollOffset = null;
+
 		offset = Math.Clamp(offset, 0f, _maximumScroll);
 
 		if (offset == _scrollOffset)
