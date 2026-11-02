@@ -103,6 +103,26 @@ public sealed class EditorSettings
 	public float InterfaceScale { get; set; } = DefaultInterfaceScale;
 
 	/// <summary>
+	/// Gets or sets whether the console lists information messages.
+	/// </summary>
+	/// <remarks>
+	/// A filtered console is a reading of the log the author chose, so it
+	/// is saved with the workspace; the toolbar's other view preferences
+	/// are already persisted here.
+	/// </remarks>
+	public bool ConsoleShowsInfo { get; set; } = true;
+
+	/// <summary>
+	/// Gets or sets whether the console lists warnings.
+	/// </summary>
+	public bool ConsoleShowsWarnings { get; set; } = true;
+
+	/// <summary>
+	/// Gets or sets whether the console lists errors.
+	/// </summary>
+	public bool ConsoleShowsErrors { get; set; } = true;
+
+	/// <summary>
 	/// Gets or sets the logical width the editor window reopens at.
 	/// </summary>
 	public int WindowWidth { get; set; } = DefaultWindowWidth;
@@ -208,6 +228,9 @@ public sealed class EditorSettings
 				? TargetFrameRate
 				: DefaultTargetFrameRate,
 			InterfaceScale = ClampInterfaceScale(InterfaceScale),
+			ConsoleShowsInfo = ConsoleShowsInfo,
+			ConsoleShowsWarnings = ConsoleShowsWarnings,
+			ConsoleShowsErrors = ConsoleShowsErrors,
 			WindowWidth = ClampWindowWidth(WindowWidth),
 			WindowHeight = ClampWindowHeight(WindowHeight),
 			WindowX = windowX,

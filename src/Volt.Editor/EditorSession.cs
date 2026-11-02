@@ -165,6 +165,9 @@ public sealed class EditorSession : IDisposable
 	private bool _localTransform = true;
 	private bool _gridSnapping;
 	private float _snapStep = 0.25f;
+	private bool _consoleShowsInfo = true;
+	private bool _consoleShowsWarnings = true;
+	private bool _consoleShowsErrors = true;
 	private int _targetFrameRate = EditorSettings.DefaultTargetFrameRate;
 
 	public EditorTool Tool
@@ -231,17 +234,56 @@ public sealed class EditorSession : IDisposable
 	/// and a console that forgot what the author had hidden would bring
 	/// the noise straight back.
 	/// </remarks>
-	public bool ConsoleShowsInfo { get; set; } = true;
+	public bool ConsoleShowsInfo
+	{
+		get => _consoleShowsInfo;
+		set
+		{
+			if (_consoleShowsInfo == value)
+			{
+				return;
+			}
+
+			_consoleShowsInfo = value;
+			SettingsChanged?.Invoke(this);
+		}
+	}
 
 	/// <summary>
 	/// Gets or sets whether the console lists warnings.
 	/// </summary>
-	public bool ConsoleShowsWarnings { get; set; } = true;
+	public bool ConsoleShowsWarnings
+	{
+		get => _consoleShowsWarnings;
+		set
+		{
+			if (_consoleShowsWarnings == value)
+			{
+				return;
+			}
+
+			_consoleShowsWarnings = value;
+			SettingsChanged?.Invoke(this);
+		}
+	}
 
 	/// <summary>
 	/// Gets or sets whether the console lists errors.
 	/// </summary>
-	public bool ConsoleShowsErrors { get; set; } = true;
+	public bool ConsoleShowsErrors
+	{
+		get => _consoleShowsErrors;
+		set
+		{
+			if (_consoleShowsErrors == value)
+			{
+				return;
+			}
+
+			_consoleShowsErrors = value;
+			SettingsChanged?.Invoke(this);
+		}
+	}
 
 	public float SnapStep
 	{

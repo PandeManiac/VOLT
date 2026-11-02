@@ -194,6 +194,55 @@ public sealed class EditorSettingsTests
 	}
 
 	[Fact]
+	public void Serialize_RoundTripsConsoleFilters()
+	{
+		EditorSettings settings = new()
+		{
+			ConsoleShowsInfo = false,
+			ConsoleShowsWarnings = true,
+			ConsoleShowsErrors = false
+		};
+
+		EditorSettings restored = EditorSettings.Deserialize(
+			settings.Serialize());
+
+		Assert.False(restored.ConsoleShowsInfo);
+		Assert.True(restored.ConsoleShowsWarnings);
+		Assert.False(restored.ConsoleShowsErrors);
+	}
+
+	[Fact]
+	public void Deserialize_DefaultsConsoleFiltersToVisible()
+	{
+		EditorSettings restored = EditorSettings.Deserialize(
+			"{ \"version\": 1, \"targetFrameRate\": 60 }");
+
+		Assert.True(restored.ConsoleShowsInfo);
+		Assert.True(restored.ConsoleShowsWarnings);
+		Assert.True(restored.ConsoleShowsErrors);
+	}
+
+	[Fact]
+	public void Session_ConsoleFiltersFireSettingsChanged()
+	{
+		using EditorSession session = new();
+
+		int changed = 0;
+		session.SettingsChanged += _ => changed++;
+
+		session.ConsoleShowsInfo = false;
+		session.ConsoleShowsWarnings = false;
+
+		Assert.Equal(2, changed);
+
+		// Re-applying the same choice is not a change, so a settings
+		// write cannot be triggered by a panel redrawing itself.
+		session.ConsoleShowsInfo = false;
+
+		Assert.Equal(2, changed);
+	}
+
+	[Fact]
 	public void Session_TargetFrameRateFiresSettingsChanged()
 	{
 		using EditorSession session = new();
