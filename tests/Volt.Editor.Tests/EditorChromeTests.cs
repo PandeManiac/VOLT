@@ -490,6 +490,80 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void UiScale_RebuildPreservesHierarchySearch()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		HierarchyPanel hierarchy = Descendants(shell)
+			.OfType<HierarchyPanel>()
+			.Single();
+		TextField search = Descendants(hierarchy)
+			.OfType<TextField>()
+			.Single(field => field.Placeholder == "Search objects");
+
+		search.Text = "NoSuchObject";
+		Paint(0.2);
+
+		shell.ApplyUiScale(1.25f);
+		Paint(0.3);
+
+		HierarchyPanel rebuilt = Descendants(shell)
+			.OfType<HierarchyPanel>()
+			.Single();
+
+		TextField searchAfter = Descendants(rebuilt)
+			.OfType<TextField>()
+			.Single(field => field.Placeholder == "Search objects");
+
+		TreeView tree = Descendants(rebuilt).OfType<TreeView>().Single();
+
+		Assert.NotSame(hierarchy, rebuilt);
+		Assert.Equal("NoSuchObject", searchAfter.Text);
+		Assert.Empty(tree.Roots);
+	}
+
+	[Fact]
+	public void UiScale_RebuildPreservesHierarchyExpansion()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneEntity parent = _session.CreateEntity("Parent")!;
+		_session.CreateEntity("Child", parent.Id);
+
+		// The parent is the object being edited, so revealing the
+		// selection after the rebuild does not need to open it again.
+		_session.Select(parent.Id);
+
+		HierarchyPanel hierarchy = Descendants(shell)
+			.OfType<HierarchyPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView tree = Descendants(hierarchy).OfType<TreeView>().Single();
+		TreeViewItem parentRow = tree.Roots.Single(item =>
+			item.Tag is Guid id && id == parent.Id);
+
+		Assert.True(parentRow.IsExpanded);
+
+		parentRow.IsExpanded = false;
+		tree.Refresh();
+		Paint(0.2);
+
+		shell.ApplyUiScale(1.25f);
+		Paint(0.3);
+
+		HierarchyPanel rebuilt = Descendants(shell)
+			.OfType<HierarchyPanel>()
+			.Single();
+
+		TreeView treeAfter = Descendants(rebuilt).OfType<TreeView>().Single();
+		TreeViewItem parentAfter = treeAfter.Roots.Single(item =>
+			item.Tag is Guid id && id == parent.Id);
+
+		Assert.NotSame(hierarchy, rebuilt);
+		Assert.False(parentAfter.IsExpanded);
+	}
+
+	[Fact]
 	public void VisiblePanels_EachPaintGeometry()
 	{
 		// A panel that paints nothing is a blank rectangle; the whole

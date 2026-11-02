@@ -46,6 +46,7 @@ public sealed class EditorShell : Panel
 	private readonly string _defaultProjectPath;
 	private ProjectPanelState? _projectPanelState;
 	private EcsInspectorPanelState? _ecsPanelState;
+	private HierarchyPanelState? _hierarchyPanelState;
 
 	private readonly Dictionary<EditorTool, IconButton> _toolButtons = [];
 	private readonly Dictionary<PanelTab, MenuItem> _windowMenuItems = [];
@@ -489,6 +490,10 @@ public sealed class EditorShell : Panel
 			_ecsPanelState =
 				FindDescendant<EcsInspectorPanel>(_dock)?.CaptureState() ??
 				_ecsPanelState;
+
+			_hierarchyPanelState =
+				FindDescendant<HierarchyPanel>(_dock)?.CaptureState() ??
+				_hierarchyPanelState;
 		}
 
 		for (int index = Children.Count - 1; index >= 0; index--)
@@ -559,7 +564,7 @@ public sealed class EditorShell : Panel
 
 	private Widget CreateHierarchyPanel()
 	{
-		HierarchyPanel hierarchy = new(_session);
+		HierarchyPanel hierarchy = new(_session, _hierarchyPanelState);
 
 		hierarchy.RenameRequested += BeginRename;
 		return hierarchy;

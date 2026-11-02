@@ -47,6 +47,11 @@ public sealed class HierarchyPanel : Panel
 	public event Action? RenameRequested;
 
 	public HierarchyPanel(EditorSession session)
+		: this(session, state: null)
+	{
+	}
+
+	internal HierarchyPanel(EditorSession session, HierarchyPanelState? state)
 	{
 		ArgumentNullException.ThrowIfNull(session);
 		_session = session;
@@ -131,6 +136,22 @@ public sealed class HierarchyPanel : Panel
 		stack.Add(_emptyHost);
 
 		Add(stack);
+
+		// A rebuild of the same scene starts where the author left off:
+		// the saved filter and expansion are installed before the first
+		// structure pass, and the rendered scene path is already current
+		// so the restore is not mistaken for a scene switch.
+		if (state is not null &&
+			string.Equals(
+				state.ScenePath,
+				_session.ScenePath,
+				StringComparison.OrdinalIgnoreCase))
+		{
+			_renderedScenePath = _session.ScenePath;
+			_expanded.UnionWith(state.Expanded);
+			_known.UnionWith(state.Known);
+			_search.Text = state.Search;
+		}
 
 		RefreshStructure(force: true);
 		UpdateActionStates();
@@ -286,6 +307,32 @@ public sealed class HierarchyPanel : Panel
 		}
 
 		return suffix == 1 ? baseName : $"{baseName} {suffix}";
+	}
+
+	/// <summary>
+	/// Captures the filter and expansion the author is working with.
+	/// </summary>
+	/// <remarks>
+	/// Expanding and collapsing rows edits the tree directly, so the
+	/// live rows are read here rather than the copy kept from the last
+	/// structural rebuild. A filtered tree expands rows only to make
+	/// matches visible, and those temporary expansions must not become
+	/// the saved state.
+	/// </remarks>
+	internal HierarchyPanelState CaptureState()
+	{
+		if (_renderedFilter.Length == 0 && _items.Count > 0)
+		{
+			CaptureExpansion();
+		}
+
+		return new HierarchyPanelState
+		{
+			ScenePath = _session.ScenePath ?? string.Empty,
+			Search = _search.Text,
+			Expanded = [.. _expanded],
+			Known = [.. _known]
+		};
 	}
 
 	private void OnSessionChanged(EditorSession session)
