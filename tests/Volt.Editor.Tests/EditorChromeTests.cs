@@ -592,6 +592,44 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void TypingANameThenChangingTheSelectionCommitsToTheEditedObject()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneDocument scene = _session.Scene!;
+		SceneEntity cube = scene.Entities.First(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+		SceneEntity other = _session.CreateEntity("Other")!;
+
+		_session.Select(cube.Id);
+		Paint(0.1);
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.Text == cube.Name);
+
+		name.Focus();
+		name.SetSelection(0, name.Text.Length);
+		_context.TextInput("Renamed");
+		Paint(0.15);
+
+		Assert.Equal("Renamed", name.Text);
+
+		// Another surface moves the selection while the field still owns
+		// the keyboard, so the edit has not been committed yet. It
+		// belongs to the object the author typed it on.
+		_session.Select(other.Id);
+		Paint(0.2);
+
+		Assert.Equal("Renamed", cube.Name);
+		Assert.Equal(other.Id, _session.ActiveEntityId);
+		Assert.Equal(other.Name, name.Text);
+	}
+
+	[Fact]
 	public void VisiblePanels_EachPaintGeometry()
 	{
 		// A panel that paints nothing is a blank rectangle; the whole

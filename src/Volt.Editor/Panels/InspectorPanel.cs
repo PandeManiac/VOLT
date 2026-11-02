@@ -1,4 +1,5 @@
 using System.Numerics;
+using Volt.Editor.Core.Editing;
 using Volt.Editor.Core.Scenes;
 using Volt.Ui;
 using Volt.Ui.Layout;
@@ -27,6 +28,7 @@ public sealed class InspectorPanel : Panel
 	private Guid? _boundEntityId;
 	private string _componentSignature = string.Empty;
 	private bool _updating;
+	private bool _committingName;
 	private bool _disposed;
 
 	public InspectorPanel(EditorSession session)
@@ -154,6 +156,17 @@ public sealed class InspectorPanel : Panel
 	private void OnSessionChanged(EditorSession session)
 	{
 		SceneEntity? entity = _session.ActiveEntity;
+
+		// A rebuild replaces the name field, so an edit that is still in
+		// progress is committed before the inspector moves on. A change
+		// that keeps the same object bound leaves the typed text alone,
+		// so an external rename cannot overwrite it.
+		if (entity is null ||
+			entity.Id != _boundEntityId ||
+			_componentSignature != BuildComponentSignature(entity))
+		{
+			CommitPendingNameEdit();
+		}
 
 		if (entity is null)
 		{
@@ -647,40 +660,66 @@ public sealed class InspectorPanel : Panel
 
 	private void OnNameCommitted(TextField field)
 	{
-		if (_updating || _session.ActiveEntity is not SceneEntity entity)
+		if (_updating)
 		{
 			return;
 		}
 
-		if (string.Equals(
-			entity.Name,
-			field.Text,
-			StringComparison.Ordinal))
+		CommitPendingNameEdit();
+	}
+
+	/// <summary>
+	/// Commits the name field's uncommitted text to the object it was
+	/// typed on.
+	/// </summary>
+	/// <remarks>
+	/// The field is rebuilt whenever the inspector moves to another
+	/// object, and a component edit on the same object rebuilds it too.
+	/// Committing first keeps a typed rename from being replaced by the
+	/// new values, and it targets the bound object rather than whichever
+	/// object the session made active afterwards.
+	/// </remarks>
+	private void CommitPendingNameEdit()
+	{
+		if (_updating ||
+			_committingName ||
+			!_name.HasUncommittedText ||
+			_boundEntityId is not Guid id ||
+			_session.Scene is not SceneDocument scene ||
+			scene.Find(id) is not SceneEntity entity)
 		{
 			return;
 		}
+
+		string text = _name.Text;
+
+		if (string.Equals(entity.Name, text, StringComparison.Ordinal))
+		{
+			return;
+		}
+
+		_committingName = true;
 
 		try
 		{
-			_session.RenameActiveEntity(field.Text);
 			// Rename commands normalize names (currently by trimming
-			// whitespace). The synchronous session notification preserves
-			// focused, uncommitted input, so pull the committed value back
-			// explicitly once the edit has succeeded.
-			if (_session.ActiveEntity is SceneEntity active)
-			{
-				field.SetTextFromSource(active.Name);
-			}
+			// whitespace). The notification the command raises runs while
+			// the flag above is set, so it cannot re-enter this method;
+			// pull the committed value back explicitly instead.
+			_session.Undo.Execute(new RenameEntityCommand(scene, id, text));
+			_name.SetTextFromSource(entity.Name);
+			_session.SetStatus("Renamed entity");
 		}
 
 		catch (Exception exception)
 		{
-			if (_session.ActiveEntity is SceneEntity active)
-			{
-				field.SetTextFromSource(active.Name);
-			}
-
+			_name.SetTextFromSource(entity.Name);
 			_session.Log(exception.Message, EditorLogLevel.Error);
+		}
+
+		finally
+		{
+			_committingName = false;
 		}
 	}
 
