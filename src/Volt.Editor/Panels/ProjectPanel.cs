@@ -1940,6 +1940,7 @@ public sealed class ProjectPanel : Panel
 				ClearAssetSelection();
 				Rebuild(force: true);
 				context.CloseModal();
+				FocusSelection();
 				_session.SetStatus(deleted == 1
 					? $"Deleted {only.FileName}"
 					: $"Deleted {deleted} assets");

@@ -3366,6 +3366,9 @@ public sealed class EditorChromeTests : IDisposable
 		Assert.False(_session.Project.AssetCatalog.FileExists(Prop));
 		Assert.Null(_context.Modal);
 		Assert.Equal(Main, _session.ScenePath);
+		Assert.True(
+			folders.HasFocus,
+			"Deleting an asset must leave keyboard focus in the project browser.");
 	}
 
 	[Fact]
