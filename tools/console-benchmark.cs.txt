@@ -1,0 +1,107 @@
+using System.Diagnostics;
+using System.Text;
+using Volt.Editor.Core.Scenes;
+using Volt.Editor.Panels;
+using Volt.Ui;
+
+namespace Volt.Editor.Tests;
+
+/// <summary>
+/// Copies the timing of console rows. It copies this file into the test
+/// project, runs it, and removes it again, so the suite never carries a
+/// timing assertion that could fail on another machine.
+/// </summary>
+public sealed class ConsoleBenchmarkScratch : IDisposable
+{
+	private const int WarmUpLines = 500;
+	private const int MeasuredLines = 300;
+	private const int Rounds = 3;
+
+	private readonly string _root = Path.Combine(
+		Path.GetTempPath(),
+		$"volt-console-bench-{Guid.NewGuid():N}");
+	private readonly EditorSession _session = new();
+	private readonly UiContext _context = new();
+
+	public ConsoleBenchmarkScratch()
+	{
+		Directory.CreateDirectory(_root);
+		_session.NewProject(Path.Combine(_root, "Game"), "Bench");
+	}
+
+	public void Dispose()
+	{
+		_context.Dispose();
+		_session.Dispose();
+
+		try
+		{
+			Directory.Delete(_root, recursive: true);
+		}
+
+		catch (IOException)
+		{
+			// A leftover file must not fail a completed run.
+		}
+	}
+
+	[Fact]
+	public void MeasureLogCost()
+	{
+		StringBuilder report = new();
+		List<double> totals = [];
+
+		for (int round = 0; round < Rounds; round++)
+		{
+			totals.Add(MeasureRound());
+		}
+
+		double median = totals.OrderBy(value => value).ElementAt(Rounds / 2);
+
+		report.AppendLine(
+			$"console cost: {_session.LogEntries.Count} retained entries");
+
+		foreach (double total in totals)
+		{
+			report.AppendLine(
+				$"  {MeasuredLines} lines: {total:0.0} ms " +
+				$"({total / MeasuredLines:0.000} ms per line)");
+		}
+
+		report.AppendLine(
+			$"median: {median / MeasuredLines:0.000} ms per line");
+
+		string? output = Environment.GetEnvironmentVariable("VOLT_BENCH_OUT");
+
+		if (!string.IsNullOrWhiteSpace(output))
+		{
+			File.WriteAllText(output, report.ToString());
+		}
+	}
+
+	private double MeasureRound()
+	{
+		while (_session.LogEntries.Count < WarmUpLines)
+		{
+			_session.Log("Warm-up message");
+		}
+
+		ConsolePanel console = new(_session);
+
+		_context.Add(console);
+		_context.BeginFrame(0.0, new UiSize(900f, 400f), UiPoint.Zero);
+		_context.Draw();
+
+		Stopwatch stopwatch = Stopwatch.StartNew();
+
+		for (int index = 0; index < MeasuredLines; index++)
+		{
+			_session.Log($"Measured message {index:000}");
+		}
+
+		stopwatch.Stop();
+		console.Dispose();
+
+		return stopwatch.Elapsed.TotalMilliseconds;
+	}
+}
