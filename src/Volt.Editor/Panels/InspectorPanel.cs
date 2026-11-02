@@ -737,6 +737,17 @@ public sealed class InspectorPanel : Panel
 
 		string text = _name.Text;
 
+		if (string.IsNullOrWhiteSpace(text))
+		{
+			// An empty name is a typed mistake rather than a failure.
+			// The rename command refuses it, and reporting that refusal
+			// as a parameter error in the console reads like a bug in the
+			// editor, so the field goes back to the current name instead.
+			_name.SetTextFromSource(entity.Name);
+			_session.SetStatus("A name is required");
+			return;
+		}
+
 		// The field only reports an uncommitted edit while it has focus,
 		// and a panel being rebuilt for an interface scale or a preference
 		// change has already lost it. Comparing the text with the object's
