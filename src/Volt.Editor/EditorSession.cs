@@ -1703,8 +1703,8 @@ public sealed class EditorSession : IDisposable
 
 		throw new InvalidOperationException(
 			$"'{Path.GetFileName(path)}' changed on disk since it was " +
-			"opened. Save it under a different name, or reopen the scene " +
-			"to load that version.");
+			"opened. Use Save Scene As to keep your version, or reopen " +
+			"the scene to load the file.");
 	}
 
 	/// <summary>

@@ -2379,8 +2379,11 @@ public sealed class EditorShell : Panel
 
 		catch (Exception exception)
 		{
+			// The reason belongs in the status line: "Save scene failed"
+			// leaves the author with nothing to act on, while the message
+			// names the file and the ways forward.
 			_session.Log($"{action}: {exception.Message}", EditorLogLevel.Error);
-			_session.SetStatus($"{action} failed");
+			_session.SetStatus(exception.Message);
 		}
 	}
 
