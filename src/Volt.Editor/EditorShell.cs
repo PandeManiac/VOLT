@@ -387,6 +387,13 @@ public sealed class EditorShell : Panel
 	{
 		_session.TargetFrameRate = EditorSettings.DefaultTargetFrameRate;
 
+		// The console filters are saved settings now, so a reset that
+		// left them off would keep filtering a log the author asked to
+		// see in full again.
+		_session.ConsoleShowsInfo = true;
+		_session.ConsoleShowsWarnings = true;
+		_session.ConsoleShowsErrors = true;
+
 		if (MathF.Abs(_uiScale - 1f) > 0.001f)
 		{
 			ApplyUiScale(1f);
@@ -2116,7 +2123,10 @@ public sealed class EditorShell : Panel
 			MinHeight = 28f,
 			IsEnabled = _session.TargetFrameRate !=
 					EditorSettings.DefaultTargetFrameRate ||
-				MathF.Abs(_uiScale - 1f) > 0.001f
+				MathF.Abs(_uiScale - 1f) > 0.001f ||
+				!_session.ConsoleShowsInfo ||
+				!_session.ConsoleShowsWarnings ||
+				!_session.ConsoleShowsErrors
 		};
 
 		reset.Clicked += _ =>

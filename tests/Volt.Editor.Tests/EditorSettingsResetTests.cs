@@ -65,6 +65,22 @@ public sealed class EditorSettingsResetTests : IDisposable
 	}
 
 	[Fact]
+	public void Reset_RestoresConsoleSeverityFilters()
+	{
+		using EditorShell shell = new(_session);
+
+		_session.ConsoleShowsInfo = false;
+		_session.ConsoleShowsWarnings = false;
+		_session.ConsoleShowsErrors = false;
+
+		shell.ResetEditorSettings();
+
+		Assert.True(_session.ConsoleShowsInfo);
+		Assert.True(_session.ConsoleShowsWarnings);
+		Assert.True(_session.ConsoleShowsErrors);
+	}
+
+	[Fact]
 	public void Reset_AtDefaults_ChangesNothing()
 	{
 		using EditorShell shell = new(_session);
