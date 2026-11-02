@@ -47,6 +47,7 @@ public sealed class EditorShell : Panel
 	private ProjectPanelState? _projectPanelState;
 	private EcsInspectorPanelState? _ecsPanelState;
 	private HierarchyPanelState? _hierarchyPanelState;
+	private InspectorPanelState? _inspectorPanelState;
 
 	private readonly Dictionary<EditorTool, IconButton> _toolButtons = [];
 	private readonly Dictionary<PanelTab, MenuItem> _windowMenuItems = [];
@@ -494,6 +495,10 @@ public sealed class EditorShell : Panel
 			_hierarchyPanelState =
 				FindDescendant<HierarchyPanel>(_dock)?.CaptureState() ??
 				_hierarchyPanelState;
+
+			_inspectorPanelState =
+				FindDescendant<InspectorPanel>(_dock)?.CaptureState() ??
+				_inspectorPanelState;
 		}
 
 		for (int index = Children.Count - 1; index >= 0; index--)
@@ -544,7 +549,7 @@ public sealed class EditorShell : Panel
 			"hierarchy" => CreateHierarchyPanel(),
 			"scene" => new SceneViewport(_session, _viewportRenderer),
 			"game" => new GameViewport(_session, _viewportRenderer),
-			"inspector" => new InspectorPanel(_session),
+			"inspector" => new InspectorPanel(_session, _inspectorPanelState),
 			"project" => new ProjectPanel(_session, _projectPanelState),
 			"console" => new ConsolePanel(_session),
 			"ecs" => new EcsInspectorPanel(_session, _ecsPanelState),

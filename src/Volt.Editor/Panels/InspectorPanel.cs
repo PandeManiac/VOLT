@@ -29,12 +29,19 @@ public sealed class InspectorPanel : Panel
 	private string _componentSignature = string.Empty;
 	private bool _updating;
 	private bool _committingName;
+	private float? _restoreScrollOffset;
 	private bool _disposed;
 
 	public InspectorPanel(EditorSession session)
+		: this(session, state: null)
+	{
+	}
+
+	internal InspectorPanel(EditorSession session, InspectorPanelState? state)
 	{
 		ArgumentNullException.ThrowIfNull(session);
 		_session = session;
+		_restoreScrollOffset = state?.ScrollOffset;
 
 		Padding = new UiThickness(6f);
 
@@ -666,6 +673,28 @@ public sealed class InspectorPanel : Panel
 
 		_name.SelectAll();
 		return true;
+	}
+
+	internal InspectorPanelState CaptureState()
+	{
+		return new InspectorPanelState
+		{
+			ScrollOffset = _grid.ScrollOffset.Y
+		};
+	}
+
+	protected override void ArrangeContent(UiRect contentBounds)
+	{
+		base.ArrangeContent(contentBounds);
+
+		// A scroll view clamps a request against the content height it
+		// has arranged, so a restored offset waits for this pass instead
+		// of being clamped to the top of rows that are still empty.
+		if (_restoreScrollOffset is float offset)
+		{
+			_restoreScrollOffset = null;
+			_grid.SetScrollOffset(offset);
+		}
 	}
 
 	private void OnNameCommitted(TextField field)

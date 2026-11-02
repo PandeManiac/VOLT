@@ -522,6 +522,49 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void UiScale_RebuildPreservesInspectorScrollPosition()
+	{
+		EditorShell shell = BuildShell(1000f, 360f);
+		Guid entityId = _session.Scene!.Entities[0].Id;
+
+		_session.Select(entityId);
+		PaintAt(0.1);
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		Volt.Ui.Widgets.Properties.PropertyGrid grid = Descendants(inspector)
+			.OfType<Volt.Ui.Widgets.Properties.PropertyGrid>()
+			.Single();
+
+		Assert.True(
+			grid.MaximumScroll > 0f,
+			$"The inspector must overflow its {grid.GlobalContentBounds.Height:0.#}pt viewport.");
+
+		_context.Wheel(new UiPoint(0f, -3f), grid.GlobalContentBounds.Center);
+		PaintAt(0.2);
+
+		float scrolled = grid.ScrollOffset.Y;
+
+		Assert.True(scrolled > 0f, "The inspector must scroll.");
+
+		shell.ApplyUiScale(1.25f);
+		PaintAt(0.3);
+
+		InspectorPanel rebuilt = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		Volt.Ui.Widgets.Properties.PropertyGrid gridAfter = Descendants(rebuilt)
+			.OfType<Volt.Ui.Widgets.Properties.PropertyGrid>()
+			.Single();
+
+		Assert.NotSame(grid, gridAfter);
+		Assert.Equal(scrolled, gridAfter.ScrollOffset.Y, 1);
+	}
+
+	[Fact]
 	public void UiScale_RebuildPreservesConsoleSeverityFilters()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);
@@ -3285,6 +3328,20 @@ public sealed class EditorChromeTests : IDisposable
 
 		_context.PointerDown(UiMouseButton.Left, center);
 		_context.PointerUp(UiMouseButton.Left, center);
+	}
+
+	/// <summary>
+	/// Paints at a size that forces the inspector denser than its content,
+	/// which is what makes the property grid scroll at all.
+	/// </summary>
+	private void PaintAt(double time)
+	{
+		_context.BeginFrame(
+			time,
+			new UiSize(900f, 420f),
+			UiPoint.Zero);
+
+		_context.Draw();
 	}
 
 	private void Paint(double time)
