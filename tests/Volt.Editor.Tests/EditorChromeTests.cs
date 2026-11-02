@@ -3165,6 +3165,13 @@ public sealed class EditorChromeTests : IDisposable
 		folders.SetSelection([scenes]);
 		Paint(0.2);
 
+		TextField search = Descendants(project)
+			.OfType<TextField>()
+			.Single(field => field.Placeholder == "Search assets");
+
+		search.Text = "Main";
+		Paint(0.22);
+
 		IconTileView main = Descendants(project)
 			.OfType<IconTileView>()
 			.Single(tile => tile.Text == "Main.volt.scene.json");
@@ -3194,6 +3201,13 @@ public sealed class EditorChromeTests : IDisposable
 		Assert.True(File.Exists(_session.Project.ResolvePath(Renamed)));
 		Assert.Equal(Renamed, _session.ScenePath);
 		Assert.Null(_context.Modal);
+		Assert.Equal(string.Empty, search.Text);
+
+		IconTileView start = Descendants(project)
+			.OfType<IconTileView>()
+			.Single(tile => tile.Text == "Start.volt.scene.json");
+
+		Assert.True(start.IsSelected);
 	}
 
 	[Fact]

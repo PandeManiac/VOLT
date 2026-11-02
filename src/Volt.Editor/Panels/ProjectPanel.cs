@@ -1787,12 +1787,19 @@ public sealed class ProjectPanel : Panel
 		cancel.Clicked += _ => context.CloseModal();
 
 		rename.Clicked += _ =>
-		{
-			try
-			{
-				string renamed = _session.RenameAsset(asset.Id, name.Text);
+		{				try
+				{
+					string renamed = _session.RenameAsset(asset.Id, name.Text);
 
-				SetSingleAssetState(renamed);
+					// A rename can move the asset out of the current search.
+					// Clear the filter so the result stays visible instead of
+					// making a successful action look like it did nothing.
+					if (_search.Text.Length > 0)
+					{
+						_search.Text = string.Empty;
+					}
+
+					SetSingleAssetState(renamed);
 				Rebuild(force: true);
 				_revealSelectionPending = true;
 				context.CloseModal();
