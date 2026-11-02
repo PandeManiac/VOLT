@@ -121,6 +121,12 @@ public sealed class InspectorUndoRefreshTests : IDisposable
 		Assert.Equal("Assets/Meshes/old.mesh", renderer.Mesh);
 		Assert.Equal("Assets/Meshes/old.mesh", meshAsset.Text);
 		Assert.True(meshAsset.HasFocus);
+
+		_session.RedoLast();
+
+		Assert.Equal("Assets/Meshes/new.mesh", renderer.Mesh);
+		Assert.Equal("Assets/Meshes/new.mesh", meshAsset.Text);
+		Assert.True(meshAsset.HasFocus);
 	}
 
 	[Fact]

@@ -269,7 +269,7 @@ public sealed class PropertyGrid : ScrollView
 						}
 					};
 
-					sync = () => field.Text = stringProperty.Get();
+					sync = () => field.SetTextFromSource(stringProperty.Get());
 
 					return field;
 				}
@@ -370,7 +370,8 @@ public sealed class PropertyGrid : ScrollView
 						}
 					};
 
-					sync = () => field.Text = assetProperty.Get() ?? string.Empty;
+					sync = () => field.SetTextFromSource(
+						assetProperty.Get() ?? string.Empty);
 
 					return field;
 				}
