@@ -581,6 +581,123 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void UiScale_RebuildPreservesProjectBrowserListScrollPosition()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		string assets = _session.Project!.AssetsPath;
+
+		for (int index = 0; index < 80; index++)
+		{
+			File.WriteAllText(
+				Path.Combine(assets, $"Asset{index:00}.mat"),
+				"material");
+		}
+
+		_session.SaveScene();
+		Paint(0.1);
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		// The list shows the selected folder's assets, so the test opens
+		// the folder the files were written to before scrolling it.
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		folders.SetSelection(
+			[folders.Roots[0].Children.Single(item => item.Text == "Assets")]);
+		Paint(0.15);
+
+		IconButton listMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as a list");
+
+		_context.PointerDown(UiMouseButton.Left, listMode.GlobalContentBounds.Center);
+		_context.PointerUp(UiMouseButton.Left, listMode.GlobalContentBounds.Center);
+		Paint(0.2);
+
+		Assert.True(listMode.IsActive, "The list mode button must be active.");
+
+		ScrollView rows = Descendants(project)
+			.OfType<ScrollView>()
+			.Single(view => view.Content is TreeView);
+
+		_context.Wheel(new UiPoint(0f, -3f), rows.GlobalContentBounds.Center);
+		Paint(0.3);
+
+		float scrolled = rows.ScrollOffset.Y;
+
+		Assert.True(scrolled > 0f, "The asset list must scroll.");
+
+		shell.ApplyUiScale(1.25f);
+		Paint(0.4);
+
+		ProjectPanel rebuilt = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		ScrollView rowsAfter = Descendants(rebuilt)
+			.OfType<ScrollView>()
+			.Single(view => view.Content is TreeView);
+
+		Assert.NotSame(rows, rowsAfter);
+		Assert.Equal(scrolled, rowsAfter.ScrollOffset.Y, 1);
+	}
+
+	[Fact]
+	public void UiScale_RebuildPreservesProjectBrowserFolderScrollPosition()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		string assets = _session.Project!.AssetsPath;
+
+		for (int index = 0; index < 60; index++)
+		{
+			Directory.CreateDirectory(Path.Combine(assets, $"Folder{index:00}"));
+		}
+
+		_session.SaveScene();
+		Paint(0.1);
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		Assert.True(
+			folders.MaximumScroll > 0f,
+			$"The folder tree must overflow its {folders.GlobalContentBounds.Height}pt viewport.");
+
+		_context.Wheel(new UiPoint(0f, -3f), folders.GlobalContentBounds.Center);
+		Paint(0.2);
+
+		float scrolled = folders.ScrollOffset;
+
+		Assert.True(scrolled > 0f, "The folder tree must scroll.");
+
+		shell.ApplyUiScale(1.25f);
+		Paint(0.3);
+
+		ProjectPanel rebuilt = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		TreeView foldersAfter = Descendants(rebuilt)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		Assert.NotSame(folders, foldersAfter);
+		Assert.Equal(scrolled, foldersAfter.ScrollOffset, 1);
+	}
+
+	[Fact]
 	public void UiScale_RebuildPreservesHierarchyScrollPosition()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);
