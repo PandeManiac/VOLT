@@ -148,6 +148,22 @@ public sealed class InputRoutingTests
 	}
 
 	[Fact]
+	public void TextUndoShortcut_FallsThroughWhenFieldHasNoLocalHistory()
+	{
+		using UiTestHost host = new(300f, 100f);
+		TextField field = host.Add(new TextField());
+		int undoCommands = 0;
+		host.Context.Shortcuts.Add(new UiShortcut(
+			UiKey.Z,
+			UiKeyModifiers.Control,
+			() => undoCommands++));
+		field.Focus();
+
+		Assert.True(host.Context.KeyDown(UiKey.Z, UiKeyModifiers.Control));
+		Assert.Equal(1, undoCommands);
+	}
+
+	[Fact]
 	public void Tab_MovesFocusThroughFocusableWidgets()
 	{
 		using UiTestHost host = new(300f, 200f);

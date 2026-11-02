@@ -32,6 +32,8 @@ public sealed class ColorField : Widget
 
 	public bool IsEditing => _hex.HasFocus;
 
+	public bool HasPendingTextEdit => _hex.HasUncommittedText;
+
 	public UiColor Value
 	{
 		get => _value;

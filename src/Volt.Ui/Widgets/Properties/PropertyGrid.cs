@@ -375,19 +375,24 @@ public sealed class PropertyGrid : ScrollView
 
 	private static bool IsBeingEdited(Widget editor)
 	{
-		if (editor.HasFocus)
+		if (editor is NumericField numeric)
 		{
-			return true;
+			return numeric.HasPendingTextEdit;
 		}
 
 		if (editor is Vector3Field vector)
 		{
-			return vector.IsEditing;
+			return vector.HasPendingTextEdit;
 		}
 
 		if (editor is ColorField color)
 		{
-			return color.IsEditing;
+			return color.HasPendingTextEdit;
+		}
+
+		if (editor.HasFocus)
+		{
+			return true;
 		}
 
 		return false;

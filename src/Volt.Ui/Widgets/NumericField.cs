@@ -45,6 +45,15 @@ public class NumericField : TextField
 
 	public event Action<NumericField>? ValueChanged;
 
+	/// <summary>
+	/// Gets whether the displayed text contains an uncommitted numeric
+	/// edit. A focused field with canonical text can safely refresh from
+	/// its bound value, for example after an editor undo.
+	/// </summary>
+	public bool HasPendingTextEdit =>
+		HasFocus && (_formattedText is null ||
+			!string.Equals(Text, _formattedText, StringComparison.Ordinal));
+
 	public float Value
 	{
 		get => _value;

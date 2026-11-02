@@ -62,6 +62,16 @@ public class TextField : Widget
 
 	public event Action<TextField>? EditingEnded;
 
+	/// <summary>
+	/// Gets whether focused text differs from the value at focus or its
+	/// most recent commit.
+	/// </summary>
+	public bool HasUncommittedText =>
+		HasFocus && !string.Equals(
+			_editor.Text,
+			_textAtFocus,
+			StringComparison.Ordinal);
+
 	public string Text
 	{
 		get => _editor.Text;
@@ -296,21 +306,10 @@ public class TextField : Widget
 			switch (key.Key)
 			{
 				case UiKey.Z:
-					if (shift)
-					{
-						RedoText();
-					}
-
-					else
-					{
-						UndoText();
-					}
-
-					return true;
+					return shift ? RedoText() : UndoText();
 
 				case UiKey.Y:
-					RedoText();
-					return true;
+					return RedoText();
 
 				case UiKey.A:
 					_editor.SelectAll();
@@ -484,6 +483,7 @@ public class TextField : Widget
 	{
 		CommitText();
 		EditingEnded?.Invoke(this);
+		_textAtFocus = _editor.Text;
 	}
 
 	protected void MoveCaret(int direction, bool extendSelection)

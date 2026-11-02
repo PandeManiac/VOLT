@@ -60,6 +60,11 @@ public sealed class Vector3Field : Widget
 	public bool IsEditing =>
 		_x.HasFocus || _y.HasFocus || _z.HasFocus;
 
+	public bool HasPendingTextEdit =>
+		_x.HasPendingTextEdit ||
+		_y.HasPendingTextEdit ||
+		_z.HasPendingTextEdit;
+
 	public Vector3 Value
 	{
 		get => _value;
