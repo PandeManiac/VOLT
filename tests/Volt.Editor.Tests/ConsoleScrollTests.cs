@@ -45,6 +45,25 @@ public sealed class ConsoleScrollTests : IDisposable
 	}
 
 	[Fact]
+	public void CountsDescribeTheRetainedLog()
+	{
+		for (int index = 0; index < 600; index++)
+		{
+			_session.Log($"Diagnostic message {index:000}");
+		}
+
+		Assert.Equal(500, _session.LogInfoCount);
+		Assert.Equal(0, _session.LogWarningCount);
+
+		_session.Log("A warning", EditorLogLevel.Warning);
+
+		// The log is full, so the warning retires one information entry:
+		// the counts follow the retained log rather than everything seen.
+		Assert.Equal(499, _session.LogInfoCount);
+		Assert.Equal(1, _session.LogWarningCount);
+	}
+
+	[Fact]
 	public void NewMessagesAppendWithoutRebuildingTheVisibleRows()
 	{
 		ScrollView scroll = BuildConsole();

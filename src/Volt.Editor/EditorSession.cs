@@ -18,6 +18,10 @@ public sealed class EditorSession : IDisposable
 {
 	private const int MaximumLogEntries = 500;
 
+	private int _logInfoCount;
+	private int _logWarningCount;
+	private int _logErrorCount;
+
 	private sealed class SelectionCommand : IEditorCommand
 	{
 		private readonly IEditorCommand _command;
@@ -343,6 +347,26 @@ public sealed class EditorSession : IDisposable
 	public bool IsSceneDirty { get; private set; }
 
 	public IReadOnlyList<EditorLogEntry> LogEntries => _log;
+
+	/// <summary>
+	/// Gets how many retained log entries are information messages.
+	/// </summary>
+	/// <remarks>
+	/// The counts are kept as the log grows and shrinks, so a console can
+	/// show them without rescanning every retained entry for each new
+	/// message.
+	/// </remarks>
+	public int LogInfoCount => _logInfoCount;
+
+	/// <summary>
+	/// Gets how many retained log entries are warnings.
+	/// </summary>
+	public int LogWarningCount => _logWarningCount;
+
+	/// <summary>
+	/// Gets how many retained log entries are errors.
+	/// </summary>
+	public int LogErrorCount => _logErrorCount;
 
 	public SceneEntity? ActiveEntity =>
 		ActiveEntityId is Guid id && Scene is not null
@@ -1505,9 +1529,30 @@ public sealed class EditorSession : IDisposable
 		}
 	}
 
+	private void AdjustLogCount(EditorLogLevel level, int delta)
+	{
+		switch (level)
+		{
+			case EditorLogLevel.Warning:
+				_logWarningCount += delta;
+				break;
+
+			case EditorLogLevel.Error:
+				_logErrorCount += delta;
+				break;
+
+			default:
+				_logInfoCount += delta;
+				break;
+		}
+	}
+
 	public void ClearLog()
 	{
 		_log.Clear();
+		_logInfoCount = 0;
+		_logWarningCount = 0;
+		_logErrorCount = 0;
 		LogChanged?.Invoke(this);
 	}
 
@@ -1518,10 +1563,20 @@ public sealed class EditorSession : IDisposable
 		ArgumentNullException.ThrowIfNull(message);
 
 		_log.Add(new EditorLogEntry(DateTime.Now, level, message));
+		AdjustLogCount(level, 1);
 
 		if (_log.Count > MaximumLogEntries)
 		{
-			_log.RemoveRange(0, _log.Count - MaximumLogEntries);
+			int removed = _log.Count - MaximumLogEntries;
+
+			// The counts describe the retained log, so entries leaving it
+			// are subtracted before their range goes.
+			for (int index = 0; index < removed; index++)
+			{
+				AdjustLogCount(_log[index].Level, -1);
+			}
+
+			_log.RemoveRange(0, removed);
 		}
 
 		LogChanged?.Invoke(this);

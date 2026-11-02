@@ -236,7 +236,7 @@ public sealed class ConsolePanel : Panel
 			_rendered.Add((entry, row));
 		}
 
-		RefreshCounts(entries);
+		RefreshCounts();
 		UpdateEmptyState();
 		_scroll.InvalidateMeasure();
 
@@ -263,15 +263,14 @@ public sealed class ConsolePanel : Panel
 		return -1;
 	}
 
-	private void RefreshCounts(IReadOnlyList<EditorLogEntry> entries)
+	private void RefreshCounts()
 	{
-		int info = entries.Count(entry => entry.Level == EditorLogLevel.Info);
-		int warnings = entries.Count(entry => entry.Level == EditorLogLevel.Warning);
-		int errors = entries.Count(entry => entry.Level == EditorLogLevel.Error);
-
-		_info.Text = info.ToString(CultureInfo.InvariantCulture);
-		_warnings.Text = warnings.ToString(CultureInfo.InvariantCulture);
-		_errors.Text = errors.ToString(CultureInfo.InvariantCulture);
+		// The session keeps these as the log grows and shrinks, so a new
+		// message does not rescan every retained entry to label the
+		// filters.
+		_info.Text = _session.LogInfoCount.ToString(CultureInfo.InvariantCulture);
+		_warnings.Text = _session.LogWarningCount.ToString(CultureInfo.InvariantCulture);
+		_errors.Text = _session.LogErrorCount.ToString(CultureInfo.InvariantCulture);
 
 		_info.IsActive = _session.ConsoleShowsInfo;
 		_warnings.IsActive = _session.ConsoleShowsWarnings;
@@ -337,7 +336,7 @@ public sealed class ConsolePanel : Panel
 		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
 		IReadOnlyList<EditorLogEntry> entries = _session.LogEntries;
 
-		RefreshCounts(entries);
+		RefreshCounts();
 
 		// The session already bounds how much log it keeps, so every
 		// retained entry is rendered. Capping the rows here as well left
