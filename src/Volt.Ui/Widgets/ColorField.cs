@@ -25,7 +25,7 @@ public sealed class ColorField : Widget
 		_hex.EditingEnded += _ => CommitHex();
 		Add(_hex);
 		_value = UiColor.White;
-		_hex.Text = Format(_value);
+		_hex.SetTextFromSource(Format(_value));
 	}
 
 	public event Action<ColorField>? ValueChanged;
@@ -52,7 +52,7 @@ public sealed class ColorField : Widget
 
 		try
 		{
-			_hex.Text = Format(_value);
+			_hex.SetTextFromSource(Format(_value));
 		}
 
 		finally
@@ -129,19 +129,19 @@ public sealed class ColorField : Widget
 
 		if (!TryParse(_hex.Text, _value.A, out UiColor parsed))
 		{
-			_hex.Text = Format(_value);
+			_hex.SetTextFromSource(Format(_value));
 			return;
 		}
 
 		if (parsed == _value)
 		{
-			_hex.Text = Format(_value);
+			_hex.SetTextFromSource(Format(_value));
 			return;
 		}
 
 		_value = parsed;
 		InvalidateVisual();
-		_hex.Text = Format(_value);
+		_hex.SetTextFromSource(Format(_value));
 		ValueChanged?.Invoke(this);
 	}
 

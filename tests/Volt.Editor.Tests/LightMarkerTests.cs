@@ -362,6 +362,18 @@ public sealed class LightMarkerTests : IDisposable
 			new Vector3(0f, 1f, 0f),
 			ViewportMath.ResolveLight(_session.Scene!).DiffuseColor);
 
+		_session.UndoLast();
+
+		Assert.Equal(Vector4.One, data.Color);
+		Assert.Equal("#FFFFFF", hex.Text);
+		Assert.True(hex.HasFocus);
+
+		_session.RedoLast();
+
+		Assert.Equal(new Vector4(0f, 1f, 0f, 1f), data.Color);
+		Assert.Equal("#00FF00", hex.Text);
+		Assert.True(hex.HasFocus);
+
 		// Clear the selection so the marker uses its authored tint
 		// rather than the selection accent.
 		_session.ClearSelection();
@@ -400,6 +412,7 @@ public sealed class LightMarkerTests : IDisposable
 		Assert.True(
 			PaintsText(drawList, LabelArea(center), "Sun", UiColor.White),
 			"Undo must restore the original label color.");
+
 	}
 
 	[Fact]
