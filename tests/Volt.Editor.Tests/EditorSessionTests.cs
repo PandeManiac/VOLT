@@ -485,6 +485,57 @@ public sealed class EditorSessionTests : IDisposable
 	}
 
 	[Fact]
+	public void FolderRenameAndAssetDeletion_RemapDetachedSnapshots()
+	{
+		_session.NewProject(
+			Path.Combine(_root, "FolderSnapshotAssets"),
+			"Folder Snapshot Assets");
+
+		EditorProject project = _session.Project!;
+
+		project.CreateFolder("Assets/Old");
+
+		const string MeshId = "Assets/Old/cube.mesh";
+
+		File.WriteAllText(project.ResolvePath(MeshId), "mesh");
+		project.AssetCatalog.Refresh();
+
+		SceneEntity cube = _session.Scene!.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+
+		cube.GetComponent<MeshRendererData>()!.Mesh = MeshId;
+		_session.Select(cube.Id);
+		Assert.Equal(1, _session.DeleteSelection());
+
+		string renamedFolder = _session.RenameFolder("Assets/Old", "New");
+		const string RenamedMesh = "Assets/New/cube.mesh";
+
+		Assert.Equal("Assets/New", renamedFolder);
+
+		_session.UndoLast();
+
+		SceneEntity restored = _session.Scene.Entities.Single(entity =>
+			entity.Id == cube.Id);
+
+		Assert.Equal(
+			RenamedMesh,
+			restored.GetComponent<MeshRendererData>()!.Mesh);
+
+		_session.Select(restored.Id);
+		Assert.Equal(1, _session.DeleteSelection());
+
+		_session.DeleteAsset(RenamedMesh);
+		_session.UndoLast();
+
+		SceneEntity withoutAsset = _session.Scene.Entities.Single(entity =>
+			entity.Id == cube.Id);
+
+		Assert.Equal(
+			string.Empty,
+			withoutAsset.GetComponent<MeshRendererData>()!.Mesh);
+	}
+
+	[Fact]
 	public void FolderRename_UpdatesTheOpenScenePathAndReferences()
 	{
 		_session.NewProject(
