@@ -129,6 +129,11 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 		_session.PlayStateChanged += OnSessionChanged;
 		_session.RuntimeUpdated += OnSessionChanged;
 
+		// Grid snap and the frame budget are settings, not scene state,
+		// so without this the panel would keep reporting the old values
+		// until something unrelated changed the scene.
+		_session.SettingsChanged += OnSessionChanged;
+
 		Refresh();
 	}
 
@@ -162,6 +167,7 @@ internal sealed class ProfilerPanel : Panel, IFrameTick
 		_session.SelectionChanged -= OnSessionChanged;
 		_session.PlayStateChanged -= OnSessionChanged;
 		_session.RuntimeUpdated -= OnSessionChanged;
+		_session.SettingsChanged -= OnSessionChanged;
 		base.Dispose();
 	}
 
