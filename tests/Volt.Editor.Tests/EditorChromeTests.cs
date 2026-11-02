@@ -522,6 +522,36 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void UiScale_TypedInspectorNameIsKeptBeforeTheRebuild()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		Guid entityId = _session.Scene!.Entities[0].Id;
+
+		_session.Select(entityId);
+		Paint(0.1);
+
+		string original = _session.Scene!.Find(entityId)!.Name;
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.Text == original);
+
+		Assert.True(name.Focus());
+		name.Text = "Renamed before scaling";
+
+		shell.ApplyUiScale(1.25f);
+		Paint(0.2);
+
+		Assert.Equal(
+			"Renamed before scaling",
+			_session.Scene!.Find(entityId)!.Name);
+	}
+
+	[Fact]
 	public void UiScale_RebuildPreservesProjectBrowserScrollPosition()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);

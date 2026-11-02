@@ -138,6 +138,11 @@ public sealed class InspectorPanel : Panel
 
 	protected override void OnDetached()
 	{
+		// A rebuild replaces the name field, so a rename that is still
+		// being typed is committed to the object it was typed on before
+		// the panel goes. Without this the typed text is dropped with the
+		// old field and the object silently keeps its old name.
+		CommitPendingNameEdit();
 		Unsubscribe();
 	}
 
@@ -148,8 +153,13 @@ public sealed class InspectorPanel : Panel
 			return;
 		}
 
+		// Detaching is not guaranteed before disposal, so this is the last
+		// point where the field still owns a typed rename. The panel is
+		// unsubscribed first so the command it raises cannot rebuild a
+		// panel that is being torn down.
 		_disposed = true;
 		Unsubscribe();
+		CommitPendingNameEdit();
 		base.Dispose();
 	}
 
@@ -683,7 +693,6 @@ public sealed class InspectorPanel : Panel
 	{
 		if (_updating ||
 			_committingName ||
-			!_name.HasUncommittedText ||
 			_boundEntityId is not Guid id ||
 			_session.Scene is not SceneDocument scene ||
 			scene.Find(id) is not SceneEntity entity)
@@ -693,6 +702,11 @@ public sealed class InspectorPanel : Panel
 
 		string text = _name.Text;
 
+		// The field only reports an uncommitted edit while it has focus,
+		// and a panel being rebuilt for an interface scale or a preference
+		// change has already lost it. Comparing the text with the object's
+		// name keeps that last edit from being dropped; a field showing the
+		// object's own name has nothing to commit.
 		if (string.Equals(entity.Name, text, StringComparison.Ordinal))
 		{
 			return;
