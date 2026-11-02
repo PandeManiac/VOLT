@@ -697,8 +697,7 @@ public sealed class EditorSession : IDisposable
 		SceneDocument scene = RequireScene();
 		AddEntityCommand command = new(scene, name, parentId);
 
-		Undo.Execute(command);
-		Select(command.Entity.Id);
+		ExecuteAndSelect(command, command.Entity.Id);
 		SetStatus($"Created {command.Entity.Name}");
 
 		return command.Entity;
@@ -722,11 +721,23 @@ public sealed class EditorSession : IDisposable
 		command.Entity.Transform.EulerAngles = LightData.DefaultEulerAngles;
 		command.Entity.AddComponent(new LightData());
 
-		Undo.Execute(command);
-		Select(command.Entity.Id);
+		ExecuteAndSelect(command, command.Entity.Id);
 		SetStatus($"Created {command.Entity.Name}");
 
 		return command.Entity;
+	}
+
+	private void ExecuteAndSelect(
+		IEditorCommand command,
+		Guid selectedEntityId)
+	{
+		Guid[] selectionBefore = [.. _selection];
+		Guid? activeBefore = ActiveEntityId;
+
+		Undo.Execute(new SelectionCommand(
+			command,
+			() => Select(selectedEntityId),
+			() => SelectMany(selectionBefore, activeBefore)));
 	}
 
 	public bool DeleteActiveEntity()
@@ -744,8 +755,13 @@ public sealed class EditorSession : IDisposable
 		}
 
 		DeleteEntityCommand command = new(Scene, id);
-		Undo.Execute(command);
-		ClearSelection();
+		Guid[] selectionBeforeDelete = [.. _selection];
+		Guid? activeBeforeDelete = ActiveEntityId;
+
+		Undo.Execute(new SelectionCommand(
+			command,
+			ClearSelection,
+			() => SelectMany(selectionBeforeDelete, activeBeforeDelete)));
 		SetStatus($"Deleted {entity.Name}");
 
 		return true;

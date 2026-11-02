@@ -39,6 +39,28 @@ public sealed class EditorSessionTests : IDisposable
 	}
 
 	[Fact]
+	public void CreateEntity_UndoAndRedoRestoreSelectionContext()
+	{
+		_session.NewProject(Path.Combine(_root, "CreateUndo"), "CreateUndo");
+		SceneDocument scene = _session.Scene!;
+		SceneEntity previous = scene.Entities.First();
+		_session.Select(previous.Id);
+
+		SceneEntity created = _session.CreateEntity("Created")!;
+		Assert.Equal(created.Id, _session.ActiveEntityId);
+
+		_session.UndoLast();
+		Assert.Null(scene.Find(created.Id));
+		Assert.Equal(previous.Id, _session.ActiveEntityId);
+		Assert.Contains(previous.Id, _session.Selection);
+
+		_session.RedoLast();
+		Assert.NotNull(scene.Find(created.Id));
+		Assert.Equal(created.Id, _session.ActiveEntityId);
+		Assert.Contains(created.Id, _session.Selection);
+	}
+
+	[Fact]
 	public void NewProject_OpensStarterSceneThatReopensWithSameIds()
 	{
 		string projectRoot = Path.Combine(_root, "Game");
