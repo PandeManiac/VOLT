@@ -129,10 +129,6 @@ public sealed class HierarchyPanel : Panel
 
 		Add(stack);
 
-		_session.ProjectChanged += OnSessionChanged;
-		_session.SceneChanged += OnSessionChanged;
-		_session.SelectionChanged += OnSessionChanged;
-
 		RefreshStructure(force: true);
 		UpdateActionStates();
 	}
@@ -143,6 +139,10 @@ public sealed class HierarchyPanel : Panel
 
 		_headerCaption.Font = theme.Fonts.Small;
 		_headerCaption.TextColor = theme.Palette.TextMuted;
+		_session.ProjectChanged += OnSessionChanged;
+		_session.SceneChanged += OnSessionChanged;
+		_session.SelectionChanged += OnSessionChanged;
+		OnSessionChanged(_session);
 	}
 
 	protected override void OnDetached()

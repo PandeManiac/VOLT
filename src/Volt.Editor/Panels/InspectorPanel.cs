@@ -123,11 +123,15 @@ public sealed class InspectorPanel : Panel
 		Add(_stack);
 		Add(_empty);
 
+		Rebuild();
+	}
+
+	protected override void OnAttached()
+	{
 		_session.SceneChanged += OnSessionChanged;
 		_session.SelectionChanged += OnSessionChanged;
 		_session.ProjectChanged += OnSessionChanged;
-
-		Rebuild();
+		OnSessionChanged(_session);
 	}
 
 	protected override void OnDetached()
