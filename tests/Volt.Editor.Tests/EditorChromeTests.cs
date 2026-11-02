@@ -630,6 +630,76 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void TypingAnAssetPathThenChangingTheSelectionCommitsToTheEditedObject()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneDocument scene = _session.Scene!;
+		SceneEntity cube = scene.Entities.First(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+		MeshRendererData renderer = cube.GetComponent<MeshRendererData>()!;
+		SceneEntity other = _session.CreateEntity("Other")!;
+
+		_session.Select(cube.Id);
+		Paint(0.1);
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		TextField mesh = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.Text == renderer.Mesh);
+
+		mesh.Focus();
+		mesh.SetSelection(0, mesh.Text.Length);
+		_context.TextInput("Assets/Meshes/custom.mesh");
+		Paint(0.15);
+
+		Assert.Equal("Assets/Meshes/custom.mesh", mesh.Text);
+
+		// The selection changes from another surface while the property
+		// field still owns the keyboard. The typed path belongs to the
+		// object being edited, so replacing the rows must commit it.
+		_session.Select(other.Id);
+		Paint(0.2);
+
+		Assert.Equal("Assets/Meshes/custom.mesh", renderer.Mesh);
+	}
+
+	[Fact]
+	public void TypingANumericPropertyThenChangingTheSelectionCommitsToTheEditedObject()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		SceneDocument scene = _session.Scene!;
+		SceneEntity cube = scene.Entities.First(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+		SceneEntity other = _session.CreateEntity("Other")!;
+
+		_session.Select(cube.Id);
+		Paint(0.1);
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		NumericField positionX = Descendants(inspector)
+			.OfType<NumericField>()
+			.First();
+
+		Assert.True(positionX.Focus());
+		positionX.Text = "12.5";
+		Paint(0.15);
+
+		// The selection changes from another surface with the text still
+		// pending, so replacing the rows must apply it rather than drop
+		// it.
+		_session.Select(other.Id);
+		Paint(0.2);
+
+		Assert.Equal(12.5f, cube.Transform.Position.X, 3);
+	}
+
+	[Fact]
 	public void VisiblePanels_EachPaintGeometry()
 	{
 		// A panel that paints nothing is a blank rectangle; the whole
