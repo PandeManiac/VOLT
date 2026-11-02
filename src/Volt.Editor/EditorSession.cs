@@ -1395,6 +1395,74 @@ public sealed class EditorSession : IDisposable
 			value));
 	}
 
+	/// <summary>
+	/// Sets a component property on every selected object that carries a
+	/// component of the same type, as one undo step.
+	/// </summary>
+	/// <remarks>
+	/// A transform edit already reaches the whole selection, and an
+	/// author selecting three lights expects an intensity change to reach
+	/// all three. An object without the component is skipped rather than
+	/// refusing the edit, so a mixed selection still changes what it can.
+	/// </remarks>
+	/// <param name="entityId">The object whose row was edited.</param>
+	/// <param name="component">Its component, which names the type.</param>
+	/// <param name="property">The property being set.</param>
+	/// <param name="value">The new value.</param>
+	/// <returns>The number of objects that received the value.</returns>
+	public int SetSelectionComponentProperty(
+		Guid entityId,
+		AuthoredComponent component,
+		EditorPropertyDescriptor property,
+		object? value)
+	{
+		ArgumentNullException.ThrowIfNull(component);
+		ArgumentNullException.ThrowIfNull(property);
+
+		SceneDocument scene = RequireScene();
+		List<IEditorCommand> commands = [];
+		HashSet<Guid> visited = [];
+
+		foreach (Guid id in _selection.Prepend(entityId))
+		{
+			if (!visited.Add(id) || scene.Find(id) is not SceneEntity entity)
+			{
+				continue;
+			}
+
+			AuthoredComponent? target = entity.Components
+				.FirstOrDefault(candidate => string.Equals(
+					candidate.TypeId,
+					component.TypeId,
+					StringComparison.Ordinal));
+
+			if (target is null)
+			{
+				continue;
+			}
+
+			commands.Add(new ComponentPropertyCommand(
+				scene,
+				id,
+				target,
+				property,
+				value));
+		}
+
+		if (commands.Count == 0)
+		{
+			return 0;
+		}
+
+		Undo.Execute(commands.Count == 1
+			? commands[0]
+			: new CompositeCommand(
+				$"Set {property.DisplayName} on {commands.Count} objects",
+				commands));
+
+		return commands.Count;
+	}
+
 	public void AddComponent(Guid entityId, string typeId)
 	{
 		SceneDocument scene = RequireScene();

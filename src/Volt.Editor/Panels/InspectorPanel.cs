@@ -321,17 +321,18 @@ public sealed class InspectorPanel : Panel
 	/// what a transform edit reaches, and what this one is made of.
 	/// </summary>
 	/// <remarks>
-	/// The values in the grid are the active object's, but a transform
-	/// edit applies to the whole selection, so the line says so rather
-	/// than leaving the reach to guesswork.
+	/// The values in the grid are the active object's, while a transform
+	/// or component edit applies to every selected object that carries
+	/// the same thing, so the line says so rather than leaving the reach
+	/// to guesswork.
 	/// </remarks>
 	private void UpdateSubtitle(SceneEntity entity)
 	{
 		int selectedCount = _session.Selection.Count;
 
 		string selected = selectedCount > 1
-			? $"{selectedCount} selected  ·  transform edits: all  ·  " +
-				"other edits: active  ·  "
+			? $"{selectedCount} selected  ·  edits: every object with the " +
+				"same component  ·  "
 			: string.Empty;
 
 		_entitySubtitle.Text =
@@ -596,7 +597,10 @@ public sealed class InspectorPanel : Panel
 	{
 		try
 		{
-			_session.SetComponentProperty(
+			// The selection shares the edit, the way it already shares
+			// a transform edit; objects without the component are left
+			// alone by the session.
+			_session.SetSelectionComponentProperty(
 				entity.Id,
 				component,
 				property,

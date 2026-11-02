@@ -235,7 +235,7 @@ public sealed class MultiTransformTests : IDisposable
 		Assert.Contains(
 			Descendants(inspector).OfType<Label>(),
 			label => label.Text.Contains(
-				"transform edits: all  ·  other edits: active",
+				"edits: every object with the same component",
 				StringComparison.Ordinal));
 	}
 

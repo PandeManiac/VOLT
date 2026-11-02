@@ -281,10 +281,11 @@ ratios without discarding the state inside open panels.
   object, shift-click adds another, and dragging on empty space with the
   left button draws a box that takes every object its bounds touch
   (shift keeps what was already selected). The hierarchy highlights the
-  whole selection and the gizmo follows the active one. The inspector's
-  transform fields edit every selected object and its subtitle says so
-  (`transform edits: all · other edits: active`); its component fields
-  edit the active object, which the same line states. With more than
+  whole selection and the gizmo follows the active one. The inspector
+  shows the active object's values, and an edit reaches every selected
+  object that carries the same thing: a transform field moves the whole
+  selection, and a component field changes that component on every
+  selected object that has it. The subtitle states that reach. With more than
   one object selected, the scene view also frames the selection's
   combined extent in corner brackets labelled with the object count, so
   the reach of a group edit is visible before it is applied.
@@ -296,6 +297,12 @@ ratios without discarding the state inside open panels.
   object is left out of that delta: its parent already carries it, and
   moving both would move it twice. A group rotation turns each object in
   place instead of orbiting it around the active object.
+
+  A component property follows the same rule. With three lights
+  selected, changing **Intensity** changes all three and an object
+  without a light is left alone, as one undo step. Objects that lack the
+  component are skipped rather than refusing the edit, so a mixed
+  selection still changes what it can.
 
   A component follows the selection through its menu. **Component → Add
   X** gives the component to every selected object that does not already

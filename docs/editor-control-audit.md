@@ -76,10 +76,11 @@ and disabling components works. The inspector's own add-component row
 belongs to the object the panel describes, so it adds to that object
 alone; the Component menu follows the selection, offering a component
 while any selected object lacks it and adding it to those objects as one
-undo step. Inspector construction and menu wiring are covered by
-`EditorChromeTests`, `ComponentMenuSelectionTests`, the light and
-material tests, and the scene-document tests in
-`Volt.Editor.Core.Tests`.
+undo step. A component property edit reaches every selected object that
+carries that component, as one undo step. Inspector construction and menu
+wiring are covered by `EditorChromeTests`, `ComponentMenuSelectionTests`,
+`MultiComponentEditTests`, the light and material tests, and the
+scene-document tests in `Volt.Editor.Core.Tests`.
 
 ## Scene viewport
 
