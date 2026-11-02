@@ -68,6 +68,8 @@ public sealed class ProjectPanel : Panel
 	private bool _updating;
 	private bool _syncingSelection;
 	private bool _revealSelectionPending;
+	private string? _pendingCreatedScenePath;
+	private string? _pendingSceneOriginPath;
 	private bool _disposed;
 
 	public ProjectPanel(EditorSession session)
@@ -590,6 +592,27 @@ public sealed class ProjectPanel : Panel
 
 	private void OnSessionChanged(EditorSession session)
 	{
+		if (_pendingCreatedScenePath is string createdPath)
+		{
+			if (string.Equals(
+				session.ScenePath,
+				createdPath,
+				StringComparison.OrdinalIgnoreCase))
+			{
+				CompleteCreatedSceneNavigation(createdPath);
+				return;
+			}
+
+			if (!string.Equals(
+				session.ScenePath,
+				_pendingSceneOriginPath,
+				StringComparison.OrdinalIgnoreCase))
+			{
+				_pendingCreatedScenePath = null;
+				_pendingSceneOriginPath = null;
+			}
+		}
+
 		Rebuild(force: false);
 	}
 
@@ -628,25 +651,36 @@ public sealed class ProjectPanel : Panel
 
 		try
 		{
-			if (_session.CreateScene(
-					relative,
-					$"Scene {index - 1}") is not null)
+			string createdPath = ProjectAssetCatalog.NormalizeId(relative);
+			_pendingCreatedScenePath = createdPath;
+			_pendingSceneOriginPath = _session.ScenePath;
+
+			if (_session.CreateScene(relative, $"Scene {index - 1}") is not null &&
+				_pendingCreatedScenePath is not null)
 			{
-				// Creation opens the scene and raises SceneChanged while
-				// the panel still shows the old folder. Move to the new
-				// scene's folder and rebuild again so its tile is visible.
-				_folder = ParentFolder(relative);
-				SetSingleAssetState(
-					ProjectAssetCatalog.NormalizeId(relative));
-				Rebuild(force: true);
-				_revealSelectionPending = true;
+				// The session's notification normally completes this while
+				// CreateScene runs. This fallback covers a detached panel that
+				// was not listening when the scene changed.
+				CompleteCreatedSceneNavigation(createdPath);
 			}
 		}
 
 		catch (Exception exception)
 		{
+			_pendingCreatedScenePath = null;
+			_pendingSceneOriginPath = null;
 			_session.Log(exception.Message, EditorLogLevel.Error);
 		}
+	}
+
+	private void CompleteCreatedSceneNavigation(string createdPath)
+	{
+		_pendingCreatedScenePath = null;
+		_pendingSceneOriginPath = null;
+		_folder = ParentFolder(createdPath);
+		SetSingleAssetState(createdPath);
+		Rebuild(force: true);
+		_revealSelectionPending = true;
 	}
 
 	private void ShowCreateFolderDialog()
