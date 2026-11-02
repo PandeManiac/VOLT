@@ -35,6 +35,7 @@ public sealed class HierarchyPanel : Panel
 	private readonly HashSet<Guid> _known = [];
 
 	private string _signature = string.Empty;
+	private string _renderedFilter = string.Empty;
 	private bool _updating;
 	private bool _disposed;
 
@@ -291,13 +292,21 @@ public sealed class HierarchyPanel : Panel
 		_signature = signature;
 		_updating = true;
 
-		CaptureExpansion();
+		// Filtering expands matching paths for visibility. Capture only
+		// the expansion state from an unfiltered tree so those temporary
+		// expansions do not become the user's saved hierarchy state when
+		// the search is cleared.
+		if (_renderedFilter.Length == 0)
+		{
+			CaptureExpansion();
+		}
 
 		_tree.Clear();
 		_items.Clear();
 
 		if (scene is null)
 		{
+			_renderedFilter = string.Empty;
 			_empty.Title = "No scene open";
 			_empty.Description =
 				"Create a project from the File menu to start authoring.";
@@ -310,6 +319,7 @@ public sealed class HierarchyPanel : Panel
 		}
 
 		string filter = _search.Text.Trim();
+		_renderedFilter = filter;
 
 		foreach (SceneEntity root in scene.GetChildren(null))
 		{
