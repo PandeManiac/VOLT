@@ -1540,9 +1540,16 @@ public sealed class ProjectPanel : Panel
 				string renamed = _session.RenameFolder(folder, name.Text);
 
 				// Capture the old tree before its paths change, then move
-				// the collapse state onto the renamed paths. The rebuild
-				// must not capture the old tree again over the remapped set.
-				CaptureCollapsedFolders();
+				// the collapse state onto the renamed paths. A filtered
+				// tree is deliberately expanded, so capturing it would
+				// erase the choices the filter is temporarily overriding.
+				// The rebuild must not capture the old tree again over the
+				// remapped set.
+				if (_search.Text.Trim().Length == 0 && !_folderFilterActive)
+				{
+					CaptureCollapsedFolders();
+				}
+
 				RemapCollapsedFolders(folder, renamed);
 				_skipFolderCapture = true;
 

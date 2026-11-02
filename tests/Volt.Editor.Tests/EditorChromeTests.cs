@@ -1829,6 +1829,24 @@ public sealed class EditorChromeTests : IDisposable
 
 		materialsFolder.IsExpanded = false;
 
+		IconButton refresh = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Rescan the project folder");
+
+		Click(refresh);
+		Paint(0.21);
+
+		Assert.Contains(
+			"Assets/Materials",
+			project.CaptureState().CollapsedFolders);
+
+		TextField search = Descendants(project)
+			.OfType<TextField>()
+			.Single(field => field.Placeholder == "Search assets");
+
+		search.Text = "Materials";
+		Paint(0.22);
+
 		IconTileView materials = Descendants(project)
 			.OfType<IconTileView>()
 			.Single(tile => tile.Text == "Materials");
