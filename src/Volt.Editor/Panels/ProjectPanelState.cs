@@ -23,4 +23,10 @@ internal sealed class ProjectPanelState
 	public string Search { get; init; } = string.Empty;
 
 	public IReadOnlyList<string> CollapsedFolders { get; init; } = [];
+
+	public float TileScrollOffset { get; init; }
+
+	public float ListScrollOffset { get; init; }
+
+	public float FolderScrollOffset { get; init; }
 }

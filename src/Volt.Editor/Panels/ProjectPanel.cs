@@ -70,6 +70,8 @@ public sealed class ProjectPanel : Panel
 	private bool _revealSelectionPending;
 	private string? _pendingCreatedScenePath;
 	private string? _pendingSceneOriginPath;
+	private float? _restoreTileOffset;
+	private float? _restoreListOffset;
 	private bool _disposed;
 
 	public ProjectPanel(EditorSession session)
@@ -229,6 +231,14 @@ public sealed class ProjectPanel : Panel
 			_collapsedFolders.UnionWith(state.CollapsedFolders);
 			_skipFolderCapture = true;
 			_gridMode = state.GridMode;
+
+			// A scroll view clamps a request against the content height
+			// it has arranged, and nothing has been arranged yet, so the
+			// asset views hold the offset until layout runs. The folder
+			// tree knows how to wait for its own layout.
+			_restoreTileOffset = state.TileScrollOffset;
+			_restoreListOffset = state.ListScrollOffset;
+			_folders.SetScrollOffset(state.FolderScrollOffset);
 		}
 
 		SetMode(grid: _gridMode);
@@ -247,7 +257,10 @@ public sealed class ProjectPanel : Panel
 			SelectedIsFolder = _selectedIsFolder,
 			SelectedAssetIds = [.. _selectedAssetIds],
 			Search = _search.Text,
-			CollapsedFolders = [.. _collapsedFolders]
+			CollapsedFolders = [.. _collapsedFolders],
+			TileScrollOffset = _tileScroll.ScrollOffset.Y,
+			ListScrollOffset = _listScroll.ScrollOffset.Y,
+			FolderScrollOffset = _folders.ScrollOffset
 		};
 	}
 
@@ -511,6 +524,22 @@ public sealed class ProjectPanel : Panel
 		{
 			_revealSelectionPending = false;
 			RevealSelection();
+		}
+
+		// A scroll view clamps a request against the content height it
+		// has arranged, so a restored offset waits for this pass. It is
+		// applied after the reveal, which returns a rebuilt panel to the
+		// place the author had scrolled to.
+		if (_restoreTileOffset is float tile)
+		{
+			_restoreTileOffset = null;
+			_tileScroll.SetScrollOffset(tile);
+		}
+
+		if (_restoreListOffset is float list)
+		{
+			_restoreListOffset = null;
+			_listScroll.SetScrollOffset(list);
 		}
 	}
 

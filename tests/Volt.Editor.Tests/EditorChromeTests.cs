@@ -522,6 +522,65 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void UiScale_RebuildPreservesProjectBrowserScrollPosition()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		string assets = _session.Project!.AssetsPath;
+
+		for (int index = 0; index < 60; index++)
+		{
+			File.WriteAllText(
+				Path.Combine(assets, $"Asset{index:00}.mat"),
+				"material");
+		}
+
+		_session.SaveScene();
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		Paint(0.1);
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		TreeViewItem assetsFolder = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Assets");
+
+		folders.SetSelection([assetsFolder]);
+		Paint(0.2);
+
+		ScrollView tiles = Descendants(project)
+			.OfType<ScrollView>()
+			.Single(view => view.Content is TileWrapPanel);
+
+		_context.Wheel(new UiPoint(0f, -3f), tiles.GlobalContentBounds.Center);
+		Paint(0.3);
+
+		float scrolled = tiles.ScrollOffset.Y;
+
+		Assert.True(scrolled > 0f, "The asset grid must scroll.");
+
+		shell.ApplyUiScale(1.25f);
+		Paint(0.4);
+
+		ProjectPanel rebuilt = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		ScrollView tilesAfter = Descendants(rebuilt)
+			.OfType<ScrollView>()
+			.Single(view => view.Content is TileWrapPanel);
+
+		Assert.NotSame(tiles, tilesAfter);
+		Assert.Equal(scrolled, tilesAfter.ScrollOffset.Y, 1);
+	}
+
+	[Fact]
 	public void UiScale_RebuildPreservesHierarchyScrollPosition()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);
