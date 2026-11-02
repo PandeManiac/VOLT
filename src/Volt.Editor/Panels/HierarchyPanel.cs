@@ -36,7 +36,7 @@ public sealed class HierarchyPanel : Panel
 
 	private string _signature = string.Empty;
 	private string _revealedSelection = string.Empty;
-	private string? _renderedScenePath;
+	private SceneDocument? _renderedScene;
 	private string _renderedFilter = string.Empty;
 	private bool _updating;
 	private bool _disposed;
@@ -147,7 +147,7 @@ public sealed class HierarchyPanel : Panel
 				_session.ScenePath,
 				StringComparison.OrdinalIgnoreCase))
 		{
-			_renderedScenePath = _session.ScenePath;
+			_renderedScene = _session.Scene;
 			_expanded.UnionWith(state.Expanded);
 			_known.UnionWith(state.Known);
 
@@ -384,14 +384,16 @@ public sealed class HierarchyPanel : Panel
 		}
 
 		SceneDocument? scene = _session.Scene;
-		bool sceneChanged = !string.Equals(
-			_renderedScenePath,
-			_session.ScenePath,
-			StringComparison.OrdinalIgnoreCase);
+
+		// Renaming the scene file changes its path without replacing the
+		// document, while a scene switch, reload, project change, or a
+		// copied scene loaded under another path creates a new document
+		// object. Identity distinguishes those cases; a path does not.
+		bool sceneChanged = !ReferenceEquals(scene, _renderedScene);
 
 		if (sceneChanged)
 		{
-			_renderedScenePath = _session.ScenePath;
+			_renderedScene = scene;
 			_expanded.Clear();
 			_known.Clear();
 			_renderedFilter = string.Empty;
