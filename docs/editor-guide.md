@@ -304,6 +304,12 @@ ratios without discarding the state inside open panels.
   component are skipped rather than refusing the edit, so a mixed
   selection still changes what it can.
 
+  The inspector's component row follows the selection too: **Add
+  Component** gives the component to every selected object that lacks it,
+  and a row's remove button takes that component off every selected
+  object that has it. Both are single undo steps, and both skip objects
+  the component does not apply to.
+
   A component follows the selection through its menu. **Component → Add
   X** gives the component to every selected object that does not already
   have one, in one undo step, and stays available while any selected

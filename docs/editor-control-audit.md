@@ -77,9 +77,11 @@ belongs to the object the panel describes, so it adds to that object
 alone; the Component menu follows the selection, offering a component
 while any selected object lacks it and adding it to those objects as one
 undo step. A component property edit reaches every selected object that
-carries that component, as one undo step. Inspector construction and menu
-wiring are covered by `EditorChromeTests`, `ComponentMenuSelectionTests`,
-`MultiComponentEditTests`, the light and material tests, and the
+carries that component, as one undo step, and the add bar and a row's
+remove button follow the selection the same way. Inspector construction
+and menu wiring are covered by `EditorChromeTests`,
+`ComponentMenuSelectionTests`, `MultiComponentEditTests`,
+`MultiComponentStructureTests`, the light and material tests, and the
 scene-document tests in `Volt.Editor.Core.Tests`.
 
 ## Scene viewport

@@ -1478,6 +1478,64 @@ public sealed class EditorSession : IDisposable
 	}
 
 	/// <summary>
+	/// Removes a component from every selected object that has one, as a
+	/// single undo step.
+	/// </summary>
+	/// <remarks>
+	/// The inspector's remove button sits on a component row, and with
+	/// several objects selected that row stands for the component on all
+	/// of them, the same way a component field edit does.
+	/// </remarks>
+	/// <returns>The number of objects the component left.</returns>
+	public int RemoveComponentFromSelection(string typeId)
+	{
+		ArgumentNullException.ThrowIfNull(typeId);
+
+		SceneDocument scene = RequireScene();
+		EditorComponentDescriptor descriptor =
+			ComponentCatalog.Default.Get(typeId);
+		List<IEditorCommand> commands = [];
+
+		foreach (Guid id in _selection)
+		{
+			if (scene.Find(id) is not SceneEntity entity)
+			{
+				continue;
+			}
+
+			AuthoredComponent? target = entity.Components
+				.FirstOrDefault(candidate => string.Equals(
+					candidate.TypeId,
+					typeId,
+					StringComparison.Ordinal));
+
+			if (target is null)
+			{
+				continue;
+			}
+
+			commands.Add(new RemoveComponentCommand(scene, id, target));
+		}
+
+		if (commands.Count == 0)
+		{
+			return 0;
+		}
+
+		Undo.Execute(commands.Count == 1
+			? commands[0]
+			: new CompositeCommand(
+				$"Remove {descriptor.DisplayName} from {commands.Count} objects",
+				commands));
+
+		SetStatus(commands.Count == 1
+			? $"Removed {descriptor.DisplayName}"
+			: $"Removed {descriptor.DisplayName} from {commands.Count} objects");
+
+		return commands.Count;
+	}
+
+	/// <summary>
 	/// Adds a component to every selected object that does not have one
 	/// yet, as a single undo step.
 	/// </summary>

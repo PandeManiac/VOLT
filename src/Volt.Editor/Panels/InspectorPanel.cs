@@ -383,7 +383,9 @@ public sealed class InspectorPanel : Panel
 			{
 				try
 				{
-					_session.RemoveComponent(entity.Id, captured);
+					// The row stands for the component across the selection,
+					// so removing it follows the same rule the fields do.
+					_session.RemoveComponentFromSelection(captured.TypeId);
 				}
 
 				catch (Exception exception)
@@ -788,7 +790,7 @@ public sealed class InspectorPanel : Panel
 
 		try
 		{
-			_session.AddComponent(entity.Id, descriptor.TypeId);
+			_session.AddComponentToSelection(descriptor.TypeId);
 		}
 
 		catch (Exception exception)
