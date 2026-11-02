@@ -378,6 +378,26 @@ public sealed class HierarchyPanel : Panel
 			_expanded.Clear();
 			_known.Clear();
 			_renderedFilter = string.Empty;
+
+			// A filter typed for the previous scene would hide the objects
+			// of the one that just opened, which reads as an empty scene.
+			// The project browser clears its search on a change of
+			// identity for the same reason. The text change is absorbed
+			// here because this pass rebuilds the rows anyway.
+			if (_search.Text.Length > 0)
+			{
+				_updating = true;
+
+				try
+				{
+					_search.Text = string.Empty;
+				}
+
+				finally
+				{
+					_updating = false;
+				}
+			}
 		}
 
 		string signature = scene is null
