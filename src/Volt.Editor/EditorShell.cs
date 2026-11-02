@@ -1931,9 +1931,37 @@ public sealed class EditorShell : Panel
 		}
 		while (File.Exists(project.ResolvePath(relative)));
 
-		_session.CreateScene(
+		SceneDocument? created = _session.CreateScene(
 			relative,
 			$"Scene {index - 1}");
+
+		if (created is not null)
+		{
+			string createdId = ProjectAssetCatalog.NormalizeId(relative);
+			ProjectPanel? projectPanel = _dock is null
+				? null
+				: FindDescendant<ProjectPanel>(_dock);
+
+			if (projectPanel is not null)
+			{
+				projectPanel.RevealCreatedScene(createdId);
+			}
+			else
+			{
+				ProjectPanelState previous =
+					_projectPanelState ?? new ProjectPanelState();
+
+				_projectPanelState = new ProjectPanelState
+				{
+					ProjectId = _session.Project?.Id,
+					Folder = "Scenes",
+					GridMode = previous.GridMode,
+					SelectedId = createdId,
+					SelectedAssetIds = [createdId],
+					CollapsedFolders = previous.CollapsedFolders
+				};
+			}
+		}
 	}
 
 	private void ShowPreferences()

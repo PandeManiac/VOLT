@@ -599,7 +599,7 @@ public sealed class ProjectPanel : Panel
 				createdPath,
 				StringComparison.OrdinalIgnoreCase))
 			{
-				CompleteCreatedSceneNavigation(createdPath);
+				RevealCreatedScene(createdPath);
 				return;
 			}
 
@@ -661,7 +661,7 @@ public sealed class ProjectPanel : Panel
 				// The session's notification normally completes this while
 				// CreateScene runs. This fallback covers a detached panel that
 				// was not listening when the scene changed.
-				CompleteCreatedSceneNavigation(createdPath);
+				RevealCreatedScene(createdPath);
 			}
 		}
 
@@ -673,7 +673,7 @@ public sealed class ProjectPanel : Panel
 		}
 	}
 
-	private void CompleteCreatedSceneNavigation(string createdPath)
+	internal void RevealCreatedScene(string createdPath)
 	{
 		_pendingCreatedScenePath = null;
 		_pendingSceneOriginPath = null;

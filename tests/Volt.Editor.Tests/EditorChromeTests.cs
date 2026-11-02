@@ -1020,6 +1020,27 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void FileMenu_NewSceneAlsoRevealsCreatedSceneInProjectBrowser()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+		MenuItem newScene = shell.MenuBarView.Menus
+			.Single(menu => menu.Label == "File")
+			.Children.Single(item => item.Label == "New Scene");
+
+		newScene.Action!();
+
+		ProjectPanelState state = project.CaptureState();
+		Assert.Equal("Scenes", state.Folder);
+		Assert.Equal("Scenes/Scene1.volt.scene.json", state.SelectedId);
+		Assert.Contains(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.Text == "Scene1.volt.scene.json");
+	}
+
+	[Fact]
 	public void ProjectBrowser_DeferredSceneCreationStillSelectsCreatedScene()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);
