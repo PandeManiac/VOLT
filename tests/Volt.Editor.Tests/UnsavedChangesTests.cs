@@ -1,5 +1,6 @@
 using Volt.Editor.Core.Projects;
 using Volt.Editor.Core.Scenes;
+using Volt.Editor.Panels;
 using Volt.Ui;
 using Volt.Ui.Input;
 using Volt.Ui.Widgets;
@@ -257,6 +258,51 @@ public sealed class UnsavedChangesTests : IDisposable
 
 		Assert.True(_session.IsSceneDirty);
 		Assert.False(_context.HasModal);
+	}
+
+	[Fact]
+	public void Shell_SavesAPendingFieldEditFromTheDialog()
+	{
+		EditorShell shell = BuildShell();
+		bool exited = false;
+
+		shell.ExitRequested += () => exited = true;
+
+		SceneEntity cube = _session.CreateEntity("Cube")!;
+
+		_session.Select(cube.Id);
+		Layout();
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.First();
+
+		Assert.True(name.Focus());
+		_context.TextInput("Renamed");
+		Layout();
+
+		// No Enter: the typed name is still uncommitted when the guard
+		// opens, so only the dialog's Save can put it in the file.
+
+		// The scene is dirty from the new object, so closing asks. The
+		// dialog's Save has to apply the pending name as well, or the
+		// file would keep the old one and the edit would be dropped.
+		shell.RequestExit();
+
+		Assert.False(exited);
+		Assert.True(_context.HasModal);
+
+		Layout();
+		Click(FindButton(_context.Modal!, "Save"));
+
+		string saved = File.ReadAllText(
+			Path.Combine(_root, "Game", "Scenes", "Main.volt.scene.json"));
+
+		Assert.Contains("Renamed", saved);
+		Assert.False(_session.IsSceneDirty);
 	}
 
 	private EditorShell BuildShell()
