@@ -34,6 +34,7 @@ public sealed class ConsolePanel : Panel
 	private bool _showInfo = true;
 	private bool _showWarnings = true;
 	private bool _showErrors = true;
+	private bool _pendingTail = true;
 	private bool _disposed;
 
 	public ConsolePanel(EditorSession session)
@@ -167,6 +168,13 @@ public sealed class ConsolePanel : Panel
 
 	private void Rebuild()
 	{
+		// The view follows the newest message only when it was already at
+		// the end, so an author reading an earlier entry keeps it there.
+		bool followTail = _pendingTail ||
+			_scroll.MaximumScroll <= 1f ||
+			_scroll.ScrollOffset.Y >= _scroll.MaximumScroll - 1f;
+		float previousOffset = _scroll.ScrollOffset.Y;
+
 		for (int index = _rows.Children.Count - 1; index >= 0; index--)
 		{
 			_rows.Children[index].Dispose();
@@ -220,7 +228,30 @@ public sealed class ConsolePanel : Panel
 		}
 
 		_scroll.InvalidateMeasure();
-		_scroll.ScrollToEnd();
+
+		if (followTail)
+		{
+			// The content height the new rows produce only exists after
+			// the next arrange, so the tail is requested there instead of
+			// being clamped against the height from before the rebuild.
+			_pendingTail = true;
+		}
+
+		else
+		{
+			_scroll.SetScrollOffset(previousOffset);
+		}
+	}
+
+	protected override void ArrangeContent(UiRect contentBounds)
+	{
+		base.ArrangeContent(contentBounds);
+
+		if (_pendingTail)
+		{
+			_pendingTail = false;
+			_scroll.ScrollToEnd();
+		}
 	}
 
 	private bool IsSeverityVisible(EditorLogLevel level)
