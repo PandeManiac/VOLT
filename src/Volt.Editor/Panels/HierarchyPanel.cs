@@ -163,6 +163,39 @@ public sealed class HierarchyPanel : Panel
 		base.Dispose();
 	}
 
+	protected override bool OnKeyDown(UiKeyEvent key)
+	{
+		// When the tree owns focus, Select All should operate on the
+		// filtered objects the user can see. The shell shortcut still
+		// handles the unfiltered scene, while the search field handles
+		// Ctrl+A in its own text.
+		if (key.Key == UiKey.A &&
+			(key.Modifiers & UiKeyModifiers.Control) != 0 &&
+			(key.Modifiers & (UiKeyModifiers.Shift | UiKeyModifiers.Alt |
+				UiKeyModifiers.Super)) == 0 &&
+			_search.Text.Trim().Length > 0 &&
+			Context?.FocusedWidget == _tree &&
+			_session.Scene is SceneDocument scene)
+		{
+			string filter = _search.Text.Trim();
+			Guid[] matching = [.. scene.Entities
+				.Where(entity => entity.Name.Contains(
+					filter,
+					StringComparison.OrdinalIgnoreCase))
+				.Select(entity => entity.Id)];
+
+			_session.SelectMany(matching, matching.LastOrDefault());
+			_updating = true;
+			_tree.SetSelection(matching
+				.Where(_items.ContainsKey)
+				.Select(id => _items[id]));
+			_updating = false;
+			return true;
+		}
+
+		return base.OnKeyDown(key);
+	}
+
 	private static IconButton CreateAction(
 		UiIcon icon,
 		string tooltip,

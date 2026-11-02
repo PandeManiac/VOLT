@@ -462,6 +462,34 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void Hierarchy_SelectAllWithSearchSelectsOnlyMatchingObjects()
+	{
+		SceneEntity matching = _session.CreateEntity("Filtered Target")!;
+		_session.CreateEntity("Hidden Object");
+		EditorShell shell = BuildShell(1440f, 900f);
+		HierarchyPanel hierarchy = Descendants(shell)
+			.OfType<HierarchyPanel>()
+			.Single();
+		TreeView tree = Descendants(hierarchy)
+			.OfType<TreeView>()
+			.Single();
+		TextField search = Descendants(hierarchy)
+			.OfType<TextField>()
+			.Single(field => field.Placeholder == "Search objects");
+
+		search.Text = "Filtered Target";
+		Assert.True(tree.Focus());
+
+		Assert.True(_context.KeyDown(UiKey.A, UiKeyModifiers.Control));
+
+		Assert.Equal([matching.Id], _session.Selection);
+		Assert.Equal(matching.Id, _session.ActiveEntityId);
+		Assert.Equal(
+			[matching.Id],
+			tree.SelectedItems.Select(item => Assert.IsType<Guid>(item.Tag)));
+	}
+
+	[Fact]
 	public void VisiblePanels_EachPaintGeometry()
 	{
 		// A panel that paints nothing is a blank rectangle; the whole
