@@ -72,11 +72,17 @@ public sealed class SelectionDuplicateTests : IDisposable
 		_session.UndoLast();
 
 		Assert.Equal(entities, scene.Entities.Count);
+		Assert.Contains(cube.Id, _session.Selection);
+		Assert.Contains(partner.Id, _session.Selection);
+		Assert.Equal(cube.Id, _session.ActiveEntityId);
 
 		_session.RedoLast();
 
 		Assert.Equal(entities + 2, scene.Entities.Count);
 		Assert.NotNull(scene.Find(copies[0].Id));
+		Assert.Equal(2, _session.Selection.Count);
+		Assert.All(copies, copy => Assert.Contains(copy.Id, _session.Selection));
+		Assert.Contains(_session.ActiveEntityId!.Value, copies.Select(copy => copy.Id));
 	}
 
 	[Fact]

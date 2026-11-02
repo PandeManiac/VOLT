@@ -20,21 +20,18 @@ public sealed class EditorSession : IDisposable
 
 	private sealed class SelectionCommand : IEditorCommand
 	{
-		private readonly EditorSession _session;
 		private readonly IEditorCommand _command;
-		private readonly Guid[] _selection;
-		private readonly Guid? _activeEntityId;
+		private readonly Action _onExecute;
+		private readonly Action _onUndo;
 
 		public SelectionCommand(
-			EditorSession session,
 			IEditorCommand command,
-			IEnumerable<Guid> selection,
-			Guid? activeEntityId)
+			Action onExecute,
+			Action onUndo)
 		{
-			_session = session;
 			_command = command;
-			_selection = [.. selection];
-			_activeEntityId = activeEntityId;
+			_onExecute = onExecute;
+			_onUndo = onUndo;
 		}
 
 		public string Description => _command.Description;
@@ -42,13 +39,13 @@ public sealed class EditorSession : IDisposable
 		public void Execute()
 		{
 			_command.Execute();
-			_session.ClearSelection();
+			_onExecute();
 		}
 
 		public void Undo()
 		{
 			_command.Undo();
-			_session.SelectMany(_selection, _activeEntityId);
+			_onUndo();
 		}
 	}
 
@@ -790,11 +787,13 @@ public sealed class EditorSession : IDisposable
 				$"Delete {commands.Count} objects",
 				commands);
 
+		Guid[] selectionBeforeDelete = [.. _selection];
+		Guid? activeBeforeDelete = ActiveEntityId;
+
 		Undo.Execute(new SelectionCommand(
-			this,
 			delete,
-			_selection,
-			ActiveEntityId));
+			ClearSelection,
+			() => SelectMany(selectionBeforeDelete, activeBeforeDelete)));
 
 		SetStatus(commands.Count == 1
 			? $"Deleted {targets[0].Name}"
@@ -817,7 +816,6 @@ public sealed class EditorSession : IDisposable
 			return null;
 		}
 
-		Select(copies[0].Id);
 		SetStatus($"Duplicated {copies[0].Name}");
 
 		return copies[0];
@@ -908,17 +906,6 @@ public sealed class EditorSession : IDisposable
 		{
 			return copies;
 		}
-
-		// Copies come back in source order, so the copy of the active
-		// object is the one at the active source's position.
-		int activeIndex = roots.FindIndex(
-			source => source.Id == ActiveEntityId);
-
-		Guid? activeCopy = activeIndex >= 0
-			? copies[activeIndex].Id
-			: null;
-
-		SelectMany(copies.Select(copy => copy.Id), activeCopy);
 
 		SetStatus(copies.Count == 1
 			? $"Duplicated {copies[0].Name}"
@@ -1017,6 +1004,8 @@ public sealed class EditorSession : IDisposable
 		SceneDocument scene,
 		IReadOnlyList<SceneEntity> sources)
 	{
+		Guid[] selectionBeforeDuplicate = [.. _selection];
+		Guid? activeBeforeDuplicate = ActiveEntityId;
 		List<DuplicateEntityCommand> commands = [];
 
 		foreach (SceneEntity source in sources)
@@ -1029,11 +1018,32 @@ public sealed class EditorSession : IDisposable
 			return [];
 		}
 
-		Undo.Execute(commands.Count == 1
+		IEditorCommand duplicate = commands.Count == 1
 			? commands[0]
 			: new CompositeCommand(
 				$"Duplicate {commands.Count} objects",
-				commands));
+				commands);
+		int activeIndex = -1;
+
+		for (int index = 0; index < sources.Count; index++)
+		{
+			if (sources[index].Id == activeBeforeDuplicate)
+			{
+				activeIndex = index;
+				break;
+			}
+		}
+
+		Undo.Execute(new SelectionCommand(
+			duplicate,
+			() => SelectMany(
+				commands.Select(command => command.Copy!.Id),
+				activeIndex >= 0
+					? commands[activeIndex].Copy!.Id
+					: null),
+			() => SelectMany(
+				selectionBeforeDuplicate,
+				activeBeforeDuplicate)));
 
 		return [.. commands.Select(command => command.Copy!)];
 	}
