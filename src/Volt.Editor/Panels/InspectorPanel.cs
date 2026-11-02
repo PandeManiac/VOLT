@@ -26,6 +26,7 @@ public sealed class InspectorPanel : Panel
 	private readonly Label _entitySubtitle;
 
 	private Guid? _boundEntityId;
+	private SceneDocument? _boundScene;
 	private string _componentSignature = string.Empty;
 	private bool _updating;
 	private bool _committingName;
@@ -233,6 +234,7 @@ public sealed class InspectorPanel : Panel
 		SceneEntity? entity = _session.ActiveEntity;
 
 		_boundEntityId = entity?.Id;
+		_boundScene = _session.Scene;
 		_componentSignature = entity is null
 			? string.Empty
 			: BuildComponentSignature(entity);
@@ -728,6 +730,11 @@ public sealed class InspectorPanel : Panel
 	{
 		if (_updating ||
 			_committingName ||
+
+			// A reload or a scene switch replaces the document. Text
+			// typed for the previous one must not rename an entity that
+			// merely happens to share its id in the new scene.
+			!ReferenceEquals(_boundScene, _session.Scene) ||
 			_boundEntityId is not Guid id ||
 			_session.Scene is not SceneDocument scene ||
 			scene.Find(id) is not SceneEntity entity)
