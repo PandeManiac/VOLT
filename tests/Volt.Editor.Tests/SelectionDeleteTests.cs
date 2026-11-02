@@ -67,6 +67,15 @@ public sealed class SelectionDeleteTests : IDisposable
 
 		Assert.NotNull(scene.Find(cube.Id));
 		Assert.NotNull(scene.Find(partner.Id));
+		Assert.Contains(cube.Id, _session.Selection);
+		Assert.Contains(partner.Id, _session.Selection);
+		Assert.Equal(cube.Id, _session.ActiveEntityId);
+
+		_session.RedoLast();
+
+		Assert.Null(scene.Find(cube.Id));
+		Assert.Null(scene.Find(partner.Id));
+		Assert.Empty(_session.Selection);
 	}
 
 	[Fact]

@@ -18,6 +18,40 @@ public sealed class EditorSession : IDisposable
 {
 	private const int MaximumLogEntries = 500;
 
+	private sealed class SelectionCommand : IEditorCommand
+	{
+		private readonly EditorSession _session;
+		private readonly IEditorCommand _command;
+		private readonly Guid[] _selection;
+		private readonly Guid? _activeEntityId;
+
+		public SelectionCommand(
+			EditorSession session,
+			IEditorCommand command,
+			IEnumerable<Guid> selection,
+			Guid? activeEntityId)
+		{
+			_session = session;
+			_command = command;
+			_selection = [.. selection];
+			_activeEntityId = activeEntityId;
+		}
+
+		public string Description => _command.Description;
+
+		public void Execute()
+		{
+			_command.Execute();
+			_session.ClearSelection();
+		}
+
+		public void Undo()
+		{
+			_command.Undo();
+			_session.SelectMany(_selection, _activeEntityId);
+		}
+	}
+
 	private readonly List<EditorLogEntry> _log = [];
 	private readonly HashSet<Guid> _selection = [];
 	private PlaySession? _play;
@@ -750,13 +784,17 @@ public sealed class EditorSession : IDisposable
 			commands.Add(new DeleteEntityCommand(scene, entity.Id));
 		}
 
-		Undo.Execute(commands.Count == 1
+		IEditorCommand delete = commands.Count == 1
 			? commands[0]
 			: new CompositeCommand(
 				$"Delete {commands.Count} objects",
-				commands));
+				commands);
 
-		ClearSelection();
+		Undo.Execute(new SelectionCommand(
+			this,
+			delete,
+			_selection,
+			ActiveEntityId));
 
 		SetStatus(commands.Count == 1
 			? $"Deleted {targets[0].Name}"
