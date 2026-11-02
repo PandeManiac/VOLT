@@ -632,9 +632,17 @@ public sealed class EditorSession : IDisposable
 			if (additive && _selection.Contains(selected))
 			{
 				_selection.Remove(selected);
-				ActiveEntityId = _selection.Count > 0
-					? _selection.Last()
-					: null;
+
+				// Removing a row must not move the inspector to an
+				// unrelated object. The active object keeps its role while
+				// it is still selected, and only its own removal hands the
+				// role on, to a scene-order replacement rather than to
+				// whatever order the set happens to enumerate in.
+				if (ActiveEntityId is not Guid active ||
+					!_selection.Contains(active))
+				{
+					ActiveEntityId = LastSelectedInSceneOrder();
+				}
 			}
 
 			else
@@ -1570,6 +1578,30 @@ public sealed class EditorSession : IDisposable
 	private void OnHistoryChanged()
 	{
 		StatusChanged?.Invoke(this);
+	}
+
+	/// <summary>
+	/// Gets the last selected object in scene order, which is the order
+	/// the hierarchy lists its rows in.
+	/// </summary>
+	private Guid? LastSelectedInSceneOrder()
+	{
+		if (Scene is not SceneDocument scene)
+		{
+			return null;
+		}
+
+		Guid? last = null;
+
+		foreach (SceneEntity entity in scene.Entities)
+		{
+			if (_selection.Contains(entity.Id))
+			{
+				last = entity.Id;
+			}
+		}
+
+		return last;
 	}
 
 	private void ValidateSelection()
