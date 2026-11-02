@@ -526,11 +526,10 @@ public sealed class EditorChromeTests : IDisposable
 	{
 		EditorShell shell = BuildShell(1440f, 900f);
 		SceneEntity parent = _session.CreateEntity("Parent")!;
-		_session.CreateEntity("Child", parent.Id);
+		SceneEntity child = _session.CreateEntity("Child", parent.Id)!;
 
-		// The parent is the object being edited, so revealing the
-		// selection after the rebuild does not need to open it again.
-		_session.Select(parent.Id);
+		// The selected object lives inside the row the author closed.
+		_session.Select(child.Id);
 
 		HierarchyPanel hierarchy = Descendants(shell)
 			.OfType<HierarchyPanel>()

@@ -1,3 +1,4 @@
+using Volt.Editor.Core.Editing;
 using Volt.Editor.Core.Scenes;
 using Volt.Editor.Panels;
 using Volt.Ui;
@@ -90,6 +91,67 @@ public sealed class HierarchyScrollStabilityTests : IDisposable
 		Assert.True(
 			tree.ScrollOffset > 0f,
 			"Selecting an off-screen object must reveal its row.");
+	}
+
+	[Fact]
+	public void RebuiltRowsKeepTheSelectionHighlighted()
+	{
+		SceneEntity first = _session.CreateEntity("First")!;
+
+		HierarchyPanel hierarchy = new(_session);
+
+		_context.Add(hierarchy);
+		_context.BeginFrame(0.0, new UiSize(400f, 500f), UiPoint.Zero);
+
+		TreeView tree = Descendants(hierarchy).OfType<TreeView>().Single();
+
+		Assert.Equal(
+			first.Id,
+			Assert.Single(tree.SelectedItems).Tag);
+
+		// Creating another object restructures the rows and selects the
+		// new one. The rebuilt tree must highlight it rather than losing
+		// the selection the session holds.
+		SceneEntity second = _session.CreateEntity("Second")!;
+		_context.BeginFrame(0.1, new UiSize(400f, 500f), UiPoint.Zero);
+
+		Assert.Equal(
+			second.Id,
+			Assert.Single(tree.SelectedItems).Tag);
+	}
+
+	[Fact]
+	public void StructuralChangeKeepsACollapsedParentCollapsed()
+	{
+		SceneEntity parent = _session.CreateEntity("Parent")!;
+		SceneEntity child = _session.CreateEntity("Child", parent.Id)!;
+		_session.Select(child.Id);
+
+		HierarchyPanel hierarchy = new(_session);
+
+		_context.Add(hierarchy);
+		_context.BeginFrame(0.0, new UiSize(400f, 500f), UiPoint.Zero);
+
+		TreeView tree = Descendants(hierarchy).OfType<TreeView>().Single();
+		TreeViewItem parentRow = tree.Roots.Single(item =>
+			item.Tag is Guid id && id == parent.Id);
+
+		Assert.True(parentRow.IsExpanded);
+
+		parentRow.IsExpanded = false;
+		tree.Refresh();
+		_context.BeginFrame(0.1, new UiSize(400f, 500f), UiPoint.Zero);
+
+		// Adding an object elsewhere rebuilds the rows without changing
+		// the selection. It must not reopen a row the author closed just
+		// because the selected object lives inside it.
+		_session.Undo.Execute(new AddEntityCommand(_session.Scene!, "Other"));
+		_context.BeginFrame(0.2, new UiSize(400f, 500f), UiPoint.Zero);
+
+		TreeViewItem rebuilt = tree.Roots.Single(item =>
+			item.Tag is Guid id && id == parent.Id);
+
+		Assert.False(rebuilt.IsExpanded);
 	}
 
 	private TreeView BuildHierarchy(int rowCount)

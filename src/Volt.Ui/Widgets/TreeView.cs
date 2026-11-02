@@ -221,20 +221,37 @@ public sealed class TreeView : Widget
 
 		_flattenDirty = true;
 		InvalidateMeasure();
+		ScrollIntoView(item);
+	}
+
+	/// <summary>
+	/// Scrolls a row to the middle of the viewport without opening a
+	/// parent the author closed.
+	/// </summary>
+	/// <remarks>
+	/// A row inside a collapsed parent is not part of the flattened
+	/// list, so there is nothing to scroll to and the tree keeps the
+	/// author's expansion and scroll state untouched.
+	/// </remarks>
+	/// <returns>True when the row was in the list and was scrolled to.</returns>
+	public bool ScrollIntoView(TreeViewItem item)
+	{
+		ArgumentNullException.ThrowIfNull(item);
+
 		Flatten();
 
-		int index = _visibleIndices.TryGetValue(item, out int itemIndex)
-			? itemIndex
-			: -1;
-
-		if (index >= 0)
+		if (_rowHeight <= 0f ||
+			!_visibleIndices.TryGetValue(item, out int index))
 		{
-			float height = MathF.Max(1f, ContentBounds.Height);
-			float target = (index * _rowHeight) -
-				((height - _rowHeight) * 0.5f);
-
-			SetScroll(target);
+			return false;
 		}
+
+		float height = MathF.Max(1f, ContentBounds.Height);
+		float target = (index * _rowHeight) -
+			((height - _rowHeight) * 0.5f);
+
+		SetScroll(target);
+		return true;
 	}
 
 	protected override UiSize MeasureContent(UiSize contentAvailable)

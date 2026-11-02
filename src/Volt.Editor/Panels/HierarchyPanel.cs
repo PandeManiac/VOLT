@@ -150,6 +150,10 @@ public sealed class HierarchyPanel : Panel
 			_renderedScenePath = _session.ScenePath;
 			_expanded.UnionWith(state.Expanded);
 			_known.UnionWith(state.Known);
+
+			// The selection was already mirrored before the rebuild, so
+			// restoring it must not open a row the author had closed.
+			_revealedSelection = BuildSelectionSignature();
 			_search.Text = state.Search;
 		}
 
@@ -383,7 +387,7 @@ public sealed class HierarchyPanel : Panel
 			// Nothing about the rows changed, so the author's scroll
 			// position is theirs to keep. Only a different selection is
 			// a request to bring a row back into view.
-			SyncSelection(revealSelection: false);
+			SyncSelection(rebuilt: false);
 			return;
 		}
 
@@ -443,10 +447,9 @@ public sealed class HierarchyPanel : Panel
 		_tree.IsVisible = !empty;
 		_search.IsVisible = true;
 
-		// A rebuilt tree keeps its selection, so the rows still show the
-		// same objects. Revealing follows a moved or newly selected row,
-		// which keeps a re-parented object in sight.
-		SyncSelection(revealSelection: true);
+		// The rows are new, so the selection has to be applied to them
+		// again or the tree would show nothing highlighted.
+		SyncSelection(rebuilt: true);
 		_updating = false;
 	}
 
@@ -520,47 +523,66 @@ public sealed class HierarchyPanel : Panel
 	}
 
 	/// <summary>
-	/// Mirrors the session's selection into the tree, scrolling rows
-	/// into view only when the selection is not already on screen.
+	/// Mirrors the session's selection into the tree.
 	/// </summary>
-	/// <param name="revealSelection">
-	/// True when the tree was rebuilt, so the selected rows may have
-	/// moved. False when only the scene's data changed, which must
-	/// leave the author's scroll position alone.
+	/// <param name="rebuilt">
+	/// True when the rows were just re-created, so the selection has to
+	/// be applied to new items. False when only the scene's data
+	/// changed, which leaves the existing rows alone.
 	/// </param>
-	private void SyncSelection(bool revealSelection)
+	/// <remarks>
+	/// A different selection opens its path and scrolls it into view,
+	/// because the author just asked for that object. A rebuild keeps
+	/// the expansion the author chose: a selected object inside a row
+	/// they closed must not reopen it, and the tree must not scroll away
+	/// from where they were looking.
+	/// </remarks>
+	private void SyncSelection(bool rebuilt)
 	{
-		if (_updating)
-		{
-			return;
-		}
-
+		// The rebuild path calls this while it still owns the update
+		// flag. Restore the previous value instead of clearing it, so the
+		// caller keeps suppressing the tree's own selection events.
+		bool wasUpdating = _updating;
 		_updating = true;
 
-		string selection = BuildSelectionSignature();
-		bool selectionChanged = !string.Equals(
-			selection,
-			_revealedSelection,
-			StringComparison.Ordinal);
-		_revealedSelection = selection;
-
-		List<TreeViewItem> selected = [];
-
-		foreach (Guid id in _session.Selection)
+		try
 		{
-			if (_items.TryGetValue(id, out TreeViewItem? item))
+			string selection = BuildSelectionSignature();
+			bool selectionChanged = !string.Equals(
+				selection,
+				_revealedSelection,
+				StringComparison.Ordinal);
+			_revealedSelection = selection;
+
+			List<TreeViewItem> selected = [];
+
+			foreach (Guid id in _session.Selection)
 			{
+				if (!_items.TryGetValue(id, out TreeViewItem? item))
+				{
+					continue;
+				}
+
 				selected.Add(item);
 
-				if (revealSelection || selectionChanged)
+				if (selectionChanged)
 				{
 					_tree.Reveal(item);
 				}
+
+				else if (rebuilt)
+				{
+					_tree.ScrollIntoView(item);
+				}
 			}
+
+			_tree.SetSelection(selected);
 		}
 
-		_tree.SetSelection(selected);
-		_updating = false;
+		finally
+		{
+			_updating = wasUpdating;
+		}
 	}
 
 	private string BuildSelectionSignature()
@@ -630,7 +652,21 @@ public sealed class HierarchyPanel : Panel
 					.Select(entity => entity.Id)]
 				: [sourceId];
 
-			_session.ReparentEntities(moved, parentId);
+			int reParented = _session.ReparentEntities(moved, parentId);
+
+			if (reParented > 0 && parentId is Guid parent)
+		{
+				// Open the row the drop landed on: a moved object that
+				// disappeared into a collapsed parent would look lost.
+				_expanded.Add(parent);
+				_known.Add(parent);
+
+				if (_items.TryGetValue(parent, out TreeViewItem? row))
+				{
+					row.IsExpanded = true;
+					tree.Refresh();
+				}
+			}
 		});
 	}
 

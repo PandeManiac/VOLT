@@ -177,6 +177,44 @@ public sealed class HierarchyReparentTests : IDisposable
 		Assert.Null(scene.Find(child.Id)!.ParentId);
 	}
 
+	[Fact]
+	public void DroppingOntoACollapsedRowExpandsIt()
+	{
+		SceneDocument scene = EmptyScene();
+		SceneEntity parent = _session.CreateEntity("Parent")!;
+		_session.CreateEntity("Child", parent.Id);
+		SceneEntity loose = _session.CreateEntity("Loose")!;
+
+		TreeView tree = BuildHierarchy();
+		TreeViewItem parentRow = tree.Roots.Single(item =>
+			item.Tag is Guid id && id == parent.Id);
+
+		parentRow.IsExpanded = false;
+		tree.Refresh();
+		_context.BeginFrame(0.1, new UiSize(400f, 800f), UiPoint.Zero);
+
+		// Collapsing the parent hides its child, so the loose object is
+		// now the second row.
+		UiPoint from = RowCenter(tree.GlobalContentBounds, 1);
+		UiPoint to = RowCenter(tree.GlobalContentBounds, 0);
+
+		_context.PointerDown(UiMouseButton.Left, from);
+		_context.PointerMove(to, Delta(from, to));
+		_context.PointerUp(UiMouseButton.Left, to);
+
+		Assert.Equal(parent.Id, scene.Find(loose.Id)!.ParentId);
+
+		TreeViewItem rebuilt = tree.Roots.Single(item =>
+			item.Tag is Guid id && id == parent.Id);
+
+		Assert.True(
+			rebuilt.IsExpanded,
+			"A drop must open the row it landed on so the moved object stays in sight.");
+		Assert.Contains(
+			rebuilt.Children,
+			child => child.Tag is Guid id && id == loose.Id);
+	}
+
 	private SceneDocument EmptyScene()
 	{
 		SceneDocument scene = _session.Scene!;
