@@ -272,6 +272,14 @@ internal sealed class DockTabsView : Widget
 			return false;
 		}
 
+		if (!IsPointerCaptured)
+		{
+			_dragPanel = null;
+			_dragging = false;
+			InvalidateVisual();
+			return false;
+		}
+
 		if (!_dragging)
 		{
 			float dx = pointer.GlobalPosition.X - _dragStart.X;
@@ -292,6 +300,14 @@ internal sealed class DockTabsView : Widget
 	{
 		if (_dragPanel is null)
 		{
+			return false;
+		}
+
+		if (!IsPointerCaptured)
+		{
+			_dragPanel = null;
+			_dragging = false;
+			InvalidateVisual();
 			return false;
 		}
 

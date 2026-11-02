@@ -324,6 +324,12 @@ public class ScrollView : Widget
 			return false;
 		}
 
+		if (!IsPointerCaptured)
+		{
+			_draggingThumb = false;
+			return false;
+		}
+
 		UiRect track = GetTrackRect();
 		UiRect thumb = GetThumbRect();
 
