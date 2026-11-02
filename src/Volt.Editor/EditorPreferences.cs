@@ -62,6 +62,17 @@ internal sealed class EditorPreferences : IDisposable
 	public int ProjectRevision { get; private set; }
 
 	/// <summary>
+	/// Gets or sets a callback reporting the live window geometry, or
+	/// null when the window has no meaningful restore size.
+	/// </summary>
+	/// <remarks>
+	/// The host owns the window, so this coordinator cannot read it. The
+	/// callback matters when a project is left: the window at that moment
+	/// belongs to the project being left, not to the one arriving.
+	/// </remarks>
+	public Func<(int Width, int Height, int? X, int? Y)?>? WindowMetrics { get; set; }
+
+	/// <summary>
 	/// Gets the settings file path for a project.
 	/// </summary>
 	internal static string SettingsPath(string projectRoot)
@@ -121,10 +132,18 @@ internal sealed class EditorPreferences : IDisposable
 			return;
 		}
 
-		Write(
-			project.RootPath,
-			Capture(windowWidth, windowHeight, windowX, windowY));
+		EditorSettings settings = Capture(
+			windowWidth,
+			windowHeight,
+			windowX,
+			windowY);
 
+		Write(project.RootPath, settings);
+
+		// The coordinator's copy now matches the file, so a later save
+		// for another project falls back to what this one really saved
+		// rather than to the defaults it started with.
+		Current = settings.Normalize();
 		_loadedRoot = project.RootPath;
 	}
 
@@ -154,13 +173,14 @@ internal sealed class EditorPreferences : IDisposable
 		if (_loadedRoot is string previous &&
 			!string.Equals(previous, project.RootPath, StringComparison.Ordinal))
 		{
-			Write(
-				previous,
-				Capture(
-					Current.WindowWidth,
-					Current.WindowHeight,
-					Current.WindowX,
-					Current.WindowY));
+			// A resize made while this project was open is only in the
+			// window, so the live geometry is preferred over the size the
+			// project saved the last time it was used. A window that cannot
+			// report a restore size (maximized) keeps the saved one.
+			(int width, int height, int? x, int? y) = WindowMetrics?.Invoke() ??
+				(Current.WindowWidth, Current.WindowHeight, Current.WindowX, Current.WindowY);
+
+			Write(previous, Capture(width, height, x, y));
 		}
 
 		Current = Load(project.RootPath);

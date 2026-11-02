@@ -69,6 +69,59 @@ public sealed class EditorPreferencesTests : IDisposable
 	}
 
 	[Fact]
+	public void LeavingAProjectSavesTheLiveWindowGeometry()
+	{
+		string first = Path.Combine(_root, "First");
+		string second = Path.Combine(_root, "Second");
+
+		_session.NewProject(first, "First");
+
+		using EditorShell shell = new(_session);
+		using EditorPreferences preferences = new(
+			_session,
+			shell,
+			new EditorSettings());
+
+		preferences.WindowMetrics = () => (1024, 768, 12, 24);
+
+		_session.NewProject(second, "Second");
+
+		EditorSettings saved = EditorPreferences.Load(first);
+
+		Assert.Equal(1024, saved.WindowWidth);
+		Assert.Equal(768, saved.WindowHeight);
+		Assert.Equal(12, saved.WindowX);
+		Assert.Equal(24, saved.WindowY);
+	}
+
+	[Fact]
+	public void LeavingAProjectKeepsSavedGeometryWhenTheWindowReportsNone()
+	{
+		string first = Path.Combine(_root, "First");
+		string second = Path.Combine(_root, "Second");
+
+		_session.NewProject(first, "First");
+
+		using EditorShell shell = new(_session);
+		using EditorPreferences preferences = new(
+			_session,
+			shell,
+			new EditorSettings());
+
+		preferences.Save(1280, 720, 5, 6);
+		preferences.WindowMetrics = () => null;
+
+		_session.NewProject(second, "Second");
+
+		EditorSettings saved = EditorPreferences.Load(first);
+
+		Assert.Equal(1280, saved.WindowWidth);
+		Assert.Equal(720, saved.WindowHeight);
+		Assert.Equal(5, saved.WindowX);
+		Assert.Equal(6, saved.WindowY);
+	}
+
+	[Fact]
 	public void Save_WritesTheLiveValuesForTheOpenProject()
 	{
 		string project = Path.Combine(_root, "Only");

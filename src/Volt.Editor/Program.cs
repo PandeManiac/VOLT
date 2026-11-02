@@ -170,6 +170,24 @@ internal static class Program
 		// replaced by the startup project's values on exit.
 		using EditorPreferences preferences = new(session, shell, settings);
 
+		// Leaving a project records the window it was being edited in; a
+		// maximized window reports no restore size, so the project keeps
+		// the geometry it already had.
+		preferences.WindowMetrics = () =>
+		{
+			if (host.Window.IsMaximized)
+			{
+				return null;
+			}
+
+			Volt.Platform.Windows.WindowSize size = host.Window.Size;
+
+			return host.Window.TryGetPosition(
+				out Volt.Platform.Windows.WindowPosition position)
+					? (size.Width, size.Height, (int?)position.X, (int?)position.Y)
+					: (size.Width, size.Height, null, null);
+		};
+
 		if (sceneRenderer is not null)
 		{
 			// Viewport passes are recorded into the frame's own command
