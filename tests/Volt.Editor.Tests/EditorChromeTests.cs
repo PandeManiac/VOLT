@@ -1928,6 +1928,9 @@ public sealed class EditorChromeTests : IDisposable
 		Assert.False(
 			texturesFolder.IsExpanded,
 			"Renaming a collapsed folder must not expand it.");
+		Assert.True(
+			folders.HasFocus,
+			"Keyboard focus must return to the folder tree after a rename.");
 	}
 
 	[Fact]

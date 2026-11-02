@@ -481,6 +481,17 @@ public sealed class ProjectPanel : Panel
 
 	private void FocusSelection()
 	{
+		if (_selectedAssetIds.Count == 0 &&
+			_folders.SelectedItem is TreeViewItem selectedFolder)
+		{
+			if (_folders.Focus())
+			{
+				_folders.Reveal(selectedFolder);
+			}
+
+			return;
+		}
+
 		if (_gridMode)
 		{
 			IconTileView? primary = null;
@@ -796,6 +807,7 @@ public sealed class ProjectPanel : Panel
 				Rebuild(force: true);
 				_revealSelectionPending = true;
 				context.CloseModal();
+				FocusSelection();
 				_session.SetStatus(
 					$"Created folder {Path.GetFileName(folder)}");
 			}
@@ -1575,6 +1587,7 @@ public sealed class ProjectPanel : Panel
 				Rebuild(force: true);
 				_revealSelectionPending = true;
 				context.CloseModal();
+				FocusSelection();
 				_session.SetStatus(
 					$"Renamed folder {oldName} to {Path.GetFileName(renamed)}");
 			}
