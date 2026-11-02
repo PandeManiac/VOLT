@@ -31,9 +31,6 @@ public sealed class ConsolePanel : Panel
 	private readonly ToolButton _errors;
 	private readonly IconButton _clear;
 
-	private bool _showInfo = true;
-	private bool _showWarnings = true;
-	private bool _showErrors = true;
 	private bool _pendingTail = true;
 	private bool _disposed;
 
@@ -57,19 +54,19 @@ public sealed class ConsolePanel : Panel
 
 		_info = CreateFilter(UiIcon.Info, "Show information messages", () =>
 		{
-			_showInfo = !_showInfo;
+			_session.ConsoleShowsInfo = !_session.ConsoleShowsInfo;
 			Rebuild();
 		});
 
 		_warnings = CreateFilter(UiIcon.Warning, "Show warnings", () =>
 		{
-			_showWarnings = !_showWarnings;
+			_session.ConsoleShowsWarnings = !_session.ConsoleShowsWarnings;
 			Rebuild();
 		});
 
 		_errors = CreateFilter(UiIcon.Error, "Show errors", () =>
 		{
-			_showErrors = !_showErrors;
+			_session.ConsoleShowsErrors = !_session.ConsoleShowsErrors;
 			Rebuild();
 		});
 
@@ -193,9 +190,9 @@ public sealed class ConsolePanel : Panel
 		_warnings.Text = warnings.ToString(CultureInfo.InvariantCulture);
 		_errors.Text = errors.ToString(CultureInfo.InvariantCulture);
 
-		_info.IsActive = _showInfo;
-		_warnings.IsActive = _showWarnings;
-		_errors.IsActive = _showErrors;
+		_info.IsActive = _session.ConsoleShowsInfo;
+		_warnings.IsActive = _session.ConsoleShowsWarnings;
+		_errors.IsActive = _session.ConsoleShowsErrors;
 
 		int start = Math.Max(0, entries.Count - 200);
 		int shown = 0;
@@ -258,9 +255,9 @@ public sealed class ConsolePanel : Panel
 	{
 		return level switch
 		{
-			EditorLogLevel.Error => _showErrors,
-			EditorLogLevel.Warning => _showWarnings,
-			_ => _showInfo
+			EditorLogLevel.Error => _session.ConsoleShowsErrors,
+			EditorLogLevel.Warning => _session.ConsoleShowsWarnings,
+			_ => _session.ConsoleShowsInfo
 		};
 	}
 

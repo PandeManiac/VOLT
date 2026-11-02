@@ -522,6 +522,91 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void UiScale_RebuildPreservesConsoleSeverityFilters()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		Paint(0.1);
+
+		ConsolePanel console = Descendants(shell)
+			.OfType<ConsolePanel>()
+			.Single();
+
+		ToolButton info = Descendants(console)
+			.OfType<ToolButton>()
+			.Single(button => button.TooltipText == "Show information messages");
+
+		Assert.True(info.IsActive);
+
+		// The console tab is not laid out in this headless shell, so the
+		// choice the author made arrives through the session, which is
+		// where the panel keeps it. ConsoleFilterTests covers the button.
+		_session.ConsoleShowsInfo = false;
+		_session.Log("A filtered message");
+		Paint(0.2);
+
+		Assert.False(info.IsActive);
+
+		shell.ApplyUiScale(1.25f);
+		Paint(0.3);
+
+		ConsolePanel rebuilt = Descendants(shell)
+			.OfType<ConsolePanel>()
+			.Single();
+
+		ToolButton infoAfter = Descendants(rebuilt)
+			.OfType<ToolButton>()
+			.Single(button => button.TooltipText == "Show information messages");
+
+		Assert.NotSame(console, rebuilt);
+
+		Assert.False(
+			_session.ConsoleShowsInfo,
+			"The author's filter choice must be remembered by the session.");
+
+		Assert.False(
+			infoAfter.IsActive,
+			"The console must keep a severity the author turned off.");
+	}
+
+	[Fact]
+	public void UiScale_TypedVectorComponentIsKeptBeforeTheRebuild()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		Guid entityId = _session.Scene!.Entities[0].Id;
+
+		_session.Select(entityId);
+		Paint(0.1);
+
+		InspectorPanel inspector = Descendants(shell)
+			.OfType<InspectorPanel>()
+			.Single();
+
+		Vector3Field position = Descendants(inspector)
+			.OfType<Vector3Field>()
+			.First();
+
+		NumericField x = Descendants(position)
+			.OfType<NumericField>()
+			.First(field => field.Name == "X");
+
+		float original = x.Value;
+		float typed = original + 5f;
+
+		Assert.True(x.Focus());
+		x.Text = typed.ToString(
+			"0.###",
+			System.Globalization.CultureInfo.InvariantCulture);
+
+		shell.ApplyUiScale(1.25f);
+		Paint(0.2);
+
+		Assert.Equal(
+			typed,
+			_session.Scene!.Find(entityId)!.Transform.Position.X,
+			2);
+	}
+
+	[Fact]
 	public void UiScale_TypedInspectorNameIsKeptBeforeTheRebuild()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);

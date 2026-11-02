@@ -222,6 +222,27 @@ public sealed class EditorSession : IDisposable
 	/// </remarks>
 	public bool ViewportNavigating { get; set; }
 
+	/// <summary>
+	/// Gets or sets whether the console lists information messages.
+	/// </summary>
+	/// <remarks>
+	/// The console's severities live here rather than in the panel:
+	/// an interface-scale or preferences change recreates the panels,
+	/// and a console that forgot what the author had hidden would bring
+	/// the noise straight back.
+	/// </remarks>
+	public bool ConsoleShowsInfo { get; set; } = true;
+
+	/// <summary>
+	/// Gets or sets whether the console lists warnings.
+	/// </summary>
+	public bool ConsoleShowsWarnings { get; set; } = true;
+
+	/// <summary>
+	/// Gets or sets whether the console lists errors.
+	/// </summary>
+	public bool ConsoleShowsErrors { get; set; } = true;
+
 	public float SnapStep
 	{
 		get => _snapStep;
