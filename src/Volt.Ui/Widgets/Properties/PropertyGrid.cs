@@ -259,7 +259,11 @@ public sealed class PropertyGrid : ScrollView
 
 					field.EditingEnded += _ =>
 					{
-						if (!property.IsReadOnly)
+						if (!property.IsReadOnly &&
+							!string.Equals(
+								field.Text,
+								stringProperty.Get(),
+								StringComparison.Ordinal))
 						{
 							stringProperty.Set(field.Text);
 						}
@@ -355,7 +359,11 @@ public sealed class PropertyGrid : ScrollView
 
 					field.EditingEnded += _ =>
 					{
-						if (!property.IsReadOnly)
+						if (!property.IsReadOnly &&
+							!string.Equals(
+								field.Text,
+								assetProperty.Get() ?? string.Empty,
+								StringComparison.Ordinal))
 						{
 							assetProperty.Set(
 								field.Text.Length == 0 ? null : field.Text);

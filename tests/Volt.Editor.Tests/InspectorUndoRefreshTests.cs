@@ -98,6 +98,31 @@ public sealed class InspectorUndoRefreshTests : IDisposable
 		Assert.True(visible.HasFocus);
 	}
 
+	[Fact]
+	public void LeavingUnchangedAssetField_DoesNotCreateUndoOrDirtyScene()
+	{
+		SceneEntity entity = _session.Scene!.Entities.Single(
+			candidate => candidate.GetComponent<MeshRendererData>() is not null);
+		MeshRendererData renderer = entity.GetComponent<MeshRendererData>()!;
+		renderer.Mesh = "Assets/Meshes/mesh.mesh";
+		_session.SaveScene();
+		_session.Select(entity.Id);
+
+		using InspectorPanel inspector = new(_session);
+		_context.Add(inspector);
+		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
+		TextField meshAsset = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.Text == renderer.Mesh);
+		int undoCount = _session.Undo.UndoCount;
+
+		Assert.True(meshAsset.Focus());
+		meshAsset.Commit();
+
+		Assert.Equal(undoCount, _session.Undo.UndoCount);
+		Assert.False(_session.IsSceneDirty);
+	}
+
 	public void Dispose()
 	{
 		_context.Dispose();
