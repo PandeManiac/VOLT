@@ -443,6 +443,34 @@ public sealed class EditorSession : IDisposable
 		SetStatus("No project open");
 	}
 
+	/// <summary>
+	/// Re-reads the current scene file, replacing the in-memory scene.
+	/// </summary>
+	/// <remarks>
+	/// The caller asks about unsaved work first: this is the continuation
+	/// of that question, so it deliberately does not run the guard itself.
+	/// It is how the editor loads a file that something else changed while
+	/// the scene was open, and how an author recovers from a refused save.
+	/// </remarks>
+	public void ReloadScene()
+	{
+		ThrowIfDisposed();
+
+		EditorProject project = RequireProject();
+
+		if (ScenePath is not string path)
+		{
+			throw new InvalidOperationException(
+				"No scene path is selected.");
+		}
+
+		SceneDocument scene = project.LoadScene(path);
+
+		Stop();
+		SetScene(scene, path, dirty: false);
+		Log($"Reloaded scene '{scene.Name}'.");
+	}
+
 	public bool OpenScene(string relativePath)
 	{
 		ThrowIfDisposed();

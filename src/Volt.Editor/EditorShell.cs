@@ -667,6 +667,12 @@ public sealed class EditorShell : Panel
 
 		AddCommand(
 			file,
+			"Reload Scene from Disk",
+			() => Guard("Reload scene", ReloadSceneFromDisk),
+			() => _session.Project is not null && _session.ScenePath is not null);
+
+		AddCommand(
+			file,
 			"Close Project",
 			() => Guard("Close project", () => _session.CloseProject()),
 			() => _session.Project is not null);
@@ -1496,6 +1502,30 @@ public sealed class EditorShell : Panel
 		}
 
 		return true;
+	}
+
+	/// <summary>
+	/// Re-reads the open scene from disk, after asking about unsaved work.
+	/// </summary>
+	/// <remarks>
+	/// This is the way back from a refused save: the file holds work the
+	/// editor has not seen, so loading it is the alternative to leaving the
+	/// project. The guard runs here because a reload replaces the document
+	/// outright.
+	/// </remarks>
+	private void ReloadSceneFromDisk()
+	{
+		if (_session.ScenePath is not string path)
+		{
+			return;
+		}
+
+		GuardUnsavedChanges(() =>
+		{
+			_session.ReloadScene();
+			_session.SetStatus(
+				$"Reloaded {System.IO.Path.GetFileName(path)}");
+		});
 	}
 
 	/// <summary>

@@ -416,6 +416,12 @@ replacing work the editor never saw. The message points at **Save As**
 for the current changes and at reopening the scene to load the version
 on disk, so neither side is lost.
 
+**File → Reload Scene from Disk** is that second route without leaving
+the project: it asks about unsaved work through the same Save, Discard
+or Cancel prompt, then re-reads the file, clears the selection and
+loads what is on disk. Saving works again afterwards, because the
+reload records the file as the session has just read it.
+
 Opening another scene or project, creating a scene, or closing the
 editor while the current scene is dirty asks **Save**, **Discard**, or
 **Cancel**. Save writes the current scene before the operation
