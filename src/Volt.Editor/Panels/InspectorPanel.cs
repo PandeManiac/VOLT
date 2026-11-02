@@ -656,6 +656,14 @@ public sealed class InspectorPanel : Panel
 		try
 		{
 			_session.RenameActiveEntity(field.Text);
+			// Rename commands normalize names (currently by trimming
+			// whitespace). The synchronous session notification preserves
+			// focused, uncommitted input, so pull the committed value back
+			// explicitly once the edit has succeeded.
+			if (_session.ActiveEntity is SceneEntity active)
+			{
+				field.SetTextFromSource(active.Name);
+			}
 		}
 
 		catch (Exception exception)

@@ -74,6 +74,26 @@ public sealed class InspectorUndoRefreshTests : IDisposable
 	}
 
 	[Fact]
+	public void CommittingInspectorName_ShowsCanonicalNameAfterTrimming()
+	{
+		SceneEntity entity = _session.ActiveEntity!;
+		using InspectorPanel inspector = new(_session);
+		_context.Add(inspector);
+		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.Text == entity.Name);
+
+		Assert.True(name.Focus());
+		name.Text = "  Canonical name  ";
+		name.Commit();
+
+		Assert.Equal("Canonical name", entity.Name);
+		Assert.Equal(entity.Name, name.Text);
+		Assert.False(name.HasUncommittedText);
+	}
+
+	[Fact]
 	public void ExternalNameChange_DoesNotOverwriteUncommittedInspectorText()
 	{
 		SceneEntity entity = _session.ActiveEntity!;
