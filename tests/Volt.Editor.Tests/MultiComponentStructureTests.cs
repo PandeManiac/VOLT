@@ -75,6 +75,57 @@ public sealed class MultiComponentStructureTests : IDisposable
 	}
 
 	[Fact]
+	public void TheAddBarOffersAComponentTheRestOfTheSelectionLacks()
+	{
+		EditorComponentDescriptor descriptor =
+			ComponentCatalog.Default.All.Single(candidate =>
+				candidate.Create() is MeshRendererData);
+
+		SceneEntity has = _session.CreateEntity("Has")!;
+		SceneEntity lacks = _session.CreateEntity("Lacks")!;
+
+		_session.AddComponent(has.Id, descriptor.TypeId);
+		_session.SelectMany([has.Id, lacks.Id], has.Id);
+
+		using InspectorPanel inspector = new(_session);
+
+		_context.Add(inspector);
+		Paint(0.0);
+
+		// The active object already has the renderer, but the other
+		// selected object does not. Hiding the option here would make
+		// the Component menu the only way to finish the group add.
+		Dropdown types = Descendants(inspector)
+			.OfType<Dropdown>()
+			.Single();
+
+		int index = types.Items
+			.ToList()
+			.IndexOf(descriptor.DisplayName);
+
+		Assert.True(
+			index >= 0,
+			"A component the rest of the selection lacks must be offered.");
+
+		types.SelectedIndex = index;
+
+		int history = _session.Undo.UndoCount;
+
+		Button add = Descendants(inspector)
+			.OfType<Button>()
+			.Single(button => button.Text == "Add Component");
+
+		Click(add);
+		Paint(0.1);
+
+		Assert.True(lacks.HasComponent(descriptor.TypeId));
+		Assert.Single(
+			has.Components,
+			component => component.TypeId == descriptor.TypeId);
+		Assert.Equal(history + 1, _session.Undo.UndoCount);
+	}
+
+	[Fact]
 	public void TheAddBarGivesTheComponentToEverySelectedObject()
 	{
 		SceneEntity first = _session.CreateEntity("First")!;

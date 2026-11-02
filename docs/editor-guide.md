@@ -258,9 +258,10 @@ ratios without discarding the state inside open panels.
   supported component. Values are written through undoable commands;
   the vector, color, numeric, enum, and asset properties all come from
   the component catalog rather than hardcoded editor code. The **Add
-  Component** list offers only components the object does not already
-  have; the list and button disable themselves once every registered
-  component is present.
+  Component** list offers components at least one selected object does
+  not already have, and adding one gives it to every selected object
+  that lacks it; the list and button disable themselves once every
+  selected object has every registered component.
 - **Scene view** is the authoring view. VOLT renders the scene's
   meshes and the ground grid into an offscreen target with depth
   testing, and the panel samples that image, so what it shows is real

@@ -269,7 +269,7 @@ public sealed class InspectorPanel : Panel
 		_entityIcon.Color = EditorIcons.EntityColor(entity, palette);
 		UpdateSubtitle(entity);
 
-		RebuildAddableComponents(entity);
+		RebuildAddableComponents();
 		RebuildComponentBar(entity);
 		_grid.SetGroups(BuildGroups(entity));
 
@@ -277,16 +277,19 @@ public sealed class InspectorPanel : Panel
 	}
 
 	/// <summary>
-	/// Refreshes the add list so it only offers components the
+	/// Refreshes the add list so it offers every component at least one
 	/// selected object does not already have.
 	/// </summary>
 	/// <remarks>
-	/// A duplicate is rejected by the scene model, so offering one
-	/// would only produce an error. When every registered component is
-	/// present the list and the button go empty and disabled rather
-	/// than leaving an action that cannot succeed.
+	/// The add button applies to the whole selection, like the Component
+	/// menu, so hiding a component just because the active object has it
+	/// would leave the rest of the selection unreachable. A component
+	/// every selected object already has is not offered, since the scene
+	/// model rejects the duplicate. When no component is missing the list
+	/// and the button go empty and disabled rather than leaving an action
+	/// that cannot succeed.
 	/// </remarks>
-	private void RebuildAddableComponents(SceneEntity entity)
+	private void RebuildAddableComponents()
 	{
 		string? selected = _componentTypes.SelectedItem;
 
@@ -295,7 +298,7 @@ public sealed class InspectorPanel : Panel
 		foreach (EditorComponentDescriptor descriptor in
 			ComponentCatalog.Default.All)
 		{
-			if (!entity.HasComponent(descriptor.TypeId))
+			if (_session.CanAddComponentToSelection(descriptor.TypeId))
 			{
 				_addableComponents.Add(descriptor);
 			}
