@@ -90,6 +90,34 @@ public class TextField : Widget
 		}
 	}
 
+	/// <summary>
+	/// Replaces the displayed value with authoritative source text and,
+	/// when focused, marks it as the current editing baseline.
+	/// </summary>
+	/// <remarks>
+	/// Use this for binding refreshes. Assigning <see cref="Text"/>
+	/// remains a plain programmatic edit and does not reset the focused
+	/// field's uncommitted-text baseline.
+	/// </remarks>
+	public void SetTextFromSource(string? text)
+	{
+		string value = text ?? string.Empty;
+
+		if (_editor.Text != value)
+		{
+			_editor.SetText(value);
+			_undo.Clear();
+			_redo.Clear();
+			_layout = null;
+			InvalidateVisual();
+		}
+
+		if (HasFocus)
+		{
+			_textAtFocus = value;
+		}
+	}
+
 	public string Placeholder
 	{
 		get => _placeholder;

@@ -65,6 +65,12 @@ public sealed class InspectorUndoRefreshTests : IDisposable
 		Assert.Equal(originalName, entity.Name);
 		Assert.Equal(originalName, name.Text);
 		Assert.True(name.HasFocus);
+
+		_session.RedoLast();
+
+		Assert.Equal("Renamed", entity.Name);
+		Assert.Equal("Renamed", name.Text);
+		Assert.True(name.HasFocus);
 	}
 
 	[Fact]

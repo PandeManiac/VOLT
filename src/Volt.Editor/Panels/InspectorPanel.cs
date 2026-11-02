@@ -176,7 +176,7 @@ public sealed class InspectorPanel : Panel
 
 		if (!_name.HasUncommittedText)
 		{
-			_name.Text = entity.Name;
+			_name.SetTextFromSource(entity.Name);
 		}
 
 		// A box selection changes how many objects are selected without
@@ -210,7 +210,7 @@ public sealed class InspectorPanel : Panel
 
 		if (entity is null)
 		{
-			_name.Text = string.Empty;
+			_name.SetTextFromSource(string.Empty);
 			_componentBar.ClearChildren();
 			_addableComponents.Clear();
 			_componentTypes.SetItems(Array.Empty<string>());
@@ -221,7 +221,7 @@ public sealed class InspectorPanel : Panel
 			return;
 		}
 
-		_name.Text = entity.Name;
+		_name.SetTextFromSource(entity.Name);
 
 		UiPalette palette = Context?.Theme.Palette ??
 			UiTheme.CreateDark().Palette;
