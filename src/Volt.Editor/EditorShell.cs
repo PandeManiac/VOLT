@@ -831,16 +831,17 @@ public sealed class EditorShell : Panel
 				$"Add {descriptor.DisplayName}",
 				() => Guard("Add component", () =>
 				{
-					if (_session.ActiveEntityId is not Guid id)
+					if (_session.Selection.Count == 0)
 					{
 						throw new InvalidOperationException(
 							"Select an object first.");
 					}
 
-					_session.AddComponent(id, captured.TypeId);
+					// The rest of the selection commands act on every
+					// selected object, so this one does too.
+					_session.AddComponentToSelection(captured.TypeId);
 				}),
-				() => _session.ActiveEntity?.HasComponent(
-					captured.TypeId) == false);
+				() => _session.CanAddComponentToSelection(captured.TypeId));
 		}
 
 		MenuItem window = bar.AddMenu("Window");

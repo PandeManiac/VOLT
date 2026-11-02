@@ -1409,6 +1409,74 @@ public sealed class EditorSession : IDisposable
 		SetStatus($"Added {descriptor.DisplayName}");
 	}
 
+	/// <summary>
+	/// Adds a component to every selected object that does not have one
+	/// yet, as a single undo step.
+	/// </summary>
+	/// <remarks>
+	/// Delete, Duplicate, Cut and Paste act on the whole selection, so a
+	/// component added from the menu does too. An object that already has
+	/// the component is skipped rather than failing the command, which is
+	/// what lets a mixed selection take the component in one action.
+	/// </remarks>
+	/// <returns>The number of objects that received the component.</returns>
+	public int AddComponentToSelection(string typeId)
+	{
+		ArgumentNullException.ThrowIfNull(typeId);
+
+		SceneDocument scene = RequireScene();
+		EditorComponentDescriptor descriptor =
+			ComponentCatalog.Default.Get(typeId);
+		List<IEditorCommand> commands = [];
+
+		foreach (Guid id in _selection)
+		{
+			if (scene.Find(id) is not SceneEntity entity ||
+				entity.HasComponent(typeId))
+			{
+				continue;
+			}
+
+			commands.Add(new AddComponentCommand(
+				scene,
+				id,
+				descriptor.Create()));
+		}
+
+		if (commands.Count == 0)
+		{
+			return 0;
+		}
+
+		Undo.Execute(commands.Count == 1
+			? commands[0]
+			: new CompositeCommand(
+				$"Add {descriptor.DisplayName} to {commands.Count} objects",
+				commands));
+
+		SetStatus(commands.Count == 1
+			? $"Added {descriptor.DisplayName}"
+			: $"Added {descriptor.DisplayName} to {commands.Count} objects");
+
+		return commands.Count;
+	}
+
+	/// <summary>
+	/// Gets whether adding a component to the selection can do anything,
+	/// which is when at least one selected object is missing it.
+	/// </summary>
+	public bool CanAddComponentToSelection(string typeId)
+	{
+		if (Scene is not SceneDocument scene)
+		{
+			return false;
+		}
+
+		return _selection.Any(id =>
+			scene.Find(id) is SceneEntity entity &&
+			!entity.HasComponent(typeId));
+	}
+
 	public void RemoveComponent(
 		Guid entityId,
 		AuthoredComponent component)
