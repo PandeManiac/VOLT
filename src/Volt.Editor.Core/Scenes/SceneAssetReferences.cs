@@ -122,6 +122,129 @@ internal static class SceneAssetReferences
 				: null);
 	}
 
+	public static int ReplaceInComponent(
+		AuthoredComponent component,
+		string oldId,
+		string newId)
+	{
+		ArgumentNullException.ThrowIfNull(component);
+		return ReplaceInComponents([component], oldId, newId);
+	}
+
+	public static int ReplaceInEntity(
+		SceneEntity entity,
+		string oldId,
+		string newId)
+	{
+		ArgumentNullException.ThrowIfNull(entity);
+		return ReplaceInComponents(entity.Components, oldId, newId);
+	}
+
+	public static int ReplaceInEntities(
+		IEnumerable<SceneEntity> entities,
+		string oldId,
+		string newId)
+	{
+		ArgumentNullException.ThrowIfNull(entities);
+
+		int total = 0;
+
+		foreach (SceneEntity entity in entities)
+		{
+			total += ReplaceInEntity(entity, oldId, newId);
+		}
+
+		return total;
+	}
+
+	public static int ReplaceInComponents(
+		IEnumerable<AuthoredComponent> components,
+		string oldId,
+		string newId)
+	{
+		ArgumentNullException.ThrowIfNull(components);
+		ValidateIds(oldId, newId);
+
+		if (string.Equals(oldId, newId, StringComparison.Ordinal))
+		{
+			return 0;
+		}
+
+		int total = 0;
+
+		foreach (AuthoredComponent component in components)
+		{
+			ArgumentNullException.ThrowIfNull(component);
+
+			if (component is UnknownComponentData unknown)
+			{
+				total += ReplaceUnknownReference(unknown, oldId, newId);
+				continue;
+			}
+
+			if (!ComponentCatalog.Default.TryGet(
+				component.GetType(),
+				out EditorComponentDescriptor descriptor))
+			{
+				continue;
+			}
+
+			foreach (EditorPropertyDescriptor property in descriptor.Properties)
+			{
+				if (property.Kind != EditorPropertyKind.Asset ||
+					property.ValueType != typeof(string) ||
+					property.IsReadOnly)
+				{
+					continue;
+				}
+
+				if (property.GetValue(component) is string current &&
+					string.Equals(
+						current,
+						oldId,
+						StringComparison.OrdinalIgnoreCase))
+				{
+					property.SetValue(component, newId);
+					total++;
+				}
+			}
+		}
+
+		return total;
+	}
+
+	private static int ReplaceUnknownReference(
+		UnknownComponentData unknown,
+		string oldId,
+		string newId)
+	{
+		if (unknown.Data.ValueKind is not (
+			JsonValueKind.Object or JsonValueKind.Array))
+		{
+			return 0;
+		}
+
+		JsonNode? data = JsonNode.Parse(unknown.Data.GetRawText());
+
+		if (data is null)
+		{
+			return 0;
+		}
+
+		int changed = ReplaceInNode(data, oldId, newId);
+
+		if (changed == 0)
+		{
+			return 0;
+		}
+
+		using JsonDocument document = JsonDocument.Parse(
+			data.ToJsonString(SceneSerializer.Options));
+
+		unknown.ReplaceData(document.RootElement);
+		return changed;
+	}
+
 	private static int RewriteFile(
 		string path,
 		Func<string, string?> replace)

@@ -27,7 +27,9 @@ public sealed class EditorSession : IDisposable
 	// is what lets a console place entries without searching.
 	private long _logSequence;
 
-	private sealed class SelectionCommand : IEditorCommand
+	private sealed class SelectionCommand :
+		IEditorCommand,
+		IAssetReferenceCommand
 	{
 		private readonly IEditorCommand _command;
 		private readonly Action _onExecute;
@@ -55,6 +57,14 @@ public sealed class EditorSession : IDisposable
 		{
 			_command.Undo();
 			_onUndo();
+		}
+
+		public void RemapAssetReference(string oldId, string newId)
+		{
+			if (_command is IAssetReferenceCommand assetCommand)
+			{
+				assetCommand.RemapAssetReference(oldId, newId);
+			}
 		}
 	}
 
@@ -579,6 +589,7 @@ public sealed class EditorSession : IDisposable
 		int changed = Scene?.ReplaceAssetReference(assetId, renamed) ?? 0;
 
 		Undo.RemapAssetReference(assetId, renamed);
+		Clipboard.RemapAssetReference(assetId, renamed);
 
 		if (changed > 0 && !wasDirty && Scene is not null &&
 			ScenePath is not null)
@@ -635,6 +646,7 @@ public sealed class EditorSession : IDisposable
 				asset.Id,
 				replacement) ?? 0;
 			Undo.RemapAssetReference(asset.Id, replacement);
+			Clipboard.RemapAssetReference(asset.Id, replacement);
 		}
 
 		if (changed > 0 && !wasDirty && Scene is not null &&
@@ -703,6 +715,7 @@ public sealed class EditorSession : IDisposable
 		{
 			changed += Scene?.ReplaceAssetReference(id, string.Empty) ?? 0;
 			Undo.RemapAssetReference(id, string.Empty);
+			Clipboard.RemapAssetReference(id, string.Empty);
 		}
 
 		if (changed > 0 && !wasDirty && Scene is not null &&
@@ -743,6 +756,7 @@ public sealed class EditorSession : IDisposable
 			string.Empty) ?? 0;
 
 		Undo.RemapAssetReference(assetId, string.Empty);
+		Clipboard.RemapAssetReference(assetId, string.Empty);
 
 		if (changed > 0 && !wasDirty && Scene is not null &&
 			ScenePath is not null)

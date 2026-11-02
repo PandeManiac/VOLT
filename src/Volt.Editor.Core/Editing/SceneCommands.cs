@@ -38,7 +38,9 @@ public sealed class AddEntityCommand : IEditorCommand
 	}
 }
 
-public sealed class DeleteEntityCommand : IEditorCommand
+public sealed class DeleteEntityCommand :
+	IEditorCommand,
+	IAssetReferenceCommand
 {
 	private readonly SceneDocument _scene;
 	private readonly Guid _entityId;
@@ -57,6 +59,14 @@ public sealed class DeleteEntityCommand : IEditorCommand
 	}
 
 	public string Description { get; }
+
+	public void RemapAssetReference(string oldId, string newId)
+	{
+		SceneAssetReferences.ReplaceInEntities(
+			_removed.Entities.Select(entry => entry.Entity),
+			oldId,
+			newId);
+	}
 
 	public void Execute()
 	{
@@ -81,7 +91,9 @@ public sealed class DeleteEntityCommand : IEditorCommand
 /// redo restores exactly the entities that were removed, keeping the
 /// ids stable across a redo.
 /// </remarks>
-public sealed class DuplicateEntityCommand : IEditorCommand
+public sealed class DuplicateEntityCommand :
+	IEditorCommand,
+	IAssetReferenceCommand
 {
 	private readonly SceneDocument _scene;
 	private readonly Guid _sourceId;
@@ -112,6 +124,19 @@ public sealed class DuplicateEntityCommand : IEditorCommand
 	/// Gets the copy created by <see cref="Execute"/>.
 	/// </summary>
 	public SceneEntity? Copy => _copy;
+
+	public void RemapAssetReference(string oldId, string newId)
+	{
+		if (_copy is not null)
+		{
+			SceneAssetReferences.ReplaceInEntity(_copy, oldId, newId);
+		}
+
+		SceneAssetReferences.ReplaceInEntities(
+			_removed.Entities.Select(entry => entry.Entity),
+			oldId,
+			newId);
+	}
 
 	public void Execute()
 	{
@@ -271,7 +296,9 @@ public sealed class SetTransformCommand : IEditorCommand
 	}
 }
 
-public sealed class AddComponentCommand : IEditorCommand
+public sealed class AddComponentCommand :
+	IEditorCommand,
+	IAssetReferenceCommand
 {
 	private readonly SceneDocument _scene;
 	private readonly Guid _entityId;
@@ -295,6 +322,14 @@ public sealed class AddComponentCommand : IEditorCommand
 
 	public AuthoredComponent Component => _component;
 
+	public void RemapAssetReference(string oldId, string newId)
+	{
+		SceneAssetReferences.ReplaceInComponent(
+			_component,
+			oldId,
+			newId);
+	}
+
 	public void Execute()
 	{
 		SceneEntity entity = GetEntity();
@@ -317,7 +352,9 @@ public sealed class AddComponentCommand : IEditorCommand
 	}
 }
 
-public sealed class RemoveComponentCommand : IEditorCommand
+public sealed class RemoveComponentCommand :
+	IEditorCommand,
+	IAssetReferenceCommand
 {
 	private readonly SceneDocument _scene;
 	private readonly Guid _entityId;
@@ -366,6 +403,14 @@ public sealed class RemoveComponentCommand : IEditorCommand
 
 	public string Description { get; }
 
+	public void RemapAssetReference(string oldId, string newId)
+	{
+		SceneAssetReferences.ReplaceInComponent(
+			_component,
+			oldId,
+			newId);
+	}
+
 	public void Execute()
 	{
 		SceneEntity entity = GetEntity();
@@ -398,7 +443,9 @@ public sealed class RemoveComponentCommand : IEditorCommand
 /// removes every inserted root and its subtree, and a redo restores
 /// exactly those objects, keeping their ids stable.
 /// </remarks>
-public sealed class PasteEntitiesCommand : IEditorCommand
+public sealed class PasteEntitiesCommand :
+	IEditorCommand,
+	IAssetReferenceCommand
 {
 	private readonly SceneDocument _scene;
 	private readonly List<SceneEntity> _entities;
@@ -440,6 +487,15 @@ public sealed class PasteEntitiesCommand : IEditorCommand
 	/// </summary>
 	public IReadOnlyList<Guid> RootIds =>
 		[.. Roots.Select(entity => entity.Id)];
+
+	public void RemapAssetReference(string oldId, string newId)
+	{
+		SceneAssetReferences.ReplaceInEntities(_entities, oldId, newId);
+		SceneAssetReferences.ReplaceInEntities(
+			_removed.Entities.Select(entry => entry.Entity),
+			oldId,
+			newId);
+	}
 
 	public void Execute()
 	{

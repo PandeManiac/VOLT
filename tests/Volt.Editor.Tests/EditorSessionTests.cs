@@ -376,6 +376,51 @@ public sealed class EditorSessionTests : IDisposable
 	}
 
 	[Fact]
+	public void AssetRename_RemapsClipboardAndPasteHistory()
+	{
+		_session.NewProject(
+			Path.Combine(_root, "ClipboardAssets"),
+			"Clipboard Assets");
+
+		EditorProject project = _session.Project!;
+
+		Directory.CreateDirectory(Path.Combine(project.AssetsPath, "Meshes"));
+
+		const string MeshId = "Assets/Meshes/cube.mesh";
+
+		File.WriteAllText(project.ResolvePath(MeshId), "mesh");
+		project.AssetCatalog.Refresh();
+
+		SceneEntity cube = _session.Scene!.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+		MeshRendererData renderer = cube.GetComponent<MeshRendererData>()!;
+
+		renderer.Mesh = MeshId;
+		_session.Select(cube.Id);
+		Assert.Equal(1, _session.CopySelection());
+		_session.PasteClipboard();
+		_session.UndoLast();
+
+		string renamed = _session.RenameAsset(MeshId, "box");
+
+		_session.RedoLast();
+
+		SceneEntity restored = _session.ActiveEntity ??
+			throw new InvalidOperationException("The pasted object was not selected.");
+
+		Assert.NotEqual(cube.Id, restored.Id);
+		Assert.Equal(
+			renamed,
+			restored.GetComponent<MeshRendererData>()!.Mesh);
+
+		SceneEntity clipboardCopy = Assert.Single(_session.PasteClipboard());
+
+		Assert.Equal(
+			renamed,
+			clipboardCopy.GetComponent<MeshRendererData>()!.Mesh);
+	}
+
+	[Fact]
 	public void FolderRename_UpdatesTheOpenScenePathAndReferences()
 	{
 		_session.NewProject(

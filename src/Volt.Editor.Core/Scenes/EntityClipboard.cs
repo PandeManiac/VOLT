@@ -63,6 +63,20 @@ public sealed class EntityClipboard
 	}
 
 	/// <summary>
+	/// Moves every captured asset reference to a new project path.
+	/// </summary>
+	public void RemapAssetReference(string oldId, string newId)
+	{
+		foreach (ClipboardEntry entry in _entries)
+		{
+			SceneAssetReferences.ReplaceInEntity(
+				entry.Snapshot,
+				oldId,
+				newId);
+		}
+	}
+
+	/// <summary>
 	/// Empties the clipboard.
 	/// </summary>
 	public void Clear()
