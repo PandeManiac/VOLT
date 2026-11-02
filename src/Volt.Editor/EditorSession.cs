@@ -1543,19 +1543,14 @@ public sealed class EditorSession : IDisposable
 
 		SceneChanged?.Invoke(this);
 
-		if (change.EntityId is Guid id &&
-			scene.Find(id) is null)
+		if (change.Kind is SceneChangeKind.Removed or
+			SceneChangeKind.Reloaded)
 		{
-			_selection.Remove(id);
-
-			if (ActiveEntityId == id)
-			{
-				ActiveEntityId = _selection.Count == 1
-					? _selection.First()
-					: null;
-			}
-
-			SelectionChanged?.Invoke(this);
+			// Removing a hierarchy root also removes every descendant,
+			// while the change event names only that root. Reconcile the
+			// full selection against the scene after subtree removal or
+			// reload so a selected child cannot remain as a stale target.
+			ValidateSelection();
 		}
 	}
 

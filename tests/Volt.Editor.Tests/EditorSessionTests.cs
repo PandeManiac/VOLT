@@ -61,6 +61,24 @@ public sealed class EditorSessionTests : IDisposable
 	}
 
 	[Fact]
+	public void RemovingHierarchyRoot_ClearsSelectionOfRemovedDescendants()
+	{
+		_session.NewProject(Path.Combine(_root, "RemoveSubtree"), "RemoveSubtree");
+		SceneDocument scene = _session.Scene!;
+		SceneEntity parent = _session.CreateEntity("Parent")!;
+		SceneEntity child = _session.CreateEntity("Child", parent.Id)!;
+		_session.Select(child.Id);
+
+		scene.RemoveEntity(parent.Id);
+
+		Assert.Null(scene.Find(parent.Id));
+		Assert.Null(scene.Find(child.Id));
+		Assert.Empty(_session.Selection);
+		Assert.Null(_session.ActiveEntityId);
+		Assert.Null(_session.ActiveEntity);
+	}
+
+	[Fact]
 	public void NewProject_OpensStarterSceneThatReopensWithSameIds()
 	{
 		string projectRoot = Path.Combine(_root, "Game");
