@@ -64,6 +64,22 @@ public sealed class ConsoleFilterTests : IDisposable
 	}
 
 	[Fact]
+	public void AFilterChangedElsewhereReachesTheOpenPanel()
+	{
+		ConsolePanel console = Build();
+		ToolButton info = Filter(console, "Show information messages");
+
+		Assert.True(info.IsActive);
+
+		// The preferences reset restores the severities on the session,
+		// with no click on this panel at all.
+		_session.ConsoleShowsInfo = false;
+		Frame(0.1);
+
+		Assert.False(info.IsActive);
+	}
+
+	[Fact]
 	public void AFreshPanelDrawsItsFiltersFromTheSession()
 	{
 		_session.ConsoleShowsErrors = false;

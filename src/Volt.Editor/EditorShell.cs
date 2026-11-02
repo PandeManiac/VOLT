@@ -2109,7 +2109,9 @@ public sealed class EditorShell : Panel
 
 		content.Add(new Label(
 			"Scaling rebuilds panel widgets so text is rasterized at " +
-			"the new size. Project, scene, and workspace state are kept.")
+			"the new size. Project, scene, and workspace state are kept. " +
+			"Reset restores the frame rate, the scale, and the console's " +
+			"severity filters.")
 		{
 			Font = theme.Fonts.Small,
 			TextColor = theme.Palette.TextDisabled,

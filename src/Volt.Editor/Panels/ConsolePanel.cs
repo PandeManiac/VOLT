@@ -32,6 +32,9 @@ public sealed class ConsolePanel : Panel
 	private readonly IconButton _clear;
 
 	private bool _pendingTail = true;
+	private bool _renderedInfo;
+	private bool _renderedWarnings;
+	private bool _renderedErrors;
 	private bool _disposed;
 
 	public ConsolePanel(EditorSession session)
@@ -119,6 +122,11 @@ public sealed class ConsolePanel : Panel
 		Add(_emptyHost);
 
 		_session.LogChanged += OnLogChanged;
+
+		// A filter can change outside this panel: the preferences reset
+		// restores the severities, and an open console that kept drawing
+		// its old view would contradict the setting.
+		_session.SettingsChanged += OnSettingsChanged;
 	}
 
 	protected override void OnAttached()
@@ -138,6 +146,7 @@ public sealed class ConsolePanel : Panel
 
 		_disposed = true;
 		_session.LogChanged -= OnLogChanged;
+		_session.SettingsChanged -= OnSettingsChanged;
 		base.Dispose();
 	}
 
@@ -160,6 +169,22 @@ public sealed class ConsolePanel : Panel
 
 	private void OnLogChanged(EditorSession session)
 	{
+		Rebuild();
+	}
+
+	private void OnSettingsChanged(EditorSession session)
+	{
+		// Unrelated settings (frame rate, snapping) reach this event too,
+		// so the rows are rebuilt only when a severity actually differs
+		// from what is on screen.
+		if (_disposed ||
+			session.ConsoleShowsInfo == _renderedInfo &&
+			session.ConsoleShowsWarnings == _renderedWarnings &&
+			session.ConsoleShowsErrors == _renderedErrors)
+		{
+			return;
+		}
+
 		Rebuild();
 	}
 
@@ -193,6 +218,10 @@ public sealed class ConsolePanel : Panel
 		_info.IsActive = _session.ConsoleShowsInfo;
 		_warnings.IsActive = _session.ConsoleShowsWarnings;
 		_errors.IsActive = _session.ConsoleShowsErrors;
+
+		_renderedInfo = _session.ConsoleShowsInfo;
+		_renderedWarnings = _session.ConsoleShowsWarnings;
+		_renderedErrors = _session.ConsoleShowsErrors;
 
 		int start = Math.Max(0, entries.Count - 200);
 		int shown = 0;
