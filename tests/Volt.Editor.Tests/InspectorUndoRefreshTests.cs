@@ -94,6 +94,28 @@ public sealed class InspectorUndoRefreshTests : IDisposable
 	}
 
 	[Fact]
+	public void RejectedInspectorName_RestoresAuthoritativeValue()
+	{
+		SceneEntity entity = _session.ActiveEntity!;
+		using InspectorPanel inspector = new(_session);
+		_context.Add(inspector);
+		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.Text == entity.Name);
+		int undoCount = _session.Undo.UndoCount;
+
+		Assert.True(name.Focus());
+		name.Text = "   ";
+		name.Commit();
+
+		Assert.Equal("Target", entity.Name);
+		Assert.Equal(entity.Name, name.Text);
+		Assert.False(name.HasUncommittedText);
+		Assert.Equal(undoCount, _session.Undo.UndoCount);
+	}
+
+	[Fact]
 	public void ExternalNameChange_DoesNotOverwriteUncommittedInspectorText()
 	{
 		SceneEntity entity = _session.ActiveEntity!;

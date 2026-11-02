@@ -668,6 +668,11 @@ public sealed class InspectorPanel : Panel
 
 		catch (Exception exception)
 		{
+			if (_session.ActiveEntity is SceneEntity active)
+			{
+				field.SetTextFromSource(active.Name);
+			}
+
 			_session.Log(exception.Message, EditorLogLevel.Error);
 		}
 	}
