@@ -13,6 +13,15 @@ public interface IEditorCommand
 }
 
 /// <summary>
+/// A command that stores an asset path and can follow a project-level
+/// rename or deletion without losing its history entry.
+/// </summary>
+public interface IAssetReferenceCommand
+{
+	void RemapAssetReference(string oldId, string newId);
+}
+
+/// <summary>
 /// Bounded undo and redo history for authored state.
 /// </summary>
 public sealed class UndoStack
@@ -126,6 +135,34 @@ public sealed class UndoStack
 		Changed?.Invoke(this);
 	}
 
+	/// <summary>
+	/// Moves saved asset references in both history directions to the
+	/// asset's new identity. Existing commands keep their order and
+	/// descriptions; only the paths they restore are updated.
+	/// </summary>
+	public void RemapAssetReference(string oldId, string newId)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(oldId);
+		ArgumentNullException.ThrowIfNull(newId);
+
+		RemapCommands(_undo, oldId, newId);
+		RemapCommands(_redo, oldId, newId);
+	}
+
+	private static void RemapCommands(
+		IEnumerable<IEditorCommand> commands,
+		string oldId,
+		string newId)
+	{
+		foreach (IEditorCommand command in commands)
+		{
+			if (command is IAssetReferenceCommand assetCommand)
+			{
+				assetCommand.RemapAssetReference(oldId, newId);
+			}
+		}
+	}
+
 	private void Trim()
 	{
 		if (_undo.Count <= Capacity)
@@ -160,7 +197,7 @@ public sealed class UndoStack
 /// Groups several primitive commands into one user-visible step, such
 /// as a property drag or a multi-entity transform.
 /// </summary>
-public sealed class CompositeCommand : IEditorCommand
+public sealed class CompositeCommand : IEditorCommand, IAssetReferenceCommand
 {
 	private readonly IReadOnlyList<IEditorCommand> _commands;
 
@@ -190,6 +227,17 @@ public sealed class CompositeCommand : IEditorCommand
 		for (int index = _commands.Count - 1; index >= 0; index--)
 		{
 			_commands[index].Undo();
+		}
+	}
+
+	public void RemapAssetReference(string oldId, string newId)
+	{
+		foreach (IEditorCommand command in _commands)
+		{
+			if (command is IAssetReferenceCommand assetCommand)
+			{
+				assetCommand.RemapAssetReference(oldId, newId);
+			}
 		}
 	}
 }

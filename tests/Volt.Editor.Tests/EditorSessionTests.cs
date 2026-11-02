@@ -336,6 +336,46 @@ public sealed class EditorSessionTests : IDisposable
 	}
 
 	[Fact]
+	public void AssetRename_RemapsUndoAndRedoPropertyValues()
+	{
+		_session.NewProject(
+			Path.Combine(_root, "UndoAssets"),
+			"Undo Assets");
+
+		EditorProject project = _session.Project!;
+
+		Directory.CreateDirectory(Path.Combine(project.AssetsPath, "Meshes"));
+
+		const string MeshId = "Assets/Meshes/cube.mesh";
+
+		File.WriteAllText(project.ResolvePath(MeshId), "mesh");
+		project.AssetCatalog.Refresh();
+
+		SceneEntity cube = _session.Scene!.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+		MeshRendererData renderer = cube.GetComponent<MeshRendererData>()!;
+		EditorPropertyDescriptor property = ComponentCatalog.Default
+			.Get(MeshRendererData.ComponentTypeId)
+			.Properties.Single(candidate =>
+				candidate.Name == nameof(MeshRendererData.Mesh));
+
+		renderer.Mesh = "builtin:cube";
+		_session.SetComponentProperty(cube.Id, renderer, property, MeshId);
+
+		string renamed = _session.RenameAsset(MeshId, "box");
+
+		Assert.Equal(renamed, renderer.Mesh);
+
+		_session.UndoLast();
+
+		Assert.Equal("builtin:cube", renderer.Mesh);
+
+		_session.RedoLast();
+
+		Assert.Equal(renamed, renderer.Mesh);
+	}
+
+	[Fact]
 	public void FolderRename_UpdatesTheOpenScenePathAndReferences()
 	{
 		_session.NewProject(

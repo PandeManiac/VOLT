@@ -578,6 +578,8 @@ public sealed class EditorSession : IDisposable
 
 		int changed = Scene?.ReplaceAssetReference(assetId, renamed) ?? 0;
 
+		Undo.RemapAssetReference(assetId, renamed);
+
 		if (changed > 0 && !wasDirty && Scene is not null &&
 			ScenePath is not null)
 		{
@@ -627,9 +629,12 @@ public sealed class EditorSession : IDisposable
 
 		foreach (ProjectAsset asset in affected)
 		{
+			string replacement = newPrefix + asset.Id[oldPrefix.Length..];
+
 			changed += Scene?.ReplaceAssetReference(
 				asset.Id,
-				newPrefix + asset.Id[oldPrefix.Length..]) ?? 0;
+				replacement) ?? 0;
+			Undo.RemapAssetReference(asset.Id, replacement);
 		}
 
 		if (changed > 0 && !wasDirty && Scene is not null &&
@@ -697,6 +702,7 @@ public sealed class EditorSession : IDisposable
 		foreach (string id in ids)
 		{
 			changed += Scene?.ReplaceAssetReference(id, string.Empty) ?? 0;
+			Undo.RemapAssetReference(id, string.Empty);
 		}
 
 		if (changed > 0 && !wasDirty && Scene is not null &&
@@ -735,6 +741,8 @@ public sealed class EditorSession : IDisposable
 		int changed = Scene?.ReplaceAssetReference(
 			assetId,
 			string.Empty) ?? 0;
+
+		Undo.RemapAssetReference(assetId, string.Empty);
 
 		if (changed > 0 && !wasDirty && Scene is not null &&
 			ScenePath is not null)

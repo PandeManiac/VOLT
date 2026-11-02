@@ -484,14 +484,16 @@ public sealed class PasteEntitiesCommand : IEditorCommand
 	}
 }
 
-public sealed class ComponentPropertyCommand : IEditorCommand
+public sealed class ComponentPropertyCommand :
+	IEditorCommand,
+	IAssetReferenceCommand
 {
 	private readonly SceneDocument _scene;
 	private readonly Guid _entityId;
 	private readonly AuthoredComponent _component;
 	private readonly EditorPropertyDescriptor _property;
-	private readonly object? _before;
-	private readonly object? _after;
+	private object? _before;
+	private object? _after;
 
 	public ComponentPropertyCommand(
 		SceneDocument scene,
@@ -533,6 +535,26 @@ public sealed class ComponentPropertyCommand : IEditorCommand
 	public void Undo()
 	{
 		Apply(_before);
+	}
+
+	public void RemapAssetReference(string oldId, string newId)
+	{
+		if (_property.Kind != EditorPropertyKind.Asset ||
+			_property.ValueType != typeof(string))
+		{
+			return;
+		}
+
+		_before = Remap(_before);
+		_after = Remap(_after);
+
+		object? Remap(object? value)
+		{
+			return value is string path &&
+				string.Equals(path, oldId, StringComparison.OrdinalIgnoreCase)
+					? newId
+					: value;
+		}
 	}
 
 	private void Apply(object? value)
