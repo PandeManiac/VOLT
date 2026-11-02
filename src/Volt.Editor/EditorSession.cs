@@ -22,6 +22,11 @@ public sealed class EditorSession : IDisposable
 	private int _logWarningCount;
 	private int _logErrorCount;
 
+	// Arrival order for the log. It is never reset, so a sequence is
+	// unique for the lifetime of the session even across a clear, which
+	// is what lets a console place entries without searching.
+	private long _logSequence;
+
 	private sealed class SelectionCommand : IEditorCommand
 	{
 		private readonly IEditorCommand _command;
@@ -1562,7 +1567,11 @@ public sealed class EditorSession : IDisposable
 	{
 		ArgumentNullException.ThrowIfNull(message);
 
-		_log.Add(new EditorLogEntry(DateTime.Now, level, message));
+		_log.Add(new EditorLogEntry(DateTime.Now, level, message)
+		{
+			Sequence = _logSequence++
+		});
+
 		AdjustLogCount(level, 1);
 
 		if (_log.Count > MaximumLogEntries)

@@ -36,6 +36,7 @@ public sealed class ConsolePanel : Panel
 	private bool _renderedWarnings;
 	private bool _renderedErrors;
 	private readonly List<(EditorLogEntry Entry, Widget Row)> _rendered = [];
+	private long _lastSequence = -1;
 	private bool _disposed;
 
 	public ConsolePanel(EditorSession session)
@@ -196,7 +197,14 @@ public sealed class ConsolePanel : Panel
 
 		IReadOnlyList<EditorLogEntry> entries = _session.LogEntries;
 
-		while (_rendered.Count > 0 && IndexOf(entries, _rendered[0].Entry) < 0)
+		if (entries.Count == 0 || _lastSequence < 0 || entries[0].Sequence < 0)
+		{
+			return false;
+		}
+
+		long first = entries[0].Sequence;
+
+		while (_rendered.Count > 0 && _rendered[0].Entry.Sequence < first)
 		{
 			_rows.Remove(_rendered[0].Row);
 			_rendered[0].Row.Dispose();
@@ -208,9 +216,13 @@ public sealed class ConsolePanel : Panel
 			return false;
 		}
 
-		int anchor = IndexOf(entries, _rendered[^1].Entry);
+		// The retained log is a contiguous run, so arrival order gives
+		// the position of the first entry this panel has not seen. No
+		// search is needed, and hidden severities are stepped over the
+		// same way visible ones are.
+		long anchor = _lastSequence + 1 - first;
 
-		if (anchor < 0)
+		if (anchor < 0 || anchor > entries.Count)
 		{
 			return false;
 		}
@@ -221,9 +233,9 @@ public sealed class ConsolePanel : Panel
 
 		UiTheme theme = Context?.Theme ?? UiTheme.CreateDark();
 
-		for (int index = anchor + 1; index < entries.Count; index++)
+		for (long index = anchor; index < entries.Count; index++)
 		{
-			EditorLogEntry entry = entries[index];
+			EditorLogEntry entry = entries[(int)index];
 
 			if (!IsSeverityVisible(entry.Level))
 			{
@@ -236,6 +248,7 @@ public sealed class ConsolePanel : Panel
 			_rendered.Add((entry, row));
 		}
 
+		_lastSequence = entries[^1].Sequence;
 		RefreshCounts();
 		UpdateEmptyState();
 		_scroll.InvalidateMeasure();
@@ -246,21 +259,6 @@ public sealed class ConsolePanel : Panel
 		}
 
 		return true;
-	}
-
-	private static int IndexOf(
-		IReadOnlyList<EditorLogEntry> entries,
-		EditorLogEntry entry)
-	{
-		for (int index = entries.Count - 1; index >= 0; index--)
-		{
-			if (Equals(entries[index], entry))
-			{
-				return index;
-			}
-		}
-
-		return -1;
 	}
 
 	private void RefreshCounts()
@@ -356,6 +354,7 @@ public sealed class ConsolePanel : Panel
 			_rendered.Add((entry, row));
 		}
 
+		_lastSequence = entries.Count > 0 ? entries[^1].Sequence : -1;
 		UpdateEmptyState();
 		_scroll.InvalidateMeasure();
 
