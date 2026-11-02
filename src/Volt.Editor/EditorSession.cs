@@ -727,7 +727,7 @@ public sealed class EditorSession : IDisposable
 		return command.Entity;
 	}
 
-	private void ExecuteAndSelect(
+	internal void ExecuteAndSelect(
 		IEditorCommand command,
 		Guid selectedEntityId)
 	{

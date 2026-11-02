@@ -205,11 +205,9 @@ public sealed class HierarchyPanel : Panel
 					Material = "builtin:default"
 				});
 
-			_session.Undo.Execute(new CompositeCommand(
+			_session.ExecuteAndSelect(new CompositeCommand(
 				$"Create {name}",
-				[add, renderer]));
-
-			_session.Select(add.Entity.Id);
+				[add, renderer]), add.Entity.Id);
 		});
 	}
 

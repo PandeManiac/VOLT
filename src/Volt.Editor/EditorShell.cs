@@ -1648,11 +1648,9 @@ public sealed class EditorShell : Panel
 
 			if (!withSpin)
 			{
-				_session.Undo.Execute(new CompositeCommand(
+				_session.ExecuteAndSelect(new CompositeCommand(
 					$"Create {name}",
-					[add, renderer]));
-
-				_session.Select(add.Entity.Id);
+					[add, renderer]), add.Entity.Id);
 				return;
 			}
 
@@ -1665,11 +1663,9 @@ public sealed class EditorShell : Panel
 					DegreesPerSecond = 45f
 				});
 
-			_session.Undo.Execute(new CompositeCommand(
+			_session.ExecuteAndSelect(new CompositeCommand(
 				$"Create {name}",
-				[add, renderer, spin]));
-
-			_session.Select(add.Entity.Id);
+				[add, renderer, spin]), add.Entity.Id);
 		});
 	}
 
@@ -1695,11 +1691,9 @@ public sealed class EditorShell : Panel
 					Position = new System.Numerics.Vector3(0f, 1.5f, -6f)
 				});
 
-			_session.Undo.Execute(new CompositeCommand(
+			_session.ExecuteAndSelect(new CompositeCommand(
 				"Create Camera",
-				[add, camera, transform]));
-
-			_session.Select(add.Entity.Id);
+				[add, camera, transform]), add.Entity.Id);
 		});
 	}
 
