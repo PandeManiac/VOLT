@@ -211,7 +211,7 @@ public sealed class MultiTransformTests : IDisposable
 	}
 
 	[Fact]
-	public void Inspector_SaysThatEditsApplyToTheWholeSelection()
+	public void Inspector_ExplainsWhichEditsApplyToTheWholeSelection()
 	{
 		SceneDocument scene = _session.Scene!;
 		SceneEntity cube = FindMesh(scene);
@@ -235,7 +235,7 @@ public sealed class MultiTransformTests : IDisposable
 		Assert.Contains(
 			Descendants(inspector).OfType<Label>(),
 			label => label.Text.Contains(
-				"edits apply to all",
+				"transform edits: all  ·  other edits: active",
 				StringComparison.Ordinal));
 	}
 

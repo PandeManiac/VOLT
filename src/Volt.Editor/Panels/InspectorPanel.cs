@@ -293,7 +293,8 @@ public sealed class InspectorPanel : Panel
 		int selectedCount = _session.Selection.Count;
 
 		string selected = selectedCount > 1
-			? $"{selectedCount} selected  ·  edits apply to all  ·  "
+			? $"{selectedCount} selected  ·  transform edits: all  ·  " +
+				"other edits: active  ·  "
 			: string.Empty;
 
 		_entitySubtitle.Text =
