@@ -1797,14 +1797,13 @@ public sealed class ProjectPanel : Panel
 					if (_search.Text.Length > 0)
 					{
 						_search.Text = string.Empty;
-					}
-
-					SetSingleAssetState(renamed);
-				Rebuild(force: true);
-				_revealSelectionPending = true;
-				context.CloseModal();
-				_session.SetStatus(
-					$"Renamed {asset.FileName} to {Path.GetFileName(renamed)}");
+					}					SetSingleAssetState(renamed);
+					Rebuild(force: true);
+					_revealSelectionPending = true;
+					context.CloseModal();
+					FocusSelection();
+					_session.SetStatus(
+						$"Renamed {asset.FileName} to {Path.GetFileName(renamed)}");
 			}
 
 			catch (Exception exception)

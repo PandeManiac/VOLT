@@ -3234,6 +3234,9 @@ public sealed class EditorChromeTests : IDisposable
 			.Single(tile => tile.Text == "Start.volt.scene.json");
 
 		Assert.True(start.IsSelected);
+		Assert.True(
+			start.HasFocus,
+			"The renamed asset must keep keyboard focus after the dialog closes.");
 	}
 
 	[Fact]
