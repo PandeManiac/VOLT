@@ -1,4 +1,5 @@
 using Volt.Editor.Panels;
+using Volt.Editor.Core.Scenes;
 using Volt.Ui;
 using Volt.Ui.Input;
 using Volt.Ui.Layout;
@@ -39,6 +40,35 @@ public sealed class InspectorUndoRefreshTests : IDisposable
 		Assert.Equal(0f, _session.ActiveEntity!.Transform.Position.X);
 		Assert.Equal(0f, positionX.Value);
 		Assert.True(positionX.HasFocus);
+	}
+
+	[Fact]
+	public void UndoWhileCommittedAssetFieldRemainsFocused_RefreshesInspectorValue()
+	{
+		SceneEntity entity = _session.Scene!.Entities.Single(
+			candidate => candidate.GetComponent<MeshRendererData>() is not null);
+		MeshRendererData renderer = entity.GetComponent<MeshRendererData>()!;
+		renderer.Mesh = "Assets/Meshes/old.mesh";
+		_session.Select(entity.Id);
+
+		using InspectorPanel inspector = new(_session);
+		_context.Add(inspector);
+		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
+		TextField meshAsset = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.Text == "Assets/Meshes/old.mesh");
+
+		Assert.True(meshAsset.Focus());
+		meshAsset.Text = "Assets/Meshes/new.mesh";
+		meshAsset.Commit();
+		Assert.Equal("Assets/Meshes/new.mesh", renderer.Mesh);
+		Assert.True(meshAsset.HasFocus);
+
+		_session.UndoLast();
+
+		Assert.Equal("Assets/Meshes/old.mesh", renderer.Mesh);
+		Assert.Equal("Assets/Meshes/old.mesh", meshAsset.Text);
+		Assert.True(meshAsset.HasFocus);
 	}
 
 	public void Dispose()

@@ -390,6 +390,11 @@ public sealed class PropertyGrid : ScrollView
 			return color.HasPendingTextEdit;
 		}
 
+		if (editor is TextField text)
+		{
+			return text.HasUncommittedText;
+		}
+
 		if (editor.HasFocus)
 		{
 			return true;
