@@ -75,6 +75,69 @@ public sealed class MultiComponentStructureTests : IDisposable
 	}
 
 	[Fact]
+	public void RemovingAComponentReachesTheSelectionWhenTheActiveObjectLacksIt()
+	{
+		SceneEntity light = _session.CreateDirectionalLight("Light")!;
+		SceneEntity plain = _session.CreateEntity("Plain")!;
+
+		// The active object has no light, so its own rows alone would
+		// never offer a way to remove the light from the other object.
+		_session.SelectMany([light.Id, plain.Id], plain.Id);
+
+		using InspectorPanel inspector = new(_session);
+
+		_context.Add(inspector);
+		Paint(0.0);
+
+		IconButton remove = Descendants(inspector)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Remove Directional Light");
+
+		int history = _session.Undo.UndoCount;
+
+		Click(remove);
+		Paint(0.1);
+
+		Assert.Null(light.GetComponent<LightData>());
+		Assert.DoesNotContain(
+			plain.Components,
+			component => component is LightData);
+		Assert.Equal(history + 1, _session.Undo.UndoCount);
+
+		_session.UndoLast();
+
+		Assert.NotNull(light.GetComponent<LightData>());
+	}
+
+	[Fact]
+	public void ComponentRowsFollowTheSelectionWhenTheActiveObjectStaysTheSame()
+	{
+		SceneEntity light = _session.CreateDirectionalLight("Light")!;
+		SceneEntity plain = _session.CreateEntity("Plain")!;
+
+		_session.SelectMany([light.Id, plain.Id], plain.Id);
+
+		using InspectorPanel inspector = new(_session);
+
+		_context.Add(inspector);
+		Paint(0.0);
+
+		Assert.Contains(
+			Descendants(inspector).OfType<IconButton>(),
+			button => button.TooltipText == "Remove Directional Light");
+
+		// Toggling the light off leaves the plain object active, so only
+		// the selection changed. Its component row must go with it.
+		_session.Select(light.Id, additive: true);
+		Paint(0.1);
+
+		Assert.Equal(plain.Id, _session.ActiveEntityId);
+		Assert.DoesNotContain(
+			Descendants(inspector).OfType<IconButton>(),
+			button => button.TooltipText == "Remove Directional Light");
+	}
+
+	[Fact]
 	public void TheAddBarOffersAComponentTheRestOfTheSelectionLacks()
 	{
 		EditorComponentDescriptor descriptor =

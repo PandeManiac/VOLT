@@ -227,6 +227,7 @@ public sealed class InspectorPanel : Panel
 		if (!_updating && !SelectionMatchesAddableState())
 		{
 			RebuildAddableComponents();
+			RebuildComponentBar(entity);
 		}
 
 		_grid.RefreshValues();
@@ -389,8 +390,50 @@ public sealed class InspectorPanel : Panel
 
 		_componentBar.ClearChildren();
 
+		// A component may live on another selected object without being
+		// on the active one. Its row still has to be reachable, because
+		// its remove button applies to the whole selection.
+		List<(string TypeId, string DisplayName)> components = [];
+		HashSet<string> seen = new(StringComparer.Ordinal);
+
 		foreach (AuthoredComponent component in entity.Components)
 		{
+			if (seen.Add(component.TypeId))
+			{
+				components.Add((component.TypeId, component.DisplayName));
+			}
+		}
+
+		List<(string TypeId, string DisplayName)> others = [];
+
+		foreach (Guid id in _session.Selection)
+		{
+			if (_session.Scene?.Find(id) is not SceneEntity selected)
+			{
+				continue;
+			}
+
+			foreach (AuthoredComponent component in selected.Components)
+			{
+				if (seen.Add(component.TypeId))
+				{
+					others.Add((component.TypeId, component.DisplayName));
+				}
+			}
+		}
+
+		others.Sort((left, right) => string.Compare(
+			left.DisplayName,
+			right.DisplayName,
+			StringComparison.Ordinal));
+
+		components.AddRange(others);
+
+		foreach ((string TypeId, string DisplayName) component in components)
+		{
+			bool activeHas = entity.HasComponent(component.TypeId);
+			int carriers = _session.Selection.Count(id =>
+				_session.Scene?.Find(id)?.HasComponent(component.TypeId) == true);
 			StackPanel row = new(UiOrientation.Horizontal)
 			{
 				Spacing = 4f
@@ -404,6 +447,19 @@ public sealed class InspectorPanel : Panel
 				Font = Context?.Theme.Fonts.Small
 			};
 
+			if (!activeHas)
+			{
+				row.Add(label);
+				row.Add(new Label(carriers == 1
+					? "on 1 selected"
+					: $"on {carriers} selected")
+				{
+					Font = Context?.Theme.Fonts.Small,
+					TextColor = Context?.Theme.Palette.TextMuted,
+					VerticalAlignment = UiAlignment.Center
+				});
+			}
+
 			IconButton remove = new(
 				UiIcon.Close,
 				$"Remove {component.DisplayName}")
@@ -414,7 +470,7 @@ public sealed class InspectorPanel : Panel
 				MinHeight = 20f
 			};
 
-			AuthoredComponent captured = component;
+			string capturedTypeId = component.TypeId;
 
 			remove.Clicked += _ =>
 			{
@@ -422,7 +478,7 @@ public sealed class InspectorPanel : Panel
 				{
 					// The row stands for the component across the selection,
 					// so removing it follows the same rule the fields do.
-					_session.RemoveComponentFromSelection(captured.TypeId);
+					_session.RemoveComponentFromSelection(capturedTypeId);
 				}
 
 				catch (Exception exception)
@@ -431,7 +487,11 @@ public sealed class InspectorPanel : Panel
 				}
 			};
 
-			row.Add(label);
+			if (activeHas)
+			{
+				row.Add(label);
+			}
+
 			row.Add(remove);
 			_componentBar.Add(row);
 		}

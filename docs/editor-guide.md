@@ -257,11 +257,14 @@ ratios without discarding the state inside open panels.
 - **Inspector** edits the selected object's transform and every
   supported component. Values are written through undoable commands;
   the vector, color, numeric, enum, and asset properties all come from
-  the component catalog rather than hardcoded editor code. The **Add
+  the  component catalog rather than hardcoded editor code. The **Add
   Component** list offers components at least one selected object does
   not already have, and adding one gives it to every selected object
   that lacks it; the list and button disable themselves once every
-  selected object has every registered component.
+  selected object has every registered component. Component rows cover
+  the whole selection too: a component the active object lacks is
+  labelled with how many selected objects have it, and its remove
+  button still reaches them.
 - **Scene view** is the authoring view. VOLT renders the scene's
   meshes and the ground grid into an offscreen target with depth
   testing, and the panel samples that image, so what it shows is real
