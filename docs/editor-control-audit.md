@@ -71,11 +71,15 @@ authoritative set shared with the viewport and the Inspector.
 
 Transform editing (position, rotation, scale), mesh and material
 references, visibility, and component properties are editable, with text
-fields that commit on Enter and revert on Escape. Add Component offers
-only components the selection does not already have, and removing,
-enabling, and disabling components works. Inspector construction and
-menu wiring are covered by `EditorChromeTests`, the light and material
-tests, and the scene-document tests in `Volt.Editor.Core.Tests`.
+fields that commit on Enter and revert on Escape. Removing, enabling,
+and disabling components works. The inspector's own add-component row
+belongs to the object the panel describes, so it adds to that object
+alone; the Component menu follows the selection, offering a component
+while any selected object lacks it and adding it to those objects as one
+undo step. Inspector construction and menu wiring are covered by
+`EditorChromeTests`, `ComponentMenuSelectionTests`, the light and
+material tests, and the scene-document tests in
+`Volt.Editor.Core.Tests`.
 
 ## Scene viewport
 

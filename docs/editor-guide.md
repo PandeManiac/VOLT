@@ -288,6 +288,14 @@ ratios without discarding the state inside open panels.
   object is left out of that delta: its parent already carries it, and
   moving both would move it twice. A group rotation turns each object in
   place instead of orbiting it around the active object.
+
+  A component follows the selection through its menu. **Component → Add
+  X** gives the component to every selected object that does not already
+  have one, in one undo step, and stays available while any selected
+  object is missing it, so a mixed selection takes it in a single
+  action. The inspector's own **Add component** row belongs to the object
+  the panel describes, so it adds to that object alone even when several
+  are selected.
 - **The scene view's floating chrome** carries the controls an author
   reaches for without leaving the image: the four tools, the gizmo
   space, grid snapping and its increment, the ground-grid toggle, and
