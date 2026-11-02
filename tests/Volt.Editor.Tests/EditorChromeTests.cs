@@ -648,6 +648,71 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void SwitchingBrowserViewsKeepsTheListScrollPosition()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		string assets = _session.Project!.AssetsPath;
+
+		for (int index = 0; index < 80; index++)
+		{
+			File.WriteAllText(
+				Path.Combine(assets, $"Asset{index:00}.mat"),
+				"material");
+		}
+
+		_session.SaveScene();
+		Paint(0.1);
+
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+
+		TreeView folders = Descendants(project)
+			.OfType<TreeView>()
+			.Single(tree => tree.Roots.Any(
+				root => root.Tag is string tag && tag.Length == 0));
+
+		folders.SetSelection(
+			[folders.Roots[0].Children.Single(item => item.Text == "Assets")]);
+		Paint(0.15);
+
+		IconButton listMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as a list");
+
+		IconButton tileMode = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Show assets as tiles");
+
+		Click(listMode);
+		Paint(0.2);
+
+		ScrollView rows = Descendants(project)
+			.OfType<ScrollView>()
+			.Single(view => view.Content is TreeView);
+
+		_context.Wheel(new UiPoint(0f, -3f), rows.GlobalContentBounds.Center);
+		Paint(0.25);
+
+		float scrolled = rows.ScrollOffset.Y;
+
+		Assert.True(scrolled > 0f, "The asset list must scroll.");
+
+		Click(tileMode);
+		Paint(0.3);
+
+		Click(listMode);
+		Paint(0.35);
+
+		ScrollView rowsAfter = Descendants(project)
+			.OfType<ScrollView>()
+			.Single(view => view.Content is TreeView);
+
+		Assert.Same(rows, rowsAfter);
+		Assert.Equal(scrolled, rowsAfter.ScrollOffset.Y, 1);
+	}
+
+	[Fact]
 	public void UiScale_RebuildPreservesProjectBrowserFolderScrollPosition()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);
