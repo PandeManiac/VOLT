@@ -3214,6 +3214,14 @@ public sealed class EditorChromeTests : IDisposable
 			"Canceling a dialog must return focus to the selected asset.");
 		Assert.True(_context.KeyDown(UiKey.F2));
 		Assert.True(_context.HasModal);
+
+		Assert.True(_context.KeyDown(UiKey.Escape));
+		Paint(0.4);
+
+		Assert.False(_context.HasModal);
+		Assert.True(
+			main.HasFocus,
+			"Escape-canceling a dialog must return focus to the selected asset.");
 	}
 
 	[Fact]

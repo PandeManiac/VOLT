@@ -49,6 +49,7 @@ public sealed class UiContext : IDisposable
 	private Widget? _pressed;
 	private Widget? _activePopup;
 	private Widget? _modal;
+	private Widget? _focusBeforeModal;
 	private TooltipView? _tooltip;
 	private Widget? _tooltipOwner;
 	private string? _tooltipText;
@@ -787,6 +788,7 @@ public sealed class UiContext : IDisposable
 		ThrowIfDisposed();
 
 		CloseModal();
+		_focusBeforeModal = _focused;
 
 		_overlay.Add(modal);
 		_overlay.SetSlot(
@@ -810,6 +812,8 @@ public sealed class UiContext : IDisposable
 
 		Widget modal = _modal;
 		_modal = null;
+		Widget? restoreFocus = _focusBeforeModal;
+		_focusBeforeModal = null;
 
 		if (_focused is not null &&
 			(modal == _focused || modal.IsAncestorOf(_focused)))
@@ -819,6 +823,13 @@ public sealed class UiContext : IDisposable
 
 		modal.RemoveFromParent();
 		modal.Dispose();
+
+		// Escape and other close paths should return keyboard control to
+		// whatever opened the modal when that widget is still usable.
+		if (restoreFocus is not null)
+		{
+			Focus(restoreFocus);
+		}
 	}
 
 	/// <summary>
