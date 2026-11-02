@@ -1,4 +1,5 @@
 using Volt.Editor.Panels;
+using Volt.Editor.Core.Scenes;
 using Volt.Ui;
 using Volt.Ui.Widgets;
 
@@ -61,6 +62,33 @@ public sealed class HierarchySearchExpansionTests : IDisposable
 		_session.Select(parent.Id);
 
 		Assert.False(Assert.Single(tree.Roots).IsExpanded);
+	}
+
+	[Fact]
+	public void SwitchingToCopiedSceneDoesNotReuseOtherScenesExpansionState()
+	{
+		_session.SelectAll();
+		_session.DeleteSelection();
+		var parent = _session.CreateEntity("Parent")!;
+		_session.CreateEntity("Child", parent.Id);
+		SceneDocument original = _session.Scene!;
+		_session.Project!.SaveScene(
+			original,
+			"Scenes/Copy.volt.scene.json");
+
+		HierarchyPanel panel = new(_session);
+		_context.Add(panel);
+		_context.BeginFrame(0.0, new UiSize(400f, 500f), UiPoint.Zero);
+		TreeView tree = Descendants(panel).OfType<TreeView>().Single();
+		TreeViewItem parentRow = Assert.Single(tree.Roots);
+		Assert.True(parentRow.IsExpanded);
+
+		parentRow.IsExpanded = false;
+		tree.Refresh();
+		Assert.True(_session.OpenScene("Scenes/Copy.volt.scene.json"));
+
+		parentRow = Assert.Single(tree.Roots);
+		Assert.True(parentRow.IsExpanded);
 	}
 
 	private static IEnumerable<Widget> Descendants(Widget root)

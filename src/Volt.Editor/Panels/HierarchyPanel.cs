@@ -35,6 +35,7 @@ public sealed class HierarchyPanel : Panel
 	private readonly HashSet<Guid> _known = [];
 
 	private string _signature = string.Empty;
+	private string? _renderedScenePath;
 	private string _renderedFilter = string.Empty;
 	private bool _updating;
 	private bool _disposed;
@@ -312,9 +313,22 @@ public sealed class HierarchyPanel : Panel
 		}
 
 		SceneDocument? scene = _session.Scene;
+		bool sceneChanged = !string.Equals(
+			_renderedScenePath,
+			_session.ScenePath,
+			StringComparison.OrdinalIgnoreCase);
+
+		if (sceneChanged)
+		{
+			_renderedScenePath = _session.ScenePath;
+			_expanded.Clear();
+			_known.Clear();
+			_renderedFilter = string.Empty;
+		}
+
 		string signature = scene is null
 			? "none"
-			: BuildSignature(scene, _search.Text);
+			: BuildSignature(scene, _session.ScenePath, _search.Text);
 
 		if (!force && signature == _signature)
 		{
@@ -329,7 +343,7 @@ public sealed class HierarchyPanel : Panel
 		// the expansion state from an unfiltered tree so those temporary
 		// expansions do not become the user's saved hierarchy state when
 		// the search is cleared.
-		if (_renderedFilter.Length == 0)
+		if (!sceneChanged && _renderedFilter.Length == 0)
 		{
 			CaptureExpansion();
 		}
@@ -581,10 +595,11 @@ public sealed class HierarchyPanel : Panel
 
 	private static string BuildSignature(
 		SceneDocument scene,
+		string? scenePath,
 		string filter)
 	{
 		System.Text.StringBuilder builder = new();
-		builder.Append(filter).Append('|');
+		builder.Append(scenePath).Append('|').Append(filter).Append('|');
 
 		foreach (SceneEntity entity in scene.Entities)
 		{
