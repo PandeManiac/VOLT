@@ -409,6 +409,13 @@ Saving writes a temporary file and moves it into place, so a failed
 save cannot truncate the previous scene. Unknown components are kept
 as raw JSON instead of being dropped.
 
+A save also checks the scene file against the version the editor last
+read or wrote. If something else changed it in the meantime — another
+editor, a branch switch, a generator — the save is refused rather than
+replacing work the editor never saw. The message points at **Save As**
+for the current changes and at reopening the scene to load the version
+on disk, so neither side is lost.
+
 Opening another scene or project, creating a scene, or closing the
 editor while the current scene is dirty asks **Save**, **Discard**, or
 **Cancel**. Save writes the current scene before the operation
