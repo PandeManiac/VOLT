@@ -90,20 +90,61 @@ public sealed class TreeView : Widget
 	public bool RemoveRoot(TreeViewItem item)
 	{
 		bool removed = _roots.Remove(item);
+
+		if (!removed)
+		{
+			return false;
+		}
+
 		item.Parent = null;
+		bool selectionChanged = false;
+
+		for (int index = _selection.Count - 1; index >= 0; index--)
+		{
+			TreeViewItem selected = _selection[index];
+
+			if (!IsInSubtree(selected, item))
+			{
+				continue;
+			}
+
+			selected.IsSelected = false;
+			_selection.RemoveAt(index);
+			selectionChanged = true;
+		}
+
+		if (_selectionAnchor is not null &&
+			IsInSubtree(_selectionAnchor, item))
+		{
+			_selectionAnchor = null;
+		}
+
 		_flattenDirty = true;
 		InvalidateMeasure();
+		InvalidateVisual();
 
-		return removed;
+		if (selectionChanged)
+		{
+			SelectionChanged?.Invoke(this, _selection);
+		}
+
+		return true;
 	}
 
 	public void Clear()
 	{
 		_roots.Clear();
-		_selection.Clear();
+		bool selectionChanged = _selection.Count > 0;
+		ClearSelection();
 		_selectionAnchor = null;
 		_flattenDirty = true;
 		InvalidateMeasure();
+		InvalidateVisual();
+
+		if (selectionChanged)
+		{
+			SelectionChanged?.Invoke(this, _selection);
+		}
 	}
 
 	public void Refresh()
@@ -761,7 +802,7 @@ public sealed class TreeView : Widget
 		TreeViewItem item,
 		TreeViewItem ancestor)
 	{
-		for (TreeViewItem? current = item.Parent;
+		for (TreeViewItem? current = item;
 			current is not null;
 			current = current.Parent)
 		{
