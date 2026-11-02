@@ -32,7 +32,7 @@ public sealed class PanelReattachmentTests : IDisposable
 		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
 		Assert.Equal(entities[0].Name, InspectorName(inspector).Text);
 
-		Assert.True(_context.Root.Remove(inspector));
+		Assert.True(_context.Content.Remove(inspector));
 		_session.Select(entities[1].Id);
 		_context.Add(inspector);
 		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
@@ -53,7 +53,7 @@ public sealed class PanelReattachmentTests : IDisposable
 		tree.SelectionChanged += (_, items) =>
 			selected = items.LastOrDefault()?.Tag is Guid id ? id : null;
 
-		Assert.True(_context.Root.Remove(hierarchy));
+		Assert.True(_context.Content.Remove(hierarchy));
 		_session.Select(entities[1].Id);
 		_context.Add(hierarchy);
 		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
@@ -71,7 +71,10 @@ public sealed class PanelReattachmentTests : IDisposable
 
 	private static TextField InspectorName(Widget root)
 	{
-		if (root is TextField field) return field;
+		if (root is TextField field)
+		{
+			return field;
+		}
 		foreach (Widget child in root.Children)
 		{
 			try { return InspectorName(child); }
@@ -82,7 +85,10 @@ public sealed class PanelReattachmentTests : IDisposable
 
 	private static TreeView FindTree(Widget root)
 	{
-		if (root is TreeView tree) return tree;
+		if (root is TreeView tree)
+		{
+			return tree;
+		}
 		foreach (Widget child in root.Children)
 		{
 			try { return FindTree(child); }
