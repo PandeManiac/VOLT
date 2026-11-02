@@ -60,6 +60,7 @@ public sealed class EditorSession : IDisposable
 
 	private readonly List<EditorLogEntry> _log = [];
 	private readonly HashSet<Guid> _selection = [];
+	private (long Length, DateTime WrittenUtc)? _sceneFileStamp;
 	private PlaySession? _play;
 	private readonly Func<long> _allocatedBytes;
 	private long _lastAllocatedBytes;
@@ -486,7 +487,9 @@ public sealed class EditorSession : IDisposable
 			throw new InvalidOperationException(
 				"No scene path is selected.");
 
+		EnsureSceneFileUnchanged(project, path);
 		project.SaveScene(scene, path);
+		RememberSceneFile();
 		Undo.MarkSaved();
 		IsSceneDirty = false;
 		SceneChanged?.Invoke(this);
@@ -503,6 +506,7 @@ public sealed class EditorSession : IDisposable
 
 		project.SaveScene(scene, relativePath);
 		ScenePath = ProjectAssetCatalog.NormalizeId(relativePath);
+		RememberSceneFile();
 		Undo.MarkSaved();
 		IsSceneDirty = false;
 		SceneChanged?.Invoke(this);
@@ -535,6 +539,7 @@ public sealed class EditorSession : IDisposable
 			ScenePath is not null)
 		{
 			project.SaveScene(Scene, ScenePath);
+			RememberSceneFile();
 			Undo.MarkSaved();
 			IsSceneDirty = false;
 		}
@@ -588,6 +593,7 @@ public sealed class EditorSession : IDisposable
 			ScenePath is not null)
 		{
 			project.SaveScene(Scene, ScenePath);
+			RememberSceneFile();
 			Undo.MarkSaved();
 			IsSceneDirty = false;
 		}
@@ -654,6 +660,7 @@ public sealed class EditorSession : IDisposable
 			ScenePath is not null)
 		{
 			project.SaveScene(Scene, ScenePath);
+			RememberSceneFile();
 			Undo.MarkSaved();
 			IsSceneDirty = false;
 		}
@@ -690,6 +697,7 @@ public sealed class EditorSession : IDisposable
 			ScenePath is not null)
 		{
 			project.SaveScene(Scene, ScenePath);
+			RememberSceneFile();
 			Undo.MarkSaved();
 			IsSceneDirty = false;
 		}
@@ -1646,6 +1654,60 @@ public sealed class EditorSession : IDisposable
 	}
 
 	/// <summary>
+	/// Records the scene file as this session last saw it, so a later save
+	/// can tell whether something else wrote it in the meantime.
+	/// </summary>
+	private void RememberSceneFile()
+	{
+		if (Project is not EditorProject project ||
+			ScenePath is not string path)
+		{
+			_sceneFileStamp = null;
+			return;
+		}
+
+		string full = project.ResolvePath(path);
+
+		_sceneFileStamp = File.Exists(full)
+			? (new FileInfo(full).Length, File.GetLastWriteTimeUtc(full))
+			: null;
+	}
+
+	/// <summary>
+	/// Refuses to write over a scene file that something else changed
+	/// since this session read or wrote it.
+	/// </summary>
+	/// <remarks>
+	/// Saving is the one place the editor can destroy work it never saw:
+	/// the file on disk is the only copy of the other writer's changes.
+	/// The refusal names the ways forward, so the author is not left with a
+	/// save that silently does nothing.
+	/// </remarks>
+	private void EnsureSceneFileUnchanged(
+		EditorProject project,
+		string path)
+	{
+		if (_sceneFileStamp is not (long length, DateTime written))
+		{
+			return;
+		}
+
+		string full = project.ResolvePath(path);
+
+		if (!File.Exists(full) ||
+			(new FileInfo(full).Length == length &&
+				File.GetLastWriteTimeUtc(full) == written))
+		{
+			return;
+		}
+
+		throw new InvalidOperationException(
+			$"'{Path.GetFileName(path)}' changed on disk since it was " +
+			"opened. Save it under a different name, or reopen the scene " +
+			"to load that version.");
+	}
+
+	/// <summary>
 	/// Recomputes the dirty mark from where the history sits, so undoing
 	/// back to the saved state leaves nothing to save.
 	/// </summary>
@@ -1883,6 +1945,7 @@ public sealed class EditorSession : IDisposable
 		Undo.Clear();
 
 		// The scene on disk is the state at the bottom of its history.
+		RememberSceneFile();
 		Undo.MarkSaved();
 
 		Scene.Changed += OnSceneDocumentChanged;
