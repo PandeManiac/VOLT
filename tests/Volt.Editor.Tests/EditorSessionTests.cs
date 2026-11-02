@@ -421,6 +421,70 @@ public sealed class EditorSessionTests : IDisposable
 	}
 
 	[Fact]
+	public void AssetRename_RemapsDeleteRemoveAndDuplicateSnapshots()
+	{
+		_session.NewProject(
+			Path.Combine(_root, "SnapshotAssets"),
+			"Snapshot Assets");
+
+		EditorProject project = _session.Project!;
+
+		Directory.CreateDirectory(Path.Combine(project.AssetsPath, "Meshes"));
+
+		const string MeshId = "Assets/Meshes/cube.mesh";
+
+		File.WriteAllText(project.ResolvePath(MeshId), "mesh");
+		project.AssetCatalog.Refresh();
+
+		SceneEntity cube = _session.Scene!.Entities.Single(entity =>
+			entity.GetComponent<MeshRendererData>() is not null);
+
+		cube.GetComponent<MeshRendererData>()!.Mesh = MeshId;
+		_session.Select(cube.Id);
+		Assert.Equal(1, _session.DeleteSelection());
+
+		string box = _session.RenameAsset(MeshId, "box");
+
+		_session.UndoLast();
+
+		SceneEntity restored = _session.Scene.Entities.Single(entity =>
+			entity.Id == cube.Id);
+		MeshRendererData restoredRenderer =
+			restored.GetComponent<MeshRendererData>()!;
+
+		Assert.Equal(box, restoredRenderer.Mesh);
+
+		_session.Select(restored.Id);
+		_session.RemoveComponent(restored.Id, restoredRenderer);
+		Assert.Null(restored.GetComponent<MeshRendererData>());
+
+		string final = _session.RenameAsset(box, "final");
+
+		_session.UndoLast();
+
+		Assert.Equal(
+			final,
+			restored.GetComponent<MeshRendererData>()!.Mesh);
+
+		_session.Select(restored.Id);
+		SceneEntity copy = Assert.Single(_session.DuplicateSelection());
+
+		_session.UndoLast();
+
+		Assert.Null(_session.Scene.Find(copy.Id));
+
+		string last = _session.RenameAsset(final, "last");
+
+		_session.RedoLast();
+
+		SceneEntity restoredCopy = _session.Scene.Find(copy.Id)!;
+
+		Assert.Equal(
+			last,
+			restoredCopy.GetComponent<MeshRendererData>()!.Mesh);
+	}
+
+	[Fact]
 	public void FolderRename_UpdatesTheOpenScenePathAndReferences()
 	{
 		_session.NewProject(
