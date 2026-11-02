@@ -229,9 +229,6 @@ public sealed class ProjectPanel : Panel
 			_gridMode = state.GridMode;
 		}
 
-		_session.ProjectChanged += OnSessionChanged;
-		_session.SceneChanged += OnSessionChanged;
-
 		SetMode(grid: _gridMode);
 		Rebuild(force: true);
 	}
@@ -403,6 +400,9 @@ public sealed class ProjectPanel : Panel
 
 		_details.Font = theme.Fonts.MonoSmall;
 		_details.TextColor = theme.Palette.TextDisabled;
+		_session.ProjectChanged += OnSessionChanged;
+		_session.SceneChanged += OnSessionChanged;
+		OnSessionChanged(_session);
 	}
 
 	protected override void OnDetached()

@@ -40,6 +40,27 @@ public sealed class PanelReattachmentTests : IDisposable
 		Assert.Equal(entities[1].Name, InspectorName(inspector).Text);
 	}
 
+	[Fact]
+	public void Hierarchy_ResynchronizesSelectionAfterReattachment()
+	{
+		SceneEntity[] entities = [.. _session.Scene!.Entities.Take(2)];
+		Assert.Equal(2, entities.Length);
+		using HierarchyPanel hierarchy = new(_session);
+		_context.Add(hierarchy);
+		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
+		TreeView tree = FindTree(hierarchy);
+		Guid? selected = null;
+		tree.SelectionChanged += (_, items) =>
+			selected = items.LastOrDefault()?.Tag is Guid id ? id : null;
+
+		Assert.True(_context.Root.Remove(hierarchy));
+		_session.Select(entities[1].Id);
+		_context.Add(hierarchy);
+		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
+
+		Assert.Equal(entities[1].Id, selected);
+	}
+
 	public void Dispose()
 	{
 		_context.Dispose();
@@ -57,5 +78,16 @@ public sealed class PanelReattachmentTests : IDisposable
 			catch (InvalidOperationException) { }
 		}
 		throw new InvalidOperationException("Inspector name field was not found.");
+	}
+
+	private static TreeView FindTree(Widget root)
+	{
+		if (root is TreeView tree) return tree;
+		foreach (Widget child in root.Children)
+		{
+			try { return FindTree(child); }
+			catch (InvalidOperationException) { }
+		}
+		throw new InvalidOperationException("Hierarchy tree was not found.");
 	}
 }
