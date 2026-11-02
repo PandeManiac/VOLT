@@ -984,14 +984,16 @@ public sealed class EditorSession : IDisposable
 		}
 
 		PasteEntitiesCommand command = new(scene, Clipboard.CreateEntities());
-
-		Undo.Execute(command);
-
+		Guid[] selectionBeforePaste = [.. _selection];
+		Guid? activeBeforePaste = ActiveEntityId;
 		Guid? active = command.RootIds.Count > 0
 			? command.RootIds[0]
 			: null;
 
-		SelectMany(command.RootIds, active);
+		Undo.Execute(new SelectionCommand(
+			command,
+			() => SelectMany(command.RootIds, active),
+			() => SelectMany(selectionBeforePaste, activeBeforePaste)));
 
 		SetStatus(command.Roots.Count == 1
 			? $"Pasted {command.Roots[0].Name}"

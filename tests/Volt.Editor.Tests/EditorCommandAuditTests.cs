@@ -184,12 +184,17 @@ public sealed class EditorCommandAuditTests : IDisposable
 		_session.UndoLast();
 
 		Assert.Equal(before, scene.EntityCount);
+		Assert.Contains(parent.Id, _session.Selection);
+		Assert.Contains(child.Id, _session.Selection);
+		Assert.Equal(parent.Id, _session.ActiveEntityId);
 
 		_session.RedoLast();
 
 		Assert.Equal(before + 2, scene.EntityCount);
 		Assert.NotNull(scene.Find(pastedParent.Id));
 		Assert.NotNull(scene.Find(pastedChild.Id));
+		Assert.Contains(pastedParent.Id, _session.Selection);
+		Assert.Equal(pastedParent.Id, _session.ActiveEntityId);
 	}
 
 	[Fact]
