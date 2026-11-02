@@ -174,7 +174,7 @@ public sealed class InspectorPanel : Panel
 			return;
 		}
 
-		if (!_name.HasFocus)
+		if (!_name.HasUncommittedText)
 		{
 			_name.Text = entity.Name;
 		}

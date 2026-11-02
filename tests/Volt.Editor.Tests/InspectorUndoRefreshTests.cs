@@ -43,6 +43,52 @@ public sealed class InspectorUndoRefreshTests : IDisposable
 	}
 
 	[Fact]
+	public void UndoWhileCommittedInspectorNameRemainsFocused_RefreshesName()
+	{
+		SceneEntity entity = _session.ActiveEntity!;
+		string originalName = entity.Name;
+		using InspectorPanel inspector = new(_session);
+		_context.Add(inspector);
+		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.Text == originalName);
+
+		Assert.True(name.Focus());
+		name.Text = "Renamed";
+		name.Commit();
+		Assert.Equal("Renamed", entity.Name);
+		Assert.True(name.HasFocus);
+
+		_session.UndoLast();
+
+		Assert.Equal(originalName, entity.Name);
+		Assert.Equal(originalName, name.Text);
+		Assert.True(name.HasFocus);
+	}
+
+	[Fact]
+	public void ExternalNameChange_DoesNotOverwriteUncommittedInspectorText()
+	{
+		SceneEntity entity = _session.ActiveEntity!;
+		string originalName = entity.Name;
+		using InspectorPanel inspector = new(_session);
+		_context.Add(inspector);
+		_context.BeginFrame(0, new UiSize(800, 600), UiPoint.Zero);
+		TextField name = Descendants(inspector)
+			.OfType<TextField>()
+			.Single(field => field.Text == originalName);
+
+		Assert.True(name.Focus());
+		name.Text = "In progress";
+		_session.RenameActiveEntity("Changed elsewhere");
+
+		Assert.Equal("Changed elsewhere", entity.Name);
+		Assert.Equal("In progress", name.Text);
+		Assert.True(name.HasUncommittedText);
+	}
+
+	[Fact]
 	public void UndoWhileCommittedAssetFieldRemainsFocused_RefreshesInspectorValue()
 	{
 		SceneEntity entity = _session.Scene!.Entities.Single(
