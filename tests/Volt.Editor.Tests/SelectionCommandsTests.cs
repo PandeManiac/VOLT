@@ -92,6 +92,20 @@ public sealed class SelectionCommandsTests : IDisposable
 		_session.ClearSelection();
 
 		Assert.Equal(scene.Entities.Count, _session.InvertSelection());
+		Assert.NotNull(_session.ActiveEntityId);
+		Assert.Contains(_session.ActiveEntityId!.Value, _session.Selection);
+	}
+
+	[Fact]
+	public void SelectAll_FromNothingLeavesAnActiveObject()
+	{
+		SceneDocument scene = _session.Scene!;
+
+		_session.ClearSelection();
+
+		Assert.Equal(scene.Entities.Count, _session.SelectAll());
+		Assert.NotNull(_session.ActiveEntityId);
+		Assert.Contains(_session.ActiveEntityId!.Value, _session.Selection);
 	}
 
 	[Fact]

@@ -832,12 +832,16 @@ public sealed class EditorSession : IDisposable
 			}
 		}
 
+		// A non-empty selection always has an object the inspector can
+		// edit. The requested object keeps the role when it survived;
+		// otherwise a scene-order replacement is used, matching the rule
+		// toggling and removal already follow.
 		ActiveEntityId = activeEntityId is Guid active &&
 			_selection.Contains(active)
 				? active
 				: _selection.Count == 1
 					? _selection.First()
-					: null;
+					: LastSelectedInSceneOrder();
 
 		SelectionChanged?.Invoke(this);
 	}
