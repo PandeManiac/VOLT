@@ -1820,6 +1820,15 @@ public sealed class EditorChromeTests : IDisposable
 		folders.SetSelection([assets]);
 		Paint(0.2);
 
+		TreeViewItem currentAssets = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Assets");
+
+		TreeViewItem materialsFolder = currentAssets.Children
+			.Single(item => item.Text == "Materials");
+
+		materialsFolder.IsExpanded = false;
+
 		IconTileView materials = Descendants(project)
 			.OfType<IconTileView>()
 			.Single(tile => tile.Text == "Materials");
@@ -1861,14 +1870,20 @@ public sealed class EditorChromeTests : IDisposable
 			.Single(tile => tile.Text == "Textures");
 
 		Assert.True(textures.IsSelected);
-		Assert.Equal(
-			Renamed,
-			folders.Roots[0]
-				.Children
-				.Single(item => item.Text == "Assets")
-				.Children
-				.Single(item => item.Text == "Textures")
-				.Tag);
+		Assert.Contains(
+			"Assets/Textures",
+			project.CaptureState().CollapsedFolders);
+
+		TreeViewItem texturesFolder = folders.Roots[0]
+			.Children
+			.Single(item => item.Text == "Assets")
+			.Children
+			.Single(item => item.Text == "Textures");
+
+		Assert.Equal(Renamed, texturesFolder.Tag);
+		Assert.False(
+			texturesFolder.IsExpanded,
+			"Renaming a collapsed folder must not expand it.");
 	}
 
 	[Fact]

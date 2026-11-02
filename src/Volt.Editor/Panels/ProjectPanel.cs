@@ -1539,6 +1539,13 @@ public sealed class ProjectPanel : Panel
 			{
 				string renamed = _session.RenameFolder(folder, name.Text);
 
+				// Capture the old tree before its paths change, then move
+				// the collapse state onto the renamed paths. The rebuild
+				// must not capture the old tree again over the remapped set.
+				CaptureCollapsedFolders();
+				RemapCollapsedFolders(folder, renamed);
+				_skipFolderCapture = true;
+
 				_folder = RemapFolder(_folder, folder, renamed);
 				_folderSelectionActive = true;
 
@@ -1584,6 +1591,20 @@ public sealed class ProjectPanel : Panel
 	{
 		return string.Equals(folder, "Assets", StringComparison.OrdinalIgnoreCase) ||
 			string.Equals(folder, "Scenes", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private void RemapCollapsedFolders(string oldFolder, string newFolder)
+	{
+		if (_collapsedFolders.Count == 0)
+		{
+			return;
+		}
+
+		string[] remapped = [.. _collapsedFolders.Select(
+			path => RemapFolder(path, oldFolder, newFolder))];
+
+		_collapsedFolders.Clear();
+		_collapsedFolders.UnionWith(remapped);
 	}
 
 	private static string RemapFolder(
