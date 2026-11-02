@@ -993,6 +993,33 @@ public sealed class EditorChromeTests : IDisposable
 	}
 
 	[Fact]
+	public void ProjectBrowser_NewSceneClearsSearchToRevealCreatedScene()
+	{
+		EditorShell shell = BuildShell(1440f, 900f);
+		ProjectPanel project = Descendants(shell)
+			.OfType<ProjectPanel>()
+			.Single();
+		TextField search = Descendants(project)
+			.OfType<TextField>()
+			.Single(field => field.Placeholder == "Search assets");
+		search.Text = "does-not-match";
+		Paint(0.1);
+
+		IconButton create = Descendants(project)
+			.OfType<IconButton>()
+			.Single(button => button.TooltipText == "Create a new scene");
+		Click(create);
+		Paint(0.2);
+
+		ProjectPanelState state = project.CaptureState();
+		Assert.Equal("Scenes", state.Folder);
+		Assert.Equal("Scenes/Scene1.volt.scene.json", state.SelectedId);
+		Assert.Contains(
+			Descendants(project).OfType<IconTileView>(),
+			tile => tile.Text == "Scene1.volt.scene.json");
+	}
+
+	[Fact]
 	public void ProjectBrowser_DeferredSceneCreationStillSelectsCreatedScene()
 	{
 		EditorShell shell = BuildShell(1440f, 900f);

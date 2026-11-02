@@ -677,6 +677,11 @@ public sealed class ProjectPanel : Panel
 	{
 		_pendingCreatedScenePath = null;
 		_pendingSceneOriginPath = null;
+		if (_search.Text.Length > 0)
+		{
+			_search.Text = string.Empty;
+		}
+
 		_folder = ParentFolder(createdPath);
 		SetSingleAssetState(createdPath);
 		Rebuild(force: true);
