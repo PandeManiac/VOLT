@@ -522,6 +522,12 @@ public sealed class TreeView : Widget
 			return false;
 		}
 
+		if (!IsPointerCaptured)
+		{
+			ClearPointerDrag();
+			return false;
+		}
+
 		TreeViewItem source = _dragSource;
 		TreeViewItem? target = _dropTarget;
 		UiKeyModifiers modifiers = _dragModifiers;
@@ -574,6 +580,12 @@ public sealed class TreeView : Widget
 	{
 		if (_dragSource is not null)
 		{
+			if (!IsPointerCaptured)
+			{
+				ClearPointerDrag();
+				return false;
+			}
+
 			if (!_dragging)
 			{
 				float dx = pointer.GlobalPosition.X - _dragStart.X;
@@ -604,6 +616,16 @@ public sealed class TreeView : Widget
 		}
 
 		return item is not null;
+	}
+
+	private void ClearPointerDrag()
+	{
+		_dragSource = null;
+		_dragging = false;
+		_dragModifiers = UiKeyModifiers.None;
+		_dropTarget = null;
+		_dropIntoRoot = false;
+		InvalidateVisual();
 	}
 
 	protected internal override bool OnWheel(UiWheelEvent wheel)

@@ -304,6 +304,12 @@ public class TextField : Widget
 			return false;
 		}
 
+		if (!IsPointerCaptured)
+		{
+			_dragging = false;
+			return false;
+		}
+
 		UpdateCaretFromPoint(
 			pointer.GlobalPosition,
 			extendSelection: true);
